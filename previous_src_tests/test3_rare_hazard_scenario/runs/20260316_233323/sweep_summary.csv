@@ -1,0 +1,13 @@
+run_id,target_mph,encounter_distance_m,walker_speed_mps,walker_side,walker_cross,walker_startup_s,trigger_ttc_s,trigger_delay_s,weather_preset,sun_altitude_deg,cloudiness,sim_seconds,random_seed,hazard_triggered,collision_detected,outcome,min_ped_distance_m,min_ttc_s,max_jerk_mps3,mean_jerk_mps3,ego_speed_at_trigger_mph,ego_speed_at_trigger_mps,ego_dist_at_trigger_m,trigger_time_s,time_to_stop_s,error
+run_0000,25.0,60.0,1.8,left,near,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,6.539,1.616,301.53,26.67,24.62,11.008,29.3,3.92,1.34,
+run_0001,25.0,60.0,1.8,left,far,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,full_stop,2.485,0.221,282.77,9.72,24.62,11.008,29.3,3.92,1.34,
+run_0002,25.0,120.0,1.8,left,near,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,8.759,1.612,282.30,17.79,24.90,11.132,88.9,9.30,1.38,
+run_0003,25.0,120.0,1.8,left,far,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,full_stop,9.047,1.612,282.32,17.44,24.90,11.132,88.9,9.30,1.38,
+run_0004,35.0,60.0,1.8,left,near,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,6.106,1.489,320.98,13.73,34.17,15.274,17.8,2.76,1.96,
+run_0005,35.0,60.0,1.8,left,far,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,2.483,0.234,300.25,10.32,34.17,15.274,17.8,2.76,2.02,
+run_0006,35.0,120.0,1.8,left,near,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,6.761,1.364,316.42,23.38,34.62,15.477,76.8,6.58,1.98,
+run_0007,35.0,120.0,1.8,left,far,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,2.484,0.246,282.84,12.93,34.62,15.477,76.8,6.58,2.04,
+run_0008,45.0,60.0,1.8,left,near,0.5,2.80,0.0,ClearSunset,,,13.0,,True,True,collision,2.597,0.302,274.98,12.55,34.20,15.287,17.8,2.76,2.28,
+run_0009,45.0,60.0,1.8,left,far,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,2.103,0.277,45.26,5.24,34.20,15.287,17.8,2.76,,
+run_0010,45.0,120.0,1.8,left,near,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,4.297,0.791,270.63,7.33,44.20,19.758,65.0,5.22,2.36,
+run_0011,45.0,120.0,1.8,left,far,0.5,2.80,0.0,ClearSunset,,,13.0,,True,False,slowed_avoided,2.482,0.362,44.09,5.46,44.20,19.758,65.0,5.22,,

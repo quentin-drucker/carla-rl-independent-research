@@ -1,0 +1,21 @@
+# Python virtual environment (rebuild with: python -m venv venv && pip install -r requirements.txt)
+venv/
+**/__pycache__/
+*.pyc
+
+# Trained RL model checkpoints (large binaries, hundreds of snapshots per training run)
+src/checkpoints/
+
+# Raw per-run telemetry/sensor data (many small files per run; keep summary CSVs only)
+src/runs/*/run_*/
+previous_src_tests/test3_rare_hazard_scenario/runs/*/run_*/
+
+# Raw camera frame captures
+previous_src_tests/test0_ego_camera/out/
+
+# Editor-local settings
+.vscode/
+
+# OS artifacts
+Thumbs.db
+.DS_Store

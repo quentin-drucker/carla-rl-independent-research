@@ -1,0 +1,143 @@
+================================================================================
+RL TRAINING NOTES — AEB Braking Controller
+Quentin | Junior Spring Research, 2026
+================================================================================
+
+PREREQUISITES
+-------------
+1. CARLA 0.9.16 must already be running (launch CarlaUE4.exe first).
+   Wait for it to fully load before running any Python scripts.
+
+2. Install RL dependencies (one time only):
+       pip install stable-baselines3[extra] gymnasium
+
+3. All other project dependencies must already be installed:
+       pip install pandas matplotlib numpy
+
+
+FILES INVOLVED
+--------------
+  rl_reward_design.py   — State vector, reward function, algorithm notes (design doc)
+  carla_aeb_env.py      — Gymnasium wrapper (bridges CARLA <-> stable-baselines3)
+  lane_follow.py        — Added rl_brake_override parameter (4-line change)
+
+
+HOW TO TRAIN SAC (recommended first)
+-------------------------------------
+Run this as a standalone script or in a Python shell:
+
+    from carla_aeb_env import CarlaAEBEnv
+    from stable_baselines3 import SAC
+
+    env = CarlaAEBEnv()
+    model = SAC("MlpPolicy", env, verbose=1,
+                learning_rate=3e-4,
+                buffer_size=10_000,
+                batch_size=256,
+                tau=0.005,
+                gamma=0.99,
+                ent_coef="auto")
+    model.learn(total_timesteps=200_000)
+    model.save("aeb_sac_policy")
+    env.close()
+
+  - Start with a SHORT run (~10_000 steps) first to confirm CARLA connects
+    and episodes reset cleanly. Then run the full 200_000.
+  - "verbose=1" prints a training summary every few thousand steps.
+  - The saved file "aeb_sac_policy.zip" appears in whatever directory
+    you run the script from.
+
+
+HOW TO TRAIN PPO (comparison baseline, run after SAC)
+------------------------------------------------------
+    from carla_aeb_env import CarlaAEBEnv
+    from stable_baselines3 import PPO
+
+    env = CarlaAEBEnv()
+    model = PPO("MlpPolicy", env, verbose=1,
+                n_steps=2048,
+                batch_size=64,
+                n_epochs=10,
+                learning_rate=2.5e-4,
+                gamma=0.99,
+                gae_lambda=0.95,
+                clip_range=0.2)
+    model.learn(total_timesteps=500_000)   # PPO needs ~2.5x more steps than SAC
+    model.save("aeb_ppo_policy")
+    env.close()
+
+
+HOW TO EVALUATE A TRAINED POLICY
+----------------------------------
+Load the saved policy and run it through the same 48-scenario sweep:
+
+    from carla_aeb_env import CarlaAEBEnv
+    from stable_baselines3 import SAC
+    import numpy as np
+
+    env = CarlaAEBEnv()
+    model = SAC.load("aeb_sac_policy")
+
+    obs, _ = env.reset()
+    done = False
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+
+    env.close()
+
+  NOTE: for a proper comparison, integrate the policy into sweep.py so it
+  runs all 48 configs and writes a CSV. Then compare that CSV side by side
+  with the fixed-profile sweep_summary.csv.
+
+
+MONITORING TRAINING (TensorBoard)
+-----------------------------------
+stable-baselines3 writes TensorBoard logs automatically.
+To view them:
+
+    pip install tensorboard
+    tensorboard --logdir ./logs
+
+  Then open http://localhost:6006 in a browser.
+  The "info" dict returned by env.step() includes r_safety, r_comfort,
+  r_efficiency as separate keys — these are worth monitoring to understand
+  what the agent is actually optimizing.
+
+
+COMMON ISSUES
+-------------
+- "Connection refused" on CARLA port 2000:
+    CARLA is not running yet. Launch CarlaUE4.exe and wait ~30 seconds.
+
+- "ModuleNotFoundError: No module named 'gymnasium'":
+    Run: pip install stable-baselines3[extra] gymnasium
+
+- Episode resets are slow (~30-40 seconds each):
+    Normal. CARLA actor spawning + map loading takes time.
+    SAC is chosen first precisely because it reuses past episodes via
+    its replay buffer — fewer total resets needed vs PPO.
+
+- Training crashes mid-run:
+    Check that CARLA is still running (it can time out if idle too long).
+    Restart CARLA and re-run training. SAC's replay buffer is lost on crash
+    but the saved model checkpoint is not — use model.load() to resume.
+
+- Walker fails to spawn:
+    Occasionally CARLA can't find a valid pedestrian spawn point.
+    The env will raise RuntimeError. Restart the episode (call env.reset()).
+
+
+KEY DESIGN DECISIONS (for reference)
+--------------------------------------
+- Action space:    continuous float in [0.0, 1.0] — NOT discrete
+- State vector:    5 inputs (speed, proximity, TTC urgency, prev brake, hazard flag)
+- Reward:          R_safety + R_comfort + R_efficiency per tick
+- SAC first:       off-policy, replay buffer — critical for slow CARLA environment
+- PPO second:      on-policy, stable, used as comparison baseline
+- Ramp limiter:    still active on top of RL output — agent doesn't need to learn smoothing
+- RL insertion point: replaces only brake_target in lane_follow_step(), everything else unchanged
+
+See rl_reward_design.py Section 5 for full hyperparameter tables and rationale.
+================================================================================

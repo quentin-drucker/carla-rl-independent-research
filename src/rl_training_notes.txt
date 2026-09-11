@@ -1,0 +1,143 @@
+================================================================================
+RL TRAINING NOTES — AEB Braking Controller
+Quentin | Junior Spring Research, 2026
+================================================================================
+
+
+QUICK REFERENCE — EXACT COMMANDS IN ORDER
+------------------------------------------
+Everything you need is a script. No more pasting into the terminal.
+
+STEP 1 — Install dependencies (one time only):
+    pip install stable-baselines3 gymnasium
+
+STEP 2 — Launch CARLA headless (no window = 2x faster training):
+    & "C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16\CarlaUE4.exe" -RenderOffScreen
+    Wait ~20 seconds. The prompt returns immediately — that is normal.
+
+    To verify CARLA is up before training:
+    python -c "import sys; sys.path.append(r'C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16\PythonAPI'); sys.path.append(r'C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16\PythonAPI\carla'); import carla; c=carla.Client('localhost',2000); c.set_timeout(10.0); print('CARLA OK:', c.get_server_version())"
+    Should print: CARLA OK: 0.9.16
+
+    NOTE: if you want to WATCH training (not recommended for overnight runs),
+    just launch CARLA normally by double-clicking CarlaUE4.exe instead.
+
+STEP 3 — Quick smoke test (confirm env connects, ~30 seconds):
+    python -c "from carla_aeb_env import CarlaAEBEnv; env=CarlaAEBEnv(); obs,_=env.reset(); print('obs:',obs); o,r,te,tr,i=env.step([0.5]); print('reward:',r); env.close(); print('OK')"
+    Should print obs array and a reward number then OK.
+
+STEP 4 — Start SAC training (overnight, ~10-25 hours headless):
+    python train_sac.py
+    Saves a checkpoint every 10,000 steps to checkpoints/ folder.
+    To stop early: press Ctrl+C once, wait 10 seconds — it saves automatically.
+
+STEP 5 — Evaluate the trained model (run after training finishes):
+    python eval_sac.py
+    Runs 10 episodes and prints collision rate, full stops, mean reward.
+
+    To evaluate a specific checkpoint instead of the final model:
+    python eval_sac.py checkpoints/sac_aeb_50000_steps.zip
+
+
+MONITORING TRAINING
+--------------------
+While train_sac.py is running, the terminal prints a stats block every ~2000 steps:
+
+    ---------------------------------
+    | rollout/            |         |
+    |    ep_len_mean      | 45      |  <- avg episode length in ticks
+    |    ep_rew_mean      | 0.23    |  <- avg reward per episode (watch this go UP)
+    | time/               |         |
+    |    total_timesteps  | 4000    |  <- how far along you are out of 200,000
+    ---------------------------------
+
+    ep_rew_mean going up = agent is learning.
+    It won't be perfectly smooth — bouncing is normal early on.
+
+
+WHAT THE FILES DO
+------------------
+  train_sac.py        — runs SAC training, saves checkpoints + final model
+  eval_sac.py         — loads trained model, runs 10 eval episodes, prints results
+  carla_aeb_env.py    — Gymnasium wrapper (the env the RL agent lives in)
+  rl_reward_design.py — state vector + reward function design doc
+  sac_aeb_200k.zip    — final trained SAC model (created after training)
+  checkpoints/        — folder of intermediate saves every 10k steps
+
+
+WHAT TO LOOK FOR IN EVAL OUTPUT
+---------------------------------
+Good result:
+    ep  1: reward=  4.21  collision=no   final_mode=STOP_HOLD
+    ep  2: reward=  3.87  collision=no   final_mode=STOP_HOLD
+    ...
+    Collisions : 0/10
+    Full stops : 9/10
+
+This means the agent learned to brake and stop before the pedestrian.
+
+Bad result (agent didn't learn or underfit):
+    ep  1: reward= -12.3  collision=YES  final_mode=CRUISE
+    Collisions : 8/10
+
+This means the agent did not brake at all or braked wrong.
+Most likely cause: only trained on one fixed scenario config — needs
+more diverse episode randomization before it generalizes.
+
+
+HOW TO TRAIN PPO (run after SAC as a comparison)
+--------------------------------------------------
+Create a train_ppo.py the same way as train_sac.py but with:
+    from stable_baselines3 import PPO
+    model = PPO("MlpPolicy", env, verbose=1,
+                n_steps=2048, batch_size=64, n_epochs=10,
+                learning_rate=2.5e-4, clip_range=0.2)
+    model.learn(total_timesteps=500_000)   # PPO needs ~2.5x more steps
+    model.save("ppo_aeb_500k")
+PPO is on-policy so it needs more steps but is often more stable.
+
+
+IMPORTANT LIMITATION — GENERALIZATION
+---------------------------------------
+The current env uses ONE fixed ScenarioConfig (35 mph, 120m encounter,
+far-cross, ClearSunset). The agent learns that specific situation well
+but may fail on other configs. Next step after evaluating this run:
+randomize the config each episode (different speeds, distances, TTC)
+so the agent learns a general braking policy across all conditions.
+
+
+COMMON ISSUES
+--------------
+"Connection refused" on port 2000:
+    CARLA is not running. Launch it and wait 20-30 seconds.
+
+"ModuleNotFoundError: gymnasium":
+    pip install stable-baselines3 gymnasium
+
+Training crashes mid-run:
+    Check CARLA is still running. Restart CARLA and re-run train_sac.py.
+    The latest checkpoint in checkpoints/ is safe — it was saved before the crash.
+
+Episode resets are slow (30-40 sec each):
+    Normal. CARLA actor spawning takes time. Nothing to fix.
+
+Walker fails to spawn (RuntimeError):
+    Occasionally CARLA physics glitches. Just re-run train_sac.py.
+
+
+KEY DESIGN DECISIONS (for reference / explaining to professor)
+---------------------------------------------------------------
+- Action space:    continuous float [0, 1] — how hard to brake each tick
+- State vector:    5 inputs: speed, proximity to ped, TTC urgency,
+                   previous brake command, hazard flag
+- Reward:          safety penalty (collision) + comfort penalty (jerk)
+                   + efficiency reward (moving toward goal)
+- SAC chosen first: off-policy algorithm — reuses past experience via replay
+                    buffer, critical for slow CARLA environment
+- PPO second:       on-policy, used as comparison baseline
+- Ramp limiter:     still active on top of RL output — agent outputs a
+                    TARGET brake value, the ramp limiter smooths it
+- RL insertion:     replaces only brake_target in lane_follow_step(),
+                    all other logic (steering, STOP_HOLD, LiDAR) unchanged
+
+================================================================================

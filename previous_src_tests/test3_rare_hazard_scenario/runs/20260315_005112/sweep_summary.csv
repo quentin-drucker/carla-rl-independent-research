@@ -1,0 +1,13 @@
+run_id,target_mph,encounter_distance_m,walker_speed_mps,walker_side,walker_cross,walker_startup_s,trigger_delay_s,weather_preset,sun_altitude_deg,cloudiness,sim_seconds,random_seed,hazard_triggered,collision_detected,outcome,min_ped_distance_m,min_ttc_s,max_jerk_mps3,mean_jerk_mps3,ego_speed_at_trigger_mph,ego_speed_at_trigger_mps,ego_dist_at_trigger_m,trigger_time_s,time_to_stop_s,error
+run_0000,25.0,80.0,1.8,left,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,5.290,0.450,1480.67,7.54,24.71,11.047,43.2,5.18,,
+run_0001,25.0,80.0,1.8,right,far,0.5,0.0,ClearNoon,,,20.0,,True,False,full_stop,6.204,0.552,1160.38,12.10,24.71,11.047,43.2,5.18,1.72,
+run_0002,25.0,120.0,1.8,left,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,5.789,0.535,1503.85,10.79,24.88,11.122,83.1,8.78,,
+run_0003,25.0,120.0,1.8,right,far,0.5,0.0,ClearNoon,,,20.0,,True,False,full_stop,6.129,0.549,919.36,14.04,24.88,11.122,83.1,8.78,1.80,
+run_0004,35.0,80.0,1.8,left,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.658,0.359,62.99,2.50,33.92,15.166,29.7,3.52,,
+run_0005,35.0,80.0,1.8,right,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.685,0.359,92.36,2.77,33.92,15.166,29.7,3.52,,
+run_0006,35.0,120.0,1.8,left,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.722,0.371,63.26,2.87,34.57,15.456,68.8,6.06,,
+run_0007,35.0,120.0,1.8,right,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.754,0.371,62.83,2.91,34.57,15.456,68.8,6.06,,
+run_0008,45.0,80.0,1.8,left,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.491,0.464,64.73,3.71,38.72,17.310,23.0,3.08,,
+run_0009,45.0,80.0,1.8,right,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.408,0.458,64.86,3.75,38.72,17.310,23.0,3.08,,
+run_0010,45.0,120.0,1.8,left,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.470,0.350,65.32,2.84,44.32,19.815,54.3,4.68,,
+run_0011,45.0,120.0,1.8,right,far,0.5,0.0,ClearNoon,,,20.0,,True,False,slowed_avoided,4.450,0.354,65.31,2.88,44.32,19.815,54.3,4.68,,

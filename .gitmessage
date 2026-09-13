@@ -1,0 +1,6 @@
+<type>: <imperative summary, ~50 chars, no trailing period>
+
+# Why this change, not what it does line-by-line — the diff already shows the "what".
+# <type> is one of: feat, fix, experiment, refactor, docs, chore
+# See CONTRIBUTING.md for the full convention.
+# Lines starting with '#' (like this one) are stripped automatically.

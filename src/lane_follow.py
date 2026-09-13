@@ -15,6 +15,7 @@ from lidar_utils import (
     lidar_min_distance_ahead,
     lidar_min_distance_in_lane_noodle,
     lidar_min_distance_along_route_noodle,
+    lidar_min_distances_along_route_corridors,
 )
 
 
@@ -246,22 +247,67 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     d_min_ahead = None
     noodle_points_world = None
 
+    corridor_distances_m = {}
+    corridor_points_world = {}
+    d_min_commanded_path_m = None
+    d_min_left_candidate_m = None
+    d_min_right_candidate_m = None
+
     if NOODLE_ENABLE:
         lidar_actor = speed_state.get("lidar_actor", None)
         route_points_world = speed_state.get("route_points_world", None)
 
         if route_points_world:
-            d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
-                lidar_actor,
-                lidar_frame,
-                route_points_world,
-                loc,
-                half_width_m=NOODLE_HALF_WIDTH_M,
-                z_min=-1.0,
-                z_max=2.5,
-                max_dist_m=NOODLE_MAX_DIST_M,
-                x_min_m=NOODLE_X_MIN_M
-            )
+            if speed_state.get("monitor_lateral_corridors", False):
+                candidate_offset_m = abs(
+                    float(speed_state.get("candidate_lateral_offset_m", 1.5))
+                )
+                monitored_offsets = (
+                    0.0,
+                    requested_lateral_offset_m,
+                    -candidate_offset_m,
+                    candidate_offset_m,
+                )
+                corridor_distances_m, corridor_points_world = (
+                    lidar_min_distances_along_route_corridors(
+                        lidar_actor,
+                        lidar_frame,
+                        route_points_world,
+                        loc,
+                        lateral_offsets_m=monitored_offsets,
+                        half_width_m=NOODLE_HALF_WIDTH_M,
+                        z_min=-1.0,
+                        z_max=2.5,
+                        max_dist_m=NOODLE_MAX_DIST_M,
+                        x_min_m=NOODLE_X_MIN_M,
+                    )
+                )
+                d_min_ahead = corridor_distances_m.get(0.0)
+                noodle_points_world = corridor_points_world.get(0.0)
+                d_min_commanded_path_m = corridor_distances_m.get(
+                    requested_lateral_offset_m
+                )
+                d_min_left_candidate_m = corridor_distances_m.get(
+                    -candidate_offset_m
+                )
+                d_min_right_candidate_m = corridor_distances_m.get(
+                    candidate_offset_m
+                )
+                speed_state["commanded_noodle_points_world"] = (
+                    corridor_points_world.get(requested_lateral_offset_m)
+                )
+            else:
+                d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
+                    lidar_actor,
+                    lidar_frame,
+                    route_points_world,
+                    loc,
+                    half_width_m=NOODLE_HALF_WIDTH_M,
+                    z_min=-1.0,
+                    z_max=2.5,
+                    max_dist_m=NOODLE_MAX_DIST_M,
+                    x_min_m=NOODLE_X_MIN_M
+                )
         else:
             d_min_ahead, noodle_points_world = lidar_min_distance_in_lane_noodle(
                 world,
@@ -279,6 +325,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
 
     # stash points for debug drawing in main()
     speed_state["noodle_points_world"] = noodle_points_world
+    speed_state["corridor_distances_m"] = corridor_distances_m
+    speed_state["corridor_points_world"] = corridor_points_world
     
     # -------------------------------------------------
     # SPEED + HAZARD CONTROL (MODE-BASED / HIERARCHICAL)
@@ -637,6 +685,10 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         
         # LiDAR hazard info:
         "d_min_ahead_m": d_min_ahead,       # minimum LiDAR distance ahead (meters)
+        "d_min_original_path_m": d_min_ahead,
+        "d_min_commanded_path_m": d_min_commanded_path_m,
+        "d_min_left_candidate_m": d_min_left_candidate_m,
+        "d_min_right_candidate_m": d_min_right_candidate_m,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)
         "hazard_brake_cmd": 1.0 if hazard_active else 0.0, # 0 or 1 depending on whether hazard is active--no ramp for now.
         "brake_target": brake_target,       # what the ramp is trying to move toward [0..1]

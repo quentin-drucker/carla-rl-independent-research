@@ -11,6 +11,7 @@ import carla
 import math
 
 from math_utils import clamp
+from route_lateral_control import route_unit_right_xy
 
 
 # ---          ---          ---
@@ -564,6 +565,164 @@ def lidar_min_distance_along_route_noodle(
 
     return min_d, noodle_world_points
 
+
+def lidar_min_distances_along_route_corridors(
+    lidar_actor,
+    lidar_data,
+    route_points_world,
+    ego_loc,
+    *,
+    lateral_offsets_m,
+    half_width_m: float,
+    z_min: float,
+    z_max: float,
+    max_dist_m: float,
+    x_min_m: float,
+):
+    """Measure several parallel route corridors in one LiDAR pass.
+
+    ``lateral_offsets_m`` uses the project's route-relative convention:
+    positive is route-right and negative is route-left. Each LiDAR return is
+    projected onto the original route once; its signed lateral displacement is
+    then compared with every requested corridor center.
+
+    This is monitoring only. The caller decides which corridor, if any, owns
+    braking. The function returns ``(minimum_distances, corridor_polylines)``;
+    both dictionaries are keyed by the requested float offsets.
+    """
+    offsets = tuple(dict.fromkeys(float(value) for value in lateral_offsets_m))
+    minimum_distances = {offset: None for offset in offsets}
+    corridor_polylines = {offset: None for offset in offsets}
+
+    if (
+        not offsets
+        or lidar_data is None
+        or lidar_actor is None
+        or not route_points_world
+        or len(route_points_world) < 2
+    ):
+        return minimum_distances, corridor_polylines
+
+    closest_i = None
+    closest_d2 = None
+    for index, point in enumerate(route_points_world):
+        dx = point.x - ego_loc.x
+        dy = point.y - ego_loc.y
+        dz = point.z - ego_loc.z
+        distance_sq = dx * dx + dy * dy + dz * dz
+        if closest_d2 is None or distance_sq < closest_d2:
+            closest_i = index
+            closest_d2 = distance_sq
+
+    if closest_i is None:
+        return minimum_distances, corridor_polylines
+
+    route_xy = []
+    route_s = []
+    route_indices = []
+    traveled = 0.0
+    previous = route_points_world[closest_i]
+    route_xy.append((previous.x, previous.y))
+    route_s.append(0.0)
+    route_indices.append(closest_i)
+
+    for index in range(closest_i + 1, len(route_points_world)):
+        current = route_points_world[index]
+        segment_length = previous.distance(current)
+        if traveled + segment_length > max_dist_m:
+            break
+        traveled += segment_length
+        route_xy.append((current.x, current.y))
+        route_s.append(traveled)
+        route_indices.append(index)
+        previous = current
+
+    if len(route_xy) < 2:
+        return minimum_distances, corridor_polylines
+
+    lidar_transform = lidar_actor.get_transform()
+    lidar_origin = lidar_transform.location
+
+    for offset in offsets:
+        shifted_points = []
+        for (x, y), route_index in zip(route_xy, route_indices):
+            right_x, right_y = route_unit_right_xy(route_points_world, route_index)
+            shifted_points.append(
+                carla.Location(
+                    x=x + right_x * offset,
+                    y=y + right_y * offset,
+                    z=lidar_origin.z - 1.5,
+                )
+            )
+        corridor_polylines[offset] = shifted_points
+
+    half_width_sq = half_width_m * half_width_m
+
+    for lidar_point in lidar_data:
+        local_z = lidar_point.point.z
+        if local_z < z_min or local_z > z_max:
+            continue
+        if lidar_point.point.x <= x_min_m:
+            continue
+
+        world_location = lidar_transform.transform(
+            carla.Location(
+                x=lidar_point.point.x,
+                y=lidar_point.point.y,
+                z=lidar_point.point.z,
+            )
+        )
+        point_x = world_location.x
+        point_y = world_location.y
+
+        best_distance_sq = None
+        best_along_route_m = None
+        best_signed_lateral_m = None
+
+        for index in range(len(route_xy) - 1):
+            start_x, start_y = route_xy[index]
+            end_x, end_y = route_xy[index + 1]
+            projection, projected_x, projected_y, distance_sq = _project_point_to_segment_2d(
+                point_x, point_y, start_x, start_y, end_x, end_y
+            )
+            if best_distance_sq is None or distance_sq < best_distance_sq:
+                segment_dx = end_x - start_x
+                segment_dy = end_y - start_y
+                segment_length = math.hypot(segment_dx, segment_dy)
+                if segment_length <= 1e-9:
+                    continue
+
+                right_x = -segment_dy / segment_length
+                right_y = segment_dx / segment_length
+                best_distance_sq = distance_sq
+                best_along_route_m = route_s[index] + projection * (
+                    route_s[index + 1] - route_s[index]
+                )
+                best_signed_lateral_m = (
+                    (point_x - projected_x) * right_x
+                    + (point_y - projected_y) * right_y
+                )
+
+        if best_along_route_m is None or best_signed_lateral_m is None:
+            continue
+        if best_along_route_m <= x_min_m or best_along_route_m > max_dist_m:
+            continue
+
+        dx = world_location.x - lidar_origin.x
+        dy = world_location.y - lidar_origin.y
+        dz = world_location.z - lidar_origin.z
+        physical_distance_m = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+        for offset in offsets:
+            corridor_distance_sq = (best_signed_lateral_m - offset) ** 2
+            if corridor_distance_sq > half_width_sq:
+                continue
+            current_minimum = minimum_distances[offset]
+            if current_minimum is None or physical_distance_m < current_minimum:
+                minimum_distances[offset] = physical_distance_m
+
+    return minimum_distances, corridor_polylines
+
 def draw_lane_noodle_corridor(
     world,
     noodle_points_world,
@@ -573,6 +732,11 @@ def draw_lane_noodle_corridor(
     z_offset: float = 0.0,
     hazard_active: bool = False,
     tick_interval_m: float = 5.0,
+    center_color=None,
+    normal_edge_color=None,
+    hazard_edge_color=None,
+    normal_tick_color=None,
+    hazard_tick_color=None,
 ):
     """
     Debug draw:
@@ -586,9 +750,17 @@ def draw_lane_noodle_corridor(
     if noodle_points_world is None or len(noodle_points_world) < 2:
         return
 
-    col_center = carla.Color(90, 90, 90)
-    col_edge   = carla.Color(220, 100, 0) if hazard_active else carla.Color(80, 120, 160)
-    col_tick   = carla.Color(180, 70,  0) if hazard_active else carla.Color(60, 100, 140)
+    col_center = center_color or carla.Color(90, 90, 90)
+    col_edge = (
+        (hazard_edge_color or carla.Color(220, 100, 0))
+        if hazard_active
+        else (normal_edge_color or carla.Color(80, 120, 160))
+    )
+    col_tick = (
+        (hazard_tick_color or carla.Color(180, 70, 0))
+        if hazard_active
+        else (normal_tick_color or carla.Color(60, 100, 140))
+    )
 
     cumulative_s = 0.0
     next_tick_s  = tick_interval_m  # first tick drawn at this distance

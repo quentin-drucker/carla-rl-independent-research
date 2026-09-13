@@ -255,6 +255,90 @@ generously timed pedestrian encounter. Before judging avoidance, decide how the
 LiDAR corridor should relate to the original route versus the temporary offset
 path, and record pedestrian clearance plus road-boundary status explicitly.
 
+## Preliminary multi-corridor hazard investigation
+
+Test 3 was implemented as a monitoring experiment before changing braking
+authority. Steering creates three distinct sensing questions:
+
+1. Is the original route blocked?
+2. Does the currently commanded lateral path appear blocked?
+3. Do the left and right candidate paths appear blocked before a maneuver is
+   selected?
+
+The new multi-corridor LiDAR helper projects each LiDAR return onto the original
+route once and measures its signed lateral distance from several parallel
+corridor centers. `lane_follow_step()` exposes the following telemetry when
+monitoring is enabled:
+
+- `d_min_original_path_m`
+- `d_min_commanded_path_m`
+- `d_min_left_candidate_m`
+- `d_min_right_candidate_m`
+
+The original route still owns braking. The new readings are observational only.
+This separation prevents an unvalidated corridor approximation from silently
+changing the established safety controller.
+
+### Visual test
+
+With CARLA running in windowed mode:
+
+```powershell
+Set-Location "C:\Users\qdruc\Projects\Carla Project\src"
+..\venv\Scripts\python.exe -X utf8 test5___scripted_pedestrian_steering.py
+```
+
+Visual legend:
+
+- Blue/gray, turning orange during braking: original route corridor.
+- Green: commanded route-right corridor, currently clear.
+- Magenta: commanded corridor contains at least one accepted LiDAR return.
+- Dark blue line: original planned route.
+- Pink lookahead point: steering target.
+- Cyan lookahead point: unshifted route target.
+
+The terminal prints original, commanded, left-candidate, and right-candidate
+minimum distances every 0.5 seconds after the pedestrian trigger.
+
+To mirror the scripted maneuver:
+
+```powershell
+..\venv\Scripts\python.exe -X utf8 test5___scripted_pedestrian_steering.py --lateral-offset-m -1.5
+```
+
+### First live result
+
+Configuration: 15 mph, 60 m encounter, near pedestrian from route-left, 4.0 s
+trigger TTC, exponential braking, and a scripted 1.5 m route-right target.
+
+- Collision: no.
+- Recorded outcome: `slowed_avoided`.
+- Minimum pedestrian distance: 6.762 m.
+- Maximum actual route offset: 1.323 m.
+- Final actual route offset: +1.194 m; timed recovery did not complete.
+- Original corridor detected the pedestrian as it entered the lane.
+- Route-left candidate readings detected the approaching pedestrian before the
+  original corridor did.
+- Route-right/commanded readings remained clear during most of the avoidance
+  phase.
+
+### Interpretation and newly exposed limitation
+
+The incomplete recovery is informative. The near-cross pedestrian remains on
+the original route, while the original corridor still owns braking. The ego
+therefore slowed substantially and the time-based script requested a return
+before the vehicle had safely passed the pedestrian. A real maneuver controller
+must not recover based on elapsed time alone; recovery should require evidence
+that the hazard is behind or the original route is clear.
+
+The current commanded and candidate corridors are constant parallel offsets.
+They do not yet represent the **swept transition path** between the ego's actual
+position and the requested offset. Consequently, they must not yet take over
+braking or be treated as complete safety checks. A safe next step is to model a
+transition corridor that begins at the ego's measured lateral offset and blends
+toward the target over a bounded forward distance. Road-boundary/drivable-area
+checks are also still required before lateral selection becomes autonomous.
+
 ## Repository workflow
 
 Continue working in the existing repository on `experiment/preliminary-steering-test`, which was created from `develop`. Do not copy `src/` into another testing folder and do not extend `previous_src_tests/`; Git already preserves the experiment history.

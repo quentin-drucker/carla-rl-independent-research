@@ -13,6 +13,9 @@ previous_src_tests/test3_rare_hazard_scenario/runs/*/run_*/
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 
+# AI-agent planning prompts/scratch — not part of the tracked research record
+plans/
+
 # Editor-local settings
 .vscode/
 

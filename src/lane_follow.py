@@ -10,6 +10,7 @@ import carla
 # pyright: reportMissingImports=false
 import math
 from math_utils import clamp, wrap_to_pi, yaw_deg_to_rad, get_speed_mps
+from route_lateral_control import offset_point_xy, signed_lateral_offset_m
 from lidar_utils import (
     lidar_min_distance_ahead,
     lidar_min_distance_in_lane_noodle,
@@ -87,6 +88,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                      ramp_down_per_s=3.0,  # how fast brake decreases per second
                      brake_profile="proportional_ramp",  # see ScenarioConfig.brake_profile for options
                      rl_brake_override=None,  # float [0,1] set by RL agent; bypasses profile logic when not None
+                     lateral_offset_m=0.0,  # signed route-relative target: +right / -left
                      ):
     """
     Lane-follow "brain" for one simulation step (meaning one tick).
@@ -131,13 +133,32 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # all on the SAME path.
     route_points_world = speed_state.get("route_points_world", None)
 
-    if route_points_world:
-        target_loc, route_closest_i = _get_route_target_point(route_points_world, loc, lookahead_m)
+    requested_lateral_offset_m = float(lateral_offset_m)
+    signed_route_lateral_offset_m = 0.0
 
-        if target_loc is None:
+    if route_points_world:
+        route_center_target_loc, route_closest_i = _get_route_target_point(
+            route_points_world, loc, lookahead_m
+        )
+
+        if route_center_target_loc is None:
             vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
             print("lane_follow_step: no valid target point found on planned route!")
             return None
+
+        target_x, target_y = offset_point_xy(
+            route_points_world,
+            route_center_target_loc,
+            requested_lateral_offset_m,
+        )
+        target_loc = carla.Location(
+            x=target_x,
+            y=target_y,
+            z=route_center_target_loc.z,
+        )
+        signed_route_lateral_offset_m = signed_lateral_offset_m(
+            route_points_world, loc
+        )
     else:
         # fallback: old local lane-follow behavior
         next_list = wp.next(lookahead_m)
@@ -149,6 +170,11 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
 
         target_wp = next_list[0]
         target_loc = target_wp.transform.location
+
+        if abs(requested_lateral_offset_m) > 1e-9:
+            raise ValueError(
+                "lateral_offset_m requires route_points_world in speed_state."
+            )
 
     # -------------------------------------------------
     # METRIC: cross-track error (CTE)
@@ -168,6 +194,13 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         color=carla.Color(255,0,255), # pink
         life_time=FIXED_DT * 1.05
     )
+    if route_points_world and abs(requested_lateral_offset_m) > 1e-9:
+        world.debug.draw_point(
+            route_center_target_loc + carla.Location(z=DEBUG_POINT_Z_OFFSET),
+            size=0.10,
+            color=carla.Color(0, 255, 255),
+            life_time=FIXED_DT * 1.05,
+        )
 
     # Compute direction from car -> target point in the ground plane (ignore z).
     # dx, dy are "how far target is from me" in x and y: so like the difference between target and current location.
@@ -596,6 +629,9 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "cte_m": cte_m,                     # lane centering error (meters)
         "heading_error_rad": heading_error, # heading misalignment (radians)
         "steer_cmd": steer_cmd,             # applied steering command [-1,1]
+        "lateral_offset_requested_m": requested_lateral_offset_m,
+        "signed_route_lateral_offset_m": signed_route_lateral_offset_m,
+        "lateral_offset_error_m": requested_lateral_offset_m - signed_route_lateral_offset_m,
         "speed_mps": speed_mps,             # measured speed (m/s)
         "speed_error_mps": speed_error,     # target - current (m/s)
         

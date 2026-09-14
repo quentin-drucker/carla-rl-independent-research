@@ -1,0 +1,45 @@
+#!/bin/sh
+# Auto-scaffold a worklog file the first time a branch is checked into.
+# Enabled per-clone via: git config core.hooksPath .githooks
+# See worklog/README.md for the full system this supports.
+
+prev_head=$1
+new_head=$2
+is_branch_checkout=$3
+
+# Only act on branch checkouts, not file checkouts.
+[ "$is_branch_checkout" = "1" ] || exit 0
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+
+case "$branch" in
+  develop|main) exit 0 ;;
+esac
+
+worklog="worklog/${branch}.md"
+
+# Already exists (e.g. checking back into a branch you've worked on before) — leave it alone.
+[ -f "$worklog" ] && exit 0
+
+mkdir -p "$(dirname "$worklog")"
+created=$(date +"%Y-%m-%d %H:%M")
+
+cat > "$worklog" <<EOF
+# Worklog: $branch
+
+Created: $created
+
+> Append a dated entry every time a meaningful change happens on this branch — human or
+> AI agent. Entry format: worklog/_TEMPLATE.md. This is the raw material for Quentin's
+> weekly advisor progress report and for the PR description when this branch is ready.
+> See worklog/README.md for the full system.
+
+## Goal
+
+<!-- What is this branch trying to accomplish? Fill in before the first log entry. -->
+
+## Log
+
+EOF
+
+echo "worklog: created $worklog"

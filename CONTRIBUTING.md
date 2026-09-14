@@ -51,6 +51,21 @@ A one-time local setup makes this the default when you type `git commit` (no `-m
 git config commit.template .gitmessage
 ```
 
+## Worklogs
+
+Every branch other than `develop` gets a running worklog at `worklog/<branch-name>.md` —
+a dated log of what changed, why, and what worked or didn't, kept as you go rather than
+reconstructed later. It's the raw material for weekly advisor progress reports and for
+PR descriptions. See `worklog/README.md` for how it works and `worklog/_TEMPLATE.md` for
+the entry format.
+
+It's created automatically by a git hook the first time you check into a new branch. One
+more one-time local setup step enables the repo's tracked hooks:
+
+```
+git config core.hooksPath .githooks
+```
+
 ## Pull requests
 
 **Title:** same convention as commit messages — `<type>: <summary>`.

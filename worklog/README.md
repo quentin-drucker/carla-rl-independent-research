@@ -22,16 +22,22 @@ week of work from memory or `git log`.
    whenever something meaningful happens — see `_TEMPLATE.md` for the exact format and an
    example.
 
-4. **It ships with the branch:** commit the worklog file alongside your actual code
-   changes, and it travels with the PR — a reviewer (or future you) gets the process
-   record right next to the diff, not hunting through chat history to reconstruct it.
+4. **Stays local, not pushed to GitHub:** `.gitignore` excludes `worklog/*` (except this
+   README and `_TEMPLATE.md`) — the actual per-branch worklog content is raw,
+   in-progress research notes, not a polished public artifact, same reasoning as the
+   `plans/` folder. It still lives on disk and any AI agent working in this repo can (and
+   should) read/write it normally — "gitignored" only means "not synced to GitHub," not
+   "off limits."
 
-5. **After merge:** the worklog stays in `develop`'s history permanently (it's a real
-   part of the research record, same spirit as `MASTER_CARLA_RESEARCH_SUMMARY.md`) — it
-   is not meant to be deleted once its branch is merged.
+5. **Survives across branches, but not across clones:** since it's untracked, the file
+   persists locally as long as the branch does, but won't show up if you clone the repo
+   fresh elsewhere or if the branch folder gets deleted. If a worklog entry captures
+   something worth permanently preserving (a real finding, a methodology decision),
+   promote it into `MASTER_CARLA_RESEARCH_SUMMARY.md` or the PR description — don't rely
+   on the worklog itself as permanent history.
 
 ## For AI agents
 
-If you're an AI agent working in this repo — see `CLAUDE.md` (or, in Cursor, the rule in
-`.cursor/rules/`) for the instruction to maintain the current branch's worklog
-proactively as you work, not just when asked.
+If you're an AI agent working in this repo — see `AGENTS.md` for the instruction to
+maintain the current branch's worklog proactively as you work, not just when asked, and
+for how to use it when asked to help write a weekly progress report.

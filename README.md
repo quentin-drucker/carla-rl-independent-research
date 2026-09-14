@@ -19,6 +19,8 @@ This work began as a research project for COM496 (junior spring, 2026).
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+git config commit.template .gitmessage
+git config core.hooksPath .githooks
 ```
 
 Requires a running CARLA 0.9.16 simulator instance (see the setup section in

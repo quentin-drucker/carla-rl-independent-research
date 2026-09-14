@@ -1,0 +1,25 @@
+---
+description: Worklog convention — maintain branch worklogs while helping with development
+alwaysApply: true
+---
+
+# Worklog convention
+
+This is Quentin's senior CS Independent Research repo (CARLA + RL, advised by Prof. Ozgur
+Izmirli). Every branch other than `develop` has a running worklog at
+`worklog/<branch-name>.md`, auto-created by a git `post-checkout` hook — see
+`worklog/README.md`. It is Quentin's primary source material for mandatory weekly
+progress reports to his advisor, and for PR descriptions — treat it as a real part of the
+task, not optional overhead.
+
+When helping with development on a branch, append a dated entry to that branch's worklog
+file whenever a meaningful change happens: something gets implemented, an experiment
+runs, a bug is hit, something fails, a result comes back. Do this proactively as work
+happens, not only when asked. Format and an example are in `worklog/_TEMPLATE.md`. Skip
+trivial/mechanical changes (typos, formatting).
+
+When a PR is being opened, draw on the worklog to fill out
+`.github/PULL_REQUEST_TEMPLATE.md` rather than writing those sections from scratch.
+
+For git branching/commit conventions, see `CONTRIBUTING.md`. For full research context,
+see `MASTER_CARLA_RESEARCH_SUMMARY.md`.

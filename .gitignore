@@ -16,6 +16,12 @@ previous_src_tests/test0_ego_camera/out/
 # AI-agent planning prompts/scratch — not part of the tracked research record
 plans/
 
+# Per-branch worklog CONTENT stays local/private (raw in-progress research notes).
+# The worklog SYSTEM itself (README, template, hook) stays tracked — see worklog/README.md.
+worklog/*
+!worklog/README.md
+!worklog/_TEMPLATE.md
+
 # Editor-local settings
 .vscode/
 

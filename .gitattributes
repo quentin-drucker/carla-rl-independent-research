@@ -1,0 +1,4 @@
+# Shell scripts must keep LF line endings even on Windows checkouts, or `sh` fails to
+# parse them (a CRLF shebang line is a common, confusing way for a git hook to silently
+# stop firing).
+.githooks/* text eol=lf

@@ -1,0 +1,11 @@
+---
+description: Worklog convention — see AGENTS.md
+alwaysApply: true
+---
+
+# See AGENTS.md
+
+This project's AI-agent instructions — including the worklog convention for tracking
+research progress per branch — live in `AGENTS.md` at the repo root. Read it before
+making changes. It's the one canonical source regardless of which model (Claude, GPT,
+Codex, etc.) is active in this session.

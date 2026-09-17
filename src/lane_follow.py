@@ -16,6 +16,7 @@ from lidar_utils import (
     lidar_min_distance_in_lane_noodle,
     lidar_min_distance_along_route_noodle,
     lidar_min_distances_along_route_corridors,
+    lidar_min_distance_along_transition_corridor,
 )
 
 
@@ -252,6 +253,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     d_min_commanded_path_m = None
     d_min_left_candidate_m = None
     d_min_right_candidate_m = None
+    d_min_transition_path_m = None
+    transition_corridor_points_world = None
 
     if NOODLE_ENABLE:
         lidar_actor = speed_state.get("lidar_actor", None)
@@ -296,6 +299,26 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                 speed_state["commanded_noodle_points_world"] = (
                     corridor_points_world.get(requested_lateral_offset_m)
                 )
+
+                transition_blend_distance_m = float(
+                    speed_state.get("transition_blend_distance_m", 20.0)
+                )
+                d_min_transition_path_m, transition_corridor_points_world = (
+                    lidar_min_distance_along_transition_corridor(
+                        lidar_actor,
+                        lidar_frame,
+                        route_points_world,
+                        loc,
+                        start_offset_m=signed_route_lateral_offset_m,
+                        target_offset_m=requested_lateral_offset_m,
+                        blend_distance_m=transition_blend_distance_m,
+                        half_width_m=NOODLE_HALF_WIDTH_M,
+                        z_min=-1.0,
+                        z_max=2.5,
+                        max_dist_m=NOODLE_MAX_DIST_M,
+                        x_min_m=NOODLE_X_MIN_M,
+                    )
+                )
             else:
                 d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
                     lidar_actor,
@@ -327,6 +350,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     speed_state["noodle_points_world"] = noodle_points_world
     speed_state["corridor_distances_m"] = corridor_distances_m
     speed_state["corridor_points_world"] = corridor_points_world
+    speed_state["transition_corridor_points_world"] = transition_corridor_points_world
     
     # -------------------------------------------------
     # SPEED + HAZARD CONTROL (MODE-BASED / HIERARCHICAL)
@@ -689,6 +713,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "d_min_commanded_path_m": d_min_commanded_path_m,
         "d_min_left_candidate_m": d_min_left_candidate_m,
         "d_min_right_candidate_m": d_min_right_candidate_m,
+        "d_min_transition_path_m": d_min_transition_path_m,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)
         "hazard_brake_cmd": 1.0 if hazard_active else 0.0, # 0 or 1 depending on whether hazard is active--no ramp for now.
         "brake_target": brake_target,       # what the ramp is trying to move toward [0..1]

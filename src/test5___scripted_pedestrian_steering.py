@@ -172,6 +172,8 @@ class CorridorConsoleObserver:
         self._tick = 0
         self.maximum_actual_offset_m = 0.0
         self.final_actual_offset_m = float("nan")
+        self.commanded_ever_non_drivable = False
+        self.transition_ever_non_drivable = False
 
     def __call__(self, sim_time_s, triggered, telemetry):
         if telemetry is None:
@@ -183,6 +185,19 @@ class CorridorConsoleObserver:
         )
         self.final_actual_offset_m = actual_offset_m
 
+        commanded_drivability = telemetry.get("commanded_path_drivability")
+        transition_drivability = telemetry.get("transition_path_drivability")
+        commanded_status = (
+            commanded_drivability["status"] if commanded_drivability else "--"
+        )
+        transition_status = (
+            transition_drivability["status"] if transition_drivability else "--"
+        )
+        if commanded_status == "non_drivable":
+            self.commanded_ever_non_drivable = True
+        if transition_status == "non_drivable":
+            self.transition_ever_non_drivable = True
+
         if triggered and self._tick % self._print_every_ticks == 0:
             print(
                 f"[corridors] t={sim_time_s:5.2f}s "
@@ -192,7 +207,8 @@ class CorridorConsoleObserver:
                 f"commanded={_format_distance(telemetry['d_min_commanded_path_m'])}m "
                 f"transition={_format_distance(telemetry['d_min_transition_path_m'])}m "
                 f"left={_format_distance(telemetry['d_min_left_candidate_m'])}m "
-                f"right={_format_distance(telemetry['d_min_right_candidate_m'])}m"
+                f"right={_format_distance(telemetry['d_min_right_candidate_m'])}m | "
+                f"drivable(commanded={commanded_status}, transition={transition_status})"
             )
         self._tick += 1
 
@@ -249,6 +265,14 @@ def main():
             "route recovery check: "
             + ("PASS" if abs(observer.final_actual_offset_m) <= 0.25 else "REVIEW")
         )
+    print(
+        "commanded path ever map-flagged non_drivable: "
+        f"{observer.commanded_ever_non_drivable}"
+    )
+    print(
+        "transition path ever map-flagged non_drivable: "
+        f"{observer.transition_ever_non_drivable}"
+    )
     print(f"recovery controller final state: {recovery_controller.state}")
     print(f"recovery completed (hazard/state-based): {recovery_controller.recovered}")
     if recovery_controller.time_hazard_clear_to_recover_start_s is not None:

@@ -18,6 +18,7 @@ from lidar_utils import (
     lidar_min_distances_along_route_corridors,
     lidar_min_distance_along_transition_corridor,
 )
+from map_drivability import check_corridor_drivability
 
 
 # -------------------------------------------------
@@ -255,6 +256,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     d_min_right_candidate_m = None
     d_min_transition_path_m = None
     transition_corridor_points_world = None
+    commanded_path_drivability = None
+    transition_path_drivability = None
 
     if NOODLE_ENABLE:
         lidar_actor = speed_state.get("lidar_actor", None)
@@ -319,6 +322,27 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                         x_min_m=NOODLE_X_MIN_M,
                     )
                 )
+
+                # -------------------------------------------------
+                # Map-based drivability check (independent of LiDAR clearance)
+                # -------------------------------------------------
+                # LiDAR clearance answers "is anything in this corridor right
+                # now?"; this answers "is this corridor geometrically on a
+                # driving lane at all?" A path can be LiDAR-clear and still
+                # run off the road, or vice versa -- neither substitutes for
+                # the other. project_to_road=False inside check_corridor_
+                # drivability is what makes this meaningful: it refuses to
+                # silently snap an off-road sample onto the nearest road.
+                # Observational only in this first version: it does not gate
+                # braking or steering.
+                if speed_state.get("monitor_map_drivability", True):
+                    commanded_path_drivability = check_corridor_drivability(
+                        carla_map,
+                        corridor_points_world.get(requested_lateral_offset_m),
+                    )
+                    transition_path_drivability = check_corridor_drivability(
+                        carla_map, transition_corridor_points_world
+                    )
             else:
                 d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
                     lidar_actor,
@@ -714,6 +738,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "d_min_left_candidate_m": d_min_left_candidate_m,
         "d_min_right_candidate_m": d_min_right_candidate_m,
         "d_min_transition_path_m": d_min_transition_path_m,
+        "commanded_path_drivability": commanded_path_drivability,
+        "transition_path_drivability": transition_path_drivability,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)
         "hazard_brake_cmd": 1.0 if hazard_active else 0.0, # 0 or 1 depending on whether hazard is active--no ramp for now.
         "brake_target": brake_target,       # what the ramp is trying to move toward [0..1]

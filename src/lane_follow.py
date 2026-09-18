@@ -10,11 +10,18 @@ import carla
 # pyright: reportMissingImports=false
 import math
 from math_utils import clamp, wrap_to_pi, yaw_deg_to_rad, get_speed_mps
+from route_lateral_control import offset_point_xy, signed_lateral_offset_m
 from lidar_utils import (
     lidar_min_distance_ahead,
     lidar_min_distance_in_lane_noodle,
     lidar_min_distance_along_route_noodle,
+    lidar_min_distances_along_route_corridors,
+    lidar_min_distance_along_transition_corridor,
 )
+from map_drivability import check_corridor_drivability
+# hazard_governance.select_hazard_governing_distance() is intentionally NOT
+# wired in here -- see the DISABLED comment below where hazard_governing_*
+# is computed for why.
 
 
 # -------------------------------------------------
@@ -87,6 +94,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                      ramp_down_per_s=3.0,  # how fast brake decreases per second
                      brake_profile="proportional_ramp",  # see ScenarioConfig.brake_profile for options
                      rl_brake_override=None,  # float [0,1] set by RL agent; bypasses profile logic when not None
+                     lateral_offset_m=0.0,  # signed route-relative target: +right / -left
                      ):
     """
     Lane-follow "brain" for one simulation step (meaning one tick).
@@ -131,13 +139,32 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # all on the SAME path.
     route_points_world = speed_state.get("route_points_world", None)
 
-    if route_points_world:
-        target_loc, route_closest_i = _get_route_target_point(route_points_world, loc, lookahead_m)
+    requested_lateral_offset_m = float(lateral_offset_m)
+    signed_route_lateral_offset_m = 0.0
 
-        if target_loc is None:
+    if route_points_world:
+        route_center_target_loc, route_closest_i = _get_route_target_point(
+            route_points_world, loc, lookahead_m
+        )
+
+        if route_center_target_loc is None:
             vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
             print("lane_follow_step: no valid target point found on planned route!")
             return None
+
+        target_x, target_y = offset_point_xy(
+            route_points_world,
+            route_center_target_loc,
+            requested_lateral_offset_m,
+        )
+        target_loc = carla.Location(
+            x=target_x,
+            y=target_y,
+            z=route_center_target_loc.z,
+        )
+        signed_route_lateral_offset_m = signed_lateral_offset_m(
+            route_points_world, loc
+        )
     else:
         # fallback: old local lane-follow behavior
         next_list = wp.next(lookahead_m)
@@ -149,6 +176,11 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
 
         target_wp = next_list[0]
         target_loc = target_wp.transform.location
+
+        if abs(requested_lateral_offset_m) > 1e-9:
+            raise ValueError(
+                "lateral_offset_m requires route_points_world in speed_state."
+            )
 
     # -------------------------------------------------
     # METRIC: cross-track error (CTE)
@@ -168,6 +200,13 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         color=carla.Color(255,0,255), # pink
         life_time=FIXED_DT * 1.05
     )
+    if route_points_world and abs(requested_lateral_offset_m) > 1e-9:
+        world.debug.draw_point(
+            route_center_target_loc + carla.Location(z=DEBUG_POINT_Z_OFFSET),
+            size=0.10,
+            color=carla.Color(0, 255, 255),
+            life_time=FIXED_DT * 1.05,
+        )
 
     # Compute direction from car -> target point in the ground plane (ignore z).
     # dx, dy are "how far target is from me" in x and y: so like the difference between target and current location.
@@ -213,22 +252,112 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     d_min_ahead = None
     noodle_points_world = None
 
+    corridor_distances_m = {}
+    corridor_points_world = {}
+    d_min_commanded_path_m = None
+    d_min_left_candidate_m = None
+    d_min_right_candidate_m = None
+    d_min_transition_path_m = None
+    transition_corridor_points_world = None
+    commanded_path_drivability = None
+    transition_path_drivability = None
+
     if NOODLE_ENABLE:
         lidar_actor = speed_state.get("lidar_actor", None)
         route_points_world = speed_state.get("route_points_world", None)
 
         if route_points_world:
-            d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
-                lidar_actor,
-                lidar_frame,
-                route_points_world,
-                loc,
-                half_width_m=NOODLE_HALF_WIDTH_M,
-                z_min=-1.0,
-                z_max=2.5,
-                max_dist_m=NOODLE_MAX_DIST_M,
-                x_min_m=NOODLE_X_MIN_M
-            )
+            if speed_state.get("monitor_lateral_corridors", False):
+                candidate_offset_m = abs(
+                    float(speed_state.get("candidate_lateral_offset_m", 1.5))
+                )
+                monitored_offsets = (
+                    0.0,
+                    requested_lateral_offset_m,
+                    -candidate_offset_m,
+                    candidate_offset_m,
+                )
+                corridor_distances_m, corridor_points_world = (
+                    lidar_min_distances_along_route_corridors(
+                        lidar_actor,
+                        lidar_frame,
+                        route_points_world,
+                        loc,
+                        lateral_offsets_m=monitored_offsets,
+                        half_width_m=NOODLE_HALF_WIDTH_M,
+                        z_min=-1.0,
+                        z_max=2.5,
+                        max_dist_m=NOODLE_MAX_DIST_M,
+                        x_min_m=NOODLE_X_MIN_M,
+                    )
+                )
+                d_min_ahead = corridor_distances_m.get(0.0)
+                noodle_points_world = corridor_points_world.get(0.0)
+                d_min_commanded_path_m = corridor_distances_m.get(
+                    requested_lateral_offset_m
+                )
+                d_min_left_candidate_m = corridor_distances_m.get(
+                    -candidate_offset_m
+                )
+                d_min_right_candidate_m = corridor_distances_m.get(
+                    candidate_offset_m
+                )
+                speed_state["commanded_noodle_points_world"] = (
+                    corridor_points_world.get(requested_lateral_offset_m)
+                )
+
+                transition_blend_distance_m = float(
+                    speed_state.get("transition_blend_distance_m", 20.0)
+                )
+                d_min_transition_path_m, transition_corridor_points_world = (
+                    lidar_min_distance_along_transition_corridor(
+                        lidar_actor,
+                        lidar_frame,
+                        route_points_world,
+                        loc,
+                        start_offset_m=signed_route_lateral_offset_m,
+                        target_offset_m=requested_lateral_offset_m,
+                        blend_distance_m=transition_blend_distance_m,
+                        half_width_m=NOODLE_HALF_WIDTH_M,
+                        z_min=-1.0,
+                        z_max=2.5,
+                        max_dist_m=NOODLE_MAX_DIST_M,
+                        x_min_m=NOODLE_X_MIN_M,
+                    )
+                )
+
+                # -------------------------------------------------
+                # Map-based drivability check (independent of LiDAR clearance)
+                # -------------------------------------------------
+                # LiDAR clearance answers "is anything in this corridor right
+                # now?"; this answers "is this corridor geometrically on a
+                # driving lane at all?" A path can be LiDAR-clear and still
+                # run off the road, or vice versa -- neither substitutes for
+                # the other. project_to_road=False inside check_corridor_
+                # drivability is what makes this meaningful: it refuses to
+                # silently snap an off-road sample onto the nearest road.
+                # Observational only in this first version: it does not gate
+                # braking or steering.
+                if speed_state.get("monitor_map_drivability", True):
+                    commanded_path_drivability = check_corridor_drivability(
+                        carla_map,
+                        corridor_points_world.get(requested_lateral_offset_m),
+                    )
+                    transition_path_drivability = check_corridor_drivability(
+                        carla_map, transition_corridor_points_world
+                    )
+            else:
+                d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
+                    lidar_actor,
+                    lidar_frame,
+                    route_points_world,
+                    loc,
+                    half_width_m=NOODLE_HALF_WIDTH_M,
+                    z_min=-1.0,
+                    z_max=2.5,
+                    max_dist_m=NOODLE_MAX_DIST_M,
+                    x_min_m=NOODLE_X_MIN_M
+                )
         else:
             d_min_ahead, noodle_points_world = lidar_min_distance_in_lane_noodle(
                 world,
@@ -246,6 +375,9 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
 
     # stash points for debug drawing in main()
     speed_state["noodle_points_world"] = noodle_points_world
+    speed_state["corridor_distances_m"] = corridor_distances_m
+    speed_state["corridor_points_world"] = corridor_points_world
+    speed_state["transition_corridor_points_world"] = transition_corridor_points_world
     
     # -------------------------------------------------
     # SPEED + HAZARD CONTROL (MODE-BASED / HIERARCHICAL)
@@ -270,9 +402,33 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # trigger_distance = base_distance_m + speed_mps * headway_seconds
     trigger_distance_m = base_distance_m + speed_mps * headway_seconds
     # trigger_distance_m is the distance at which we want to start braking based on LiDAR hazard detection.
+
+    # -------------------------------------------------
+    # Which corridor's LiDAR reading governs the braking hazard decision
+    # -------------------------------------------------
+    # DISABLED as of 2026-09-18: hazard_governance.select_hazard_governing_distance()
+    # exists and is offline-tested, but letting it actually govern braking was
+    # tried live in this session's 12-run validation matrix and produced a
+    # dangerous false-clear: run right/early/steering_plus_braking recorded
+    # min_ped_distance=1.99m and min_TTC=0.37s with the vehicle NEVER braking
+    # (mode stayed CRUISE the entire run), because the swept-transition
+    # corridor's single sparse LiDAR reading happened to read "clear" the
+    # whole time the ego actually passed within ~2m of the pedestrian at a
+    # dangerously low TTC. A corridor-clear reading is a coarse geometric
+    # approximation, not a reliable enough signal on its own to suppress the
+    # original corridor's braking authority -- exactly the caution the Week 2
+    # plan already called for ("keep transition and candidate LiDAR corridors
+    # observational until independently validated"). Re-enabling this needs
+    # real hardening first (e.g. a wider/margin-padded corridor, agreement
+    # from an independent signal, or hysteresis across several ticks) and a
+    # validation matrix run showing it no longer produces close/low-TTC
+    # passes with zero braking -- see the worklog entry dated 2026-09-18.
+    hazard_governing_distance_m = d_min_ahead
+    hazard_governing_source = "original"
+
     hazard_active = (
-        d_min_ahead is not None and
-        d_min_ahead < trigger_distance_m
+        hazard_governing_distance_m is not None and
+        hazard_governing_distance_m < trigger_distance_m
     )
 
     # -------------------------------------------------
@@ -297,12 +453,14 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     #   exponential        -- brake_target = penetration^2      (gentle->urgent curve)
 
     brake_target = 0.0
-    if hazard_active and d_min_ahead is not None:
-        if panic_distance_m > 0.0 and d_min_ahead <= panic_distance_m:
+    if hazard_active and hazard_governing_distance_m is not None:
+        if panic_distance_m > 0.0 and hazard_governing_distance_m <= panic_distance_m:
             brake_target = 1.0
         else:
             denom = max(1e-3, (trigger_distance_m - max(0.0, panic_distance_m)))
-            penetration = clamp((trigger_distance_m - d_min_ahead) / denom, 0.0, 1.0)
+            penetration = clamp(
+                (trigger_distance_m - hazard_governing_distance_m) / denom, 0.0, 1.0
+            )
 
             if brake_profile == "step_constant":
                 brake_target = 1.0
@@ -377,21 +535,26 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # Decide if hazard is "really clear" (more conservative than hazard_active False).
     #
     # When in STOP_HOLD: require a POSITIVE confirmation that the obstacle is far
-    # away. d_min_ahead=None means the LiDAR returned nothing — this happens when
-    # a stopped pedestrian falls into a scan gap or their mesh settles at very close
-    # range. Treating None as "clear" here caused the ego to resume and drive into
-    # a stopped pedestrian. In STOP_HOLD, None = "unknown" not "safe".
+    # away. A None governing reading means the LiDAR returned nothing — this
+    # happens when a stopped pedestrian falls into a scan gap or their mesh
+    # settles at very close range. Treating None as "clear" here caused the
+    # ego to resume and drive into a stopped pedestrian. In STOP_HOLD,
+    # None = "unknown" not "safe".
     #
     # In all other modes: None still means nothing detected = clear (normal cruise).
+    #
+    # Uses hazard_governing_distance_m (not the raw original-corridor
+    # d_min_ahead) so hazard-clear detection and hazard-active detection
+    # always agree on which corridor is being judged this tick.
     if prev_mode == "STOP_HOLD":
         hazard_clear = (
-            d_min_ahead is not None and
-            d_min_ahead > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M)
+            hazard_governing_distance_m is not None and
+            hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M)
         )
     else:
         hazard_clear = (
-            (d_min_ahead is None) or
-            (d_min_ahead > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M))
+            (hazard_governing_distance_m is None) or
+            (hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M))
         )
 
     # Count consecutive clear ticks (for stability)
@@ -596,11 +759,23 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "cte_m": cte_m,                     # lane centering error (meters)
         "heading_error_rad": heading_error, # heading misalignment (radians)
         "steer_cmd": steer_cmd,             # applied steering command [-1,1]
+        "lateral_offset_requested_m": requested_lateral_offset_m,
+        "signed_route_lateral_offset_m": signed_route_lateral_offset_m,
+        "lateral_offset_error_m": requested_lateral_offset_m - signed_route_lateral_offset_m,
         "speed_mps": speed_mps,             # measured speed (m/s)
         "speed_error_mps": speed_error,     # target - current (m/s)
         
         # LiDAR hazard info:
         "d_min_ahead_m": d_min_ahead,       # minimum LiDAR distance ahead (meters)
+        "d_min_original_path_m": d_min_ahead,
+        "d_min_commanded_path_m": d_min_commanded_path_m,
+        "d_min_left_candidate_m": d_min_left_candidate_m,
+        "d_min_right_candidate_m": d_min_right_candidate_m,
+        "d_min_transition_path_m": d_min_transition_path_m,
+        "commanded_path_drivability": commanded_path_drivability,
+        "transition_path_drivability": transition_path_drivability,
+        "hazard_governing_source": hazard_governing_source,  # "original" | "transition"
+        "hazard_governing_distance_m": hazard_governing_distance_m,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)
         "hazard_brake_cmd": 1.0 if hazard_active else 0.0, # 0 or 1 depending on whether hazard is active--no ramp for now.
         "brake_target": brake_target,       # what the ramp is trying to move toward [0..1]

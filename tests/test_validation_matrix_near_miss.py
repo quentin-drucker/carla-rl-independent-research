@@ -12,6 +12,10 @@ from test7___steering_validation_matrix import (  # noqa: E402
 )
 
 
+# `triggered=False` is passed to every observer(...) call below purely to
+# keep test output quiet -- ValidationObserver/CorridorConsoleObserver only
+# gate their console print on `triggered`, not their tracking fields, so
+# this doesn't affect what's being asserted.
 def _telemetry(*, ttc_s, brake_cmd=0.0, steer_cmd=0.0, offset_m=1.0):
     return {
         "signed_route_lateral_offset_m": offset_m,
@@ -37,30 +41,30 @@ class ValidationObserverNearMissTests(unittest.TestCase):
         automatically, not only by a human reading console output.
         """
         observer = ValidationObserver()
-        observer(0.0, True, _telemetry(ttc_s=float("nan"), brake_cmd=0.0))
-        observer(0.02, True, _telemetry(ttc_s=0.37, brake_cmd=0.0))
-        observer(0.04, True, _telemetry(ttc_s=2.0, brake_cmd=0.0))
+        observer(0.0, False, _telemetry(ttc_s=float("nan"), brake_cmd=0.0))
+        observer(0.02, False, _telemetry(ttc_s=0.37, brake_cmd=0.0))
+        observer(0.04, False, _telemetry(ttc_s=2.0, brake_cmd=0.0))
 
         self.assertFalse(observer.brake_ever_engaged)
         self.assertLess(observer.min_ttc_s_observed, NEAR_MISS_TTC_S)
 
     def test_low_ttc_with_braking_engaged_is_not_flagged(self):
         observer = ValidationObserver()
-        observer(0.0, True, _telemetry(ttc_s=0.37, brake_cmd=0.8))
+        observer(0.0, False, _telemetry(ttc_s=0.37, brake_cmd=0.8))
 
         self.assertTrue(observer.brake_ever_engaged)
         self.assertLess(observer.min_ttc_s_observed, NEAR_MISS_TTC_S)
 
     def test_high_ttc_with_no_braking_is_not_flagged(self):
         observer = ValidationObserver()
-        observer(0.0, True, _telemetry(ttc_s=5.0, brake_cmd=0.0))
+        observer(0.0, False, _telemetry(ttc_s=5.0, brake_cmd=0.0))
 
         self.assertFalse(observer.brake_ever_engaged)
         self.assertGreaterEqual(observer.min_ttc_s_observed, NEAR_MISS_TTC_S)
 
     def test_nan_ttc_ticks_are_ignored_not_treated_as_zero(self):
         observer = ValidationObserver()
-        observer(0.0, True, _telemetry(ttc_s=float("nan")))
+        observer(0.0, False, _telemetry(ttc_s=float("nan")))
         self.assertEqual(observer.min_ttc_s_observed, float("inf"))
 
 

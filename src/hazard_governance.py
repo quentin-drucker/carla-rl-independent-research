@@ -63,3 +63,31 @@ def select_hazard_governing_distance(
             return d_min_transition_path_m, "transition"
 
     return d_min_original_path_m, "original"
+
+
+def is_original_corridor_confirmed_clear(
+    d_min_original_path_m, trigger_distance_m, clear_margin_m
+):
+    """True only if the original corridor POSITIVELY confirms clearance.
+
+    Unlike lane_follow_step()'s own hazard_active/hazard_clear checks (which
+    treat a None LiDAR reading as "nothing detected = clear" in every mode
+    except STOP_HOLD), this always requires an actual measured distance
+    above trigger_distance_m + clear_margin_m. A None reading (no LiDAR
+    return at all) is treated as unknown, not clear.
+
+    Why stricter here: this feeds a scripted evasive maneuver's decision to
+    start returning toward a hazard it just steered away from -- the same
+    "silence near a close, possibly-stationary pedestrian is more likely a
+    sensor gap than genuine clearance" reasoning lane_follow_step() already
+    applies in STOP_HOLD, generalized here since this check only ever runs
+    in an analogous close-range, recently-triggered context. Found via a
+    live oscillation bug on 2026-09-18: treating None as clear let a
+    momentary LiDAR gap next to a stationary pedestrian satisfy the
+    recovery controller's clear-confirmation window, causing it to start
+    returning and then immediately re-arm when the hazard reappeared.
+    """
+    return (
+        d_min_original_path_m is not None
+        and d_min_original_path_m > (trigger_distance_m + clear_margin_m)
+    )

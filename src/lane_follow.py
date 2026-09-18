@@ -19,9 +19,12 @@ from lidar_utils import (
     lidar_min_distance_along_transition_corridor,
 )
 from map_drivability import check_corridor_drivability
+from hazard_governance import GOVERNANCE_WIDTH_MARGIN_M
 # hazard_governance.select_hazard_governing_distance() is intentionally NOT
 # wired in here -- see the DISABLED comment below where hazard_governing_*
-# is computed for why.
+# is computed for why. The wider corroborating corridor it depends on is
+# still computed and exposed in telemetry (observational), matching this
+# week's general pattern for not-yet-trusted signals.
 
 
 # -------------------------------------------------
@@ -258,6 +261,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     d_min_left_candidate_m = None
     d_min_right_candidate_m = None
     d_min_transition_path_m = None
+    d_min_transition_path_wide_m = None
     transition_corridor_points_world = None
     commanded_path_drivability = None
     transition_path_drivability = None
@@ -319,6 +323,31 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                         target_offset_m=requested_lateral_offset_m,
                         blend_distance_m=transition_blend_distance_m,
                         half_width_m=NOODLE_HALF_WIDTH_M,
+                        z_min=-1.0,
+                        z_max=2.5,
+                        max_dist_m=NOODLE_MAX_DIST_M,
+                        x_min_m=NOODLE_X_MIN_M,
+                    )
+                )
+
+                # Separate, WIDER corroborating query for the braking-
+                # governance decision only (see hazard_governance.py). Not
+                # used for the visualized/telemetry transition corridor
+                # above -- that stays at the normal width for consistency
+                # with prior runs/plots. This one exists purely to catch a
+                # pedestrian sitting just outside the normal corridor's
+                # narrow band, which is exactly what produced the
+                # 2026-09-18 false-clear regression.
+                d_min_transition_path_wide_m, _ = (
+                    lidar_min_distance_along_transition_corridor(
+                        lidar_actor,
+                        lidar_frame,
+                        route_points_world,
+                        loc,
+                        start_offset_m=signed_route_lateral_offset_m,
+                        target_offset_m=requested_lateral_offset_m,
+                        blend_distance_m=transition_blend_distance_m,
+                        half_width_m=NOODLE_HALF_WIDTH_M + GOVERNANCE_WIDTH_MARGIN_M,
                         z_min=-1.0,
                         z_max=2.5,
                         max_dist_m=NOODLE_MAX_DIST_M,
@@ -406,23 +435,27 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # -------------------------------------------------
     # Which corridor's LiDAR reading governs the braking hazard decision
     # -------------------------------------------------
-    # DISABLED as of 2026-09-18: hazard_governance.select_hazard_governing_distance()
-    # exists and is offline-tested, but letting it actually govern braking was
-    # tried live in this session's 12-run validation matrix and produced a
-    # dangerous false-clear: run right/early/steering_plus_braking recorded
-    # min_ped_distance=1.99m and min_TTC=0.37s with the vehicle NEVER braking
-    # (mode stayed CRUISE the entire run), because the swept-transition
-    # corridor's single sparse LiDAR reading happened to read "clear" the
-    # whole time the ego actually passed within ~2m of the pedestrian at a
-    # dangerously low TTC. A corridor-clear reading is a coarse geometric
-    # approximation, not a reliable enough signal on its own to suppress the
-    # original corridor's braking authority -- exactly the caution the Week 2
-    # plan already called for ("keep transition and candidate LiDAR corridors
-    # observational until independently validated"). Re-enabling this needs
-    # real hardening first (e.g. a wider/margin-padded corridor, agreement
-    # from an independent signal, or hysteresis across several ticks) and a
-    # validation matrix run showing it no longer produces close/low-TTC
-    # passes with zero braking -- see the worklog entry dated 2026-09-18.
+    # DISABLED AGAIN 2026-09-18 (second round). hazard_governance.
+    # select_hazard_governing_distance() was hardened with a wider
+    # corroborating corridor after a first attempt produced a dangerous
+    # false-clear (min_ped_distance=1.99m, min_TTC=0.37s, zero braking).
+    # That specific danger IS fixed -- a live re-run of the exact failing
+    # configuration, then the full 12-run matrix with its automated
+    # dangerous-near-miss detector, both came back clean (0/12 near misses).
+    #
+    # But the full matrix surfaced a DIFFERENT problem: hazard_governing_
+    # source itself flip-flops tick-to-tick between "original" and
+    # "transition" as the two corridors' readings cross each other's
+    # thresholds independently, causing visible drive_mode chatter
+    # (CRUISE <-> HAZARD_BRAKE <-> RECOVER repeatedly within ~2 seconds in
+    # one live run) and a real behavioral regression: `recovered` dropped
+    # from the safe baseline's 4/12 to 1/12, and one run's outcome degraded
+    # from slowed_avoided to full_stop. Passing the specific near-miss
+    # check does not mean this is safe to ship -- it has a different, real
+    # cost (control chatter, worse recovery completion) that needs its own
+    # fix (e.g. hysteresis/a minimum dwell time on the governing SOURCE
+    # itself, not just a wider corridor) before another attempt. See the
+    # worklog entry dated 2026-09-18 (second entry) for full numbers.
     hazard_governing_distance_m = d_min_ahead
     hazard_governing_source = "original"
 
@@ -772,6 +805,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "d_min_left_candidate_m": d_min_left_candidate_m,
         "d_min_right_candidate_m": d_min_right_candidate_m,
         "d_min_transition_path_m": d_min_transition_path_m,
+        "d_min_transition_path_wide_m": d_min_transition_path_wide_m,
         "commanded_path_drivability": commanded_path_drivability,
         "transition_path_drivability": transition_path_drivability,
         "hazard_governing_source": hazard_governing_source,  # "original" | "transition"

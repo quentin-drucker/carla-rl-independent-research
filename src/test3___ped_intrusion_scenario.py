@@ -46,6 +46,7 @@ from spawning import prepare_spawn_context, spawn_ego_vehicle
 from lidar_sensor import attach_lidar_sensor
 from loop_utils import get_latest_lidar_frame
 from lane_follow import lane_follow_step
+from hazard_governance import is_original_corridor_confirmed_clear
 from run_stats import init_run_stats, update_run_stats, print_run_summary
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
 from spectator import SpectatorController
@@ -110,6 +111,12 @@ NOODLE_X_MIN_M       = 2.5
 
 # Walker debug markers
 WALKER_DEBUG_LIFE_S  = 12.0
+
+# How far above the current hazard trigger distance the original-route LiDAR
+# corridor must read before a scripted recovery controller may treat the
+# route as clear. Mirrors lane_follow.py's own HAZARD_CLEAR_MARGIN_M so a
+# lateral_offset_fn's notion of "clear" matches the braking state machine's.
+RECOVERY_CLEAR_MARGIN_M = 1.0
 
 
 # =====================================================================
@@ -234,7 +241,16 @@ def _attach_collision_sensor(world, bp_lib, vehicle):
 # Main scenario runner
 # =====================================================================
 
-def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
+def run_scenario(
+    cfg: ScenarioConfig,
+    *,
+    plot_after: bool = False,
+    lateral_offset_fn=None,
+    monitor_lateral_corridors: bool = False,
+    tick_observer=None,
+    post_crossing_settle_s: float = 3.0,
+    transition_blend_distance_m: float = 20.0,
+) -> RunResult:
     """
     Run one full scenario with the given config. Returns a RunResult.
 
@@ -242,6 +258,25 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
         cfg:        ScenarioConfig instance specifying all scenario parameters.
         plot_after: Show telemetry plots after the run. Set True for interactive
                     single runs; leave False for automated sweeps.
+        lateral_offset_fn: Optional manual-test callback receiving
+                    (sim_time_s, triggered, trigger_time_s, hazard_clear_info)
+                    and returning a signed route-relative lateral offset in
+                    meters. hazard_clear_info is a dict with the previous
+                    tick's "pedestrian_behind_ego" and "original_corridor_clear"
+                    booleans plus the current "drive_mode" string, so a
+                    stateful callback can gate route recovery on hazard state
+                    rather than a fixed timer.
+        monitor_lateral_corridors: Measure original, commanded, left-candidate,
+                    and right-candidate LiDAR corridors. Monitoring does not
+                    change which corridor owns braking.
+        tick_observer: Optional manual-test callback receiving
+                    (sim_time_s, triggered, telemetry).
+        post_crossing_settle_s: Tail duration after the walker reaches its
+                    destination. Defaults to the historical fixed-run value.
+        transition_blend_distance_m: Forward distance over which the
+                    observational swept transition corridor blends from the
+                    ego's actual lateral offset to the commanded target
+                    offset. Only used when monitor_lateral_corridors=True.
     """
     TARGET_SPEED_MPS = cfg.target_mph * 0.44704
     total_ticks = int(cfg.sim_seconds / FIXED_DT)
@@ -419,6 +454,9 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
             "noodle_half_width_m": NOODLE_HALF_WIDTH_M,
             "noodle_max_dist_m": NOODLE_MAX_DIST_M,
             "noodle_x_min_m": NOODLE_X_MIN_M,
+            "monitor_lateral_corridors": monitor_lateral_corridors,
+            "candidate_lateral_offset_m": LANE_WIDTH_M * 0.5,
+            "transition_blend_distance_m": transition_blend_distance_m,
         }
 
         # ------------------------------------------------------------------
@@ -429,6 +467,7 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
 
         dist_m   = 0.0
         prev_loc = None
+        telemetry = None  # previous tick's telemetry; read by lateral_offset_fn below
 
         triggered              = False
         trigger_time_s         = None
@@ -548,6 +587,44 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
                 t=t
             )
 
+            # --- Hazard-clear context for a stateful lateral_offset_fn ---
+            # Computed from the PREVIOUS tick's telemetry/actor state (this
+            # tick's telemetry doesn't exist yet), which is a one-tick
+            # (0.02s) lag that does not matter for a recovery decision meant
+            # to hold for hundreds of milliseconds or more.
+            _pedestrian_behind_ego = False
+            if triggered and walker is not None:
+                _ego_tf3   = vehicle.get_transform()
+                _ego_fwd3  = _ego_tf3.get_forward_vector()
+                _ped_loc3  = walker.get_location()
+                _to_ped3_x = _ped_loc3.x - _ego_tf3.location.x
+                _to_ped3_y = _ped_loc3.y - _ego_tf3.location.y
+                _pedestrian_behind_ego = (
+                    _to_ped3_x * _ego_fwd3.x + _to_ped3_y * _ego_fwd3.y
+                ) < 0.0
+
+            _original_corridor_clear = False
+            if telemetry is not None:
+                _original_corridor_clear = is_original_corridor_confirmed_clear(
+                    telemetry.get("d_min_original_path_m"),
+                    telemetry.get("trigger_distance_m", 0.0),
+                    RECOVERY_CLEAR_MARGIN_M,
+                )
+
+            hazard_clear_info = {
+                "pedestrian_behind_ego": _pedestrian_behind_ego,
+                "original_corridor_clear": _original_corridor_clear,
+                "drive_mode": speed_state.get("drive_mode", "CRUISE"),
+            }
+
+            requested_lateral_offset_m = 0.0
+            if lateral_offset_fn is not None:
+                requested_lateral_offset_m = float(
+                    lateral_offset_fn(
+                        sim_time_s, triggered, trigger_time_s, hazard_clear_info
+                    )
+                )
+
             # --- Controller step ---
             telemetry = lane_follow_step(
                 world, vehicle,
@@ -564,6 +641,7 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
                 ramp_up_per_s=cfg.braking_ramp_up_per_s,
                 ramp_down_per_s=RAMP_DOWN_PER_S,
                 brake_profile=cfg.brake_profile,
+                lateral_offset_m=requested_lateral_offset_m,
             )
 
             # Belt-and-suspenders: once the ego has made a full emergency stop,
@@ -578,6 +656,9 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
             if telemetry is not None:
                 telemetry["jerk_mps3"]  = _jerk if triggered else float("nan")
                 telemetry["ttc_s"]      = _ttc_this_tick if _ttc_this_tick != float("inf") else float("nan")
+
+            if tick_observer is not None:
+                tick_observer(sim_time_s, triggered, telemetry)
 
             telemetry_buffer.append(tick=t, fixed_dt=FIXED_DT, telemetry=telemetry)
             update_run_stats(stats, telemetry=telemetry, vehicle=vehicle, FIXED_DT=FIXED_DT)
@@ -663,7 +744,7 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
             # earliest moment the scenario is fully resolved, regardless of speed
             # or encounter distance. The 3s tail gives the ego time to complete its
             # stop or resume, and gives collision/proximity checks time to fire.
-            POST_CROSSING_SETTLE_S = 3.0
+            POST_CROSSING_SETTLE_S = post_crossing_settle_s
             if crossing_state.get("done", False):
                 if _ped_done_time_s is None:
                     _ped_done_time_s = sim_time_s
@@ -684,6 +765,44 @@ def run_scenario(cfg: ScenarioConfig, *, plot_after: bool = False) -> RunResult:
                     z_offset=0.10,
                     hazard_active=_noodle_hazard,
                 )
+                if monitor_lateral_corridors and abs(requested_lateral_offset_m) > 0.05:
+                    commanded_pts = speed_state.get("commanded_noodle_points_world", None)
+                    commanded_distance = telemetry.get("d_min_commanded_path_m")
+                    draw_lane_noodle_corridor(
+                        world,
+                        commanded_pts,
+                        half_width_m=speed_state.get(
+                            "noodle_half_width_m", NOODLE_HALF_WIDTH_M
+                        ),
+                        life_time=FIXED_DT * 1.05,
+                        z_offset=0.18,
+                        hazard_active=commanded_distance is not None,
+                        center_color=carla.Color(20, 180, 70),
+                        normal_edge_color=carla.Color(20, 220, 100),
+                        hazard_edge_color=carla.Color(220, 20, 180),
+                        normal_tick_color=carla.Color(20, 160, 80),
+                        hazard_tick_color=carla.Color(180, 20, 150),
+                    )
+
+                    transition_pts = speed_state.get(
+                        "transition_corridor_points_world", None
+                    )
+                    transition_distance = telemetry.get("d_min_transition_path_m")
+                    draw_lane_noodle_corridor(
+                        world,
+                        transition_pts,
+                        half_width_m=speed_state.get(
+                            "noodle_half_width_m", NOODLE_HALF_WIDTH_M
+                        ),
+                        life_time=FIXED_DT * 1.05,
+                        z_offset=0.26,
+                        hazard_active=transition_distance is not None,
+                        center_color=carla.Color(200, 170, 20),
+                        normal_edge_color=carla.Color(230, 200, 20),
+                        hazard_edge_color=carla.Color(230, 120, 20),
+                        normal_tick_color=carla.Color(190, 160, 15),
+                        hazard_tick_color=carla.Color(190, 100, 15),
+                    )
 
             # --- Spectator ---
             spec_controller.tick(FIXED_DT)

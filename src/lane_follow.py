@@ -19,6 +19,9 @@ from lidar_utils import (
     lidar_min_distance_along_transition_corridor,
 )
 from map_drivability import check_corridor_drivability
+# hazard_governance.select_hazard_governing_distance() is intentionally NOT
+# wired in here -- see the DISABLED comment below where hazard_governing_*
+# is computed for why.
 
 
 # -------------------------------------------------
@@ -399,9 +402,33 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # trigger_distance = base_distance_m + speed_mps * headway_seconds
     trigger_distance_m = base_distance_m + speed_mps * headway_seconds
     # trigger_distance_m is the distance at which we want to start braking based on LiDAR hazard detection.
+
+    # -------------------------------------------------
+    # Which corridor's LiDAR reading governs the braking hazard decision
+    # -------------------------------------------------
+    # DISABLED as of 2026-09-18: hazard_governance.select_hazard_governing_distance()
+    # exists and is offline-tested, but letting it actually govern braking was
+    # tried live in this session's 12-run validation matrix and produced a
+    # dangerous false-clear: run right/early/steering_plus_braking recorded
+    # min_ped_distance=1.99m and min_TTC=0.37s with the vehicle NEVER braking
+    # (mode stayed CRUISE the entire run), because the swept-transition
+    # corridor's single sparse LiDAR reading happened to read "clear" the
+    # whole time the ego actually passed within ~2m of the pedestrian at a
+    # dangerously low TTC. A corridor-clear reading is a coarse geometric
+    # approximation, not a reliable enough signal on its own to suppress the
+    # original corridor's braking authority -- exactly the caution the Week 2
+    # plan already called for ("keep transition and candidate LiDAR corridors
+    # observational until independently validated"). Re-enabling this needs
+    # real hardening first (e.g. a wider/margin-padded corridor, agreement
+    # from an independent signal, or hysteresis across several ticks) and a
+    # validation matrix run showing it no longer produces close/low-TTC
+    # passes with zero braking -- see the worklog entry dated 2026-09-18.
+    hazard_governing_distance_m = d_min_ahead
+    hazard_governing_source = "original"
+
     hazard_active = (
-        d_min_ahead is not None and
-        d_min_ahead < trigger_distance_m
+        hazard_governing_distance_m is not None and
+        hazard_governing_distance_m < trigger_distance_m
     )
 
     # -------------------------------------------------
@@ -426,12 +453,14 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     #   exponential        -- brake_target = penetration^2      (gentle->urgent curve)
 
     brake_target = 0.0
-    if hazard_active and d_min_ahead is not None:
-        if panic_distance_m > 0.0 and d_min_ahead <= panic_distance_m:
+    if hazard_active and hazard_governing_distance_m is not None:
+        if panic_distance_m > 0.0 and hazard_governing_distance_m <= panic_distance_m:
             brake_target = 1.0
         else:
             denom = max(1e-3, (trigger_distance_m - max(0.0, panic_distance_m)))
-            penetration = clamp((trigger_distance_m - d_min_ahead) / denom, 0.0, 1.0)
+            penetration = clamp(
+                (trigger_distance_m - hazard_governing_distance_m) / denom, 0.0, 1.0
+            )
 
             if brake_profile == "step_constant":
                 brake_target = 1.0
@@ -506,21 +535,26 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # Decide if hazard is "really clear" (more conservative than hazard_active False).
     #
     # When in STOP_HOLD: require a POSITIVE confirmation that the obstacle is far
-    # away. d_min_ahead=None means the LiDAR returned nothing — this happens when
-    # a stopped pedestrian falls into a scan gap or their mesh settles at very close
-    # range. Treating None as "clear" here caused the ego to resume and drive into
-    # a stopped pedestrian. In STOP_HOLD, None = "unknown" not "safe".
+    # away. A None governing reading means the LiDAR returned nothing — this
+    # happens when a stopped pedestrian falls into a scan gap or their mesh
+    # settles at very close range. Treating None as "clear" here caused the
+    # ego to resume and drive into a stopped pedestrian. In STOP_HOLD,
+    # None = "unknown" not "safe".
     #
     # In all other modes: None still means nothing detected = clear (normal cruise).
+    #
+    # Uses hazard_governing_distance_m (not the raw original-corridor
+    # d_min_ahead) so hazard-clear detection and hazard-active detection
+    # always agree on which corridor is being judged this tick.
     if prev_mode == "STOP_HOLD":
         hazard_clear = (
-            d_min_ahead is not None and
-            d_min_ahead > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M)
+            hazard_governing_distance_m is not None and
+            hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M)
         )
     else:
         hazard_clear = (
-            (d_min_ahead is None) or
-            (d_min_ahead > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M))
+            (hazard_governing_distance_m is None) or
+            (hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M))
         )
 
     # Count consecutive clear ticks (for stability)
@@ -740,6 +774,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "d_min_transition_path_m": d_min_transition_path_m,
         "commanded_path_drivability": commanded_path_drivability,
         "transition_path_drivability": transition_path_drivability,
+        "hazard_governing_source": hazard_governing_source,  # "original" | "transition"
+        "hazard_governing_distance_m": hazard_governing_distance_m,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)
         "hazard_brake_cmd": 1.0 if hazard_active else 0.0, # 0 or 1 depending on whether hazard is active--no ramp for now.
         "brake_target": brake_target,       # what the ramp is trying to move toward [0..1]

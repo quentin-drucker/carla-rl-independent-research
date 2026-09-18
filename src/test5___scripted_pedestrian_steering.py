@@ -174,6 +174,7 @@ class CorridorConsoleObserver:
         self.final_actual_offset_m = float("nan")
         self.commanded_ever_non_drivable = False
         self.transition_ever_non_drivable = False
+        self.ever_governed_by_transition = False
 
     def __call__(self, sim_time_s, triggered, telemetry):
         if telemetry is None:
@@ -184,6 +185,9 @@ class CorridorConsoleObserver:
             self.maximum_actual_offset_m, abs(actual_offset_m)
         )
         self.final_actual_offset_m = actual_offset_m
+
+        if telemetry.get("hazard_governing_source") == "transition":
+            self.ever_governed_by_transition = True
 
         commanded_drivability = telemetry.get("commanded_path_drivability")
         transition_drivability = telemetry.get("transition_path_drivability")
@@ -208,7 +212,9 @@ class CorridorConsoleObserver:
                 f"transition={_format_distance(telemetry['d_min_transition_path_m'])}m "
                 f"left={_format_distance(telemetry['d_min_left_candidate_m'])}m "
                 f"right={_format_distance(telemetry['d_min_right_candidate_m'])}m | "
-                f"drivable(commanded={commanded_status}, transition={transition_status})"
+                f"drivable(commanded={commanded_status}, transition={transition_status}) | "
+                f"brake_governed_by={telemetry.get('hazard_governing_source')} "
+                f"mode={telemetry.get('drive_mode')}"
             )
         self._tick += 1
 
@@ -272,6 +278,10 @@ def main():
     print(
         "transition path ever map-flagged non_drivable: "
         f"{observer.transition_ever_non_drivable}"
+    )
+    print(
+        "braking hazard ever governed by the swept-transition path "
+        f"(not just the original lane): {observer.ever_governed_by_transition}"
     )
     print(f"recovery controller final state: {recovery_controller.state}")
     print(f"recovery completed (hazard/state-based): {recovery_controller.recovered}")

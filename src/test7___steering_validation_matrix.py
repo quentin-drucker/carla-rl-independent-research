@@ -62,16 +62,27 @@ MANEUVERS_BRAKE_HEADWAY_S = {
 }
 
 
+NEAR_MISS_TTC_S = 1.5  # below this, a close encounter with zero braking is flagged
+
+
 class ValidationObserver(CorridorConsoleObserver):
-    """Adds a coarse steering-aggressiveness signal on top of the existing
-    corridor/offset tracking. Full skid/ABS/tire-dynamics analysis is out of
-    scope this week (explicitly deferred in the Week 2 plan) -- this is only
-    a proxy so obviously extreme steering commands stand out in the table.
+    """Adds a coarse steering-aggressiveness signal, plus automated detection
+    of the exact failure mode found on 2026-09-18: a genuinely dangerous
+    close/low-TTC pass where braking never engaged at all. That regression
+    was only caught by a human reading console output line by line; this
+    makes it a first-class, automatically-flagged row in the summary table
+    so a future change to hazard governance can't silently reintroduce it.
+
+    Full skid/ABS/tire-dynamics analysis is out of scope this week
+    (explicitly deferred in the Week 2 plan) -- max_abs_steer_cmd is only a
+    coarse proxy so obviously extreme steering commands stand out.
     """
 
     def __init__(self, fixed_dt=0.02):
         super().__init__(fixed_dt=fixed_dt)
         self.max_abs_steer_cmd = 0.0
+        self.brake_ever_engaged = False
+        self.min_ttc_s_observed = float("inf")
 
     def __call__(self, sim_time_s, triggered, telemetry):
         super().__call__(sim_time_s, triggered, telemetry)
@@ -79,6 +90,11 @@ class ValidationObserver(CorridorConsoleObserver):
             self.max_abs_steer_cmd = max(
                 self.max_abs_steer_cmd, abs(telemetry.get("steer_cmd", 0.0))
             )
+            if telemetry.get("brake_cmd", 0.0) > 0.01:
+                self.brake_ever_engaged = True
+            ttc_s = telemetry.get("ttc_s")
+            if ttc_s is not None and ttc_s == ttc_s:  # exclude NaN
+                self.min_ttc_s_observed = min(self.min_ttc_s_observed, ttc_s)
 
 
 def _run_one(*, direction_name, offset_m, timing_name, trigger_ttc_s,
@@ -118,6 +134,14 @@ def _run_one(*, direction_name, offset_m, timing_name, trigger_ttc_s,
         post_crossing_settle_s=6.0,
     )
 
+    # The 2026-09-18 regression, made a first-class automated check: a close
+    # encounter (low TTC) where braking never engaged at all is dangerous
+    # regardless of whether it happened to avoid a logged collision this time.
+    dangerous_near_miss = (
+        not observer.brake_ever_engaged
+        and observer.min_ttc_s_observed < NEAR_MISS_TTC_S
+    )
+
     row = {
         "label": label,
         "direction": direction_name,
@@ -127,6 +151,9 @@ def _run_one(*, direction_name, offset_m, timing_name, trigger_ttc_s,
         "outcome": result.outcome,
         "brake_dominated": result.outcome == "full_stop",
         "min_ped_distance_m": result.min_ped_distance_m,
+        "min_ttc_s": observer.min_ttc_s_observed,
+        "brake_ever_engaged": observer.brake_ever_engaged,
+        "dangerous_near_miss": dangerous_near_miss,
         "max_abs_offset_m": observer.maximum_actual_offset_m,
         "final_offset_m": observer.final_actual_offset_m,
         "commanded_ever_non_drivable": observer.commanded_ever_non_drivable,
@@ -145,6 +172,11 @@ def _run_one(*, direction_name, offset_m, timing_name, trigger_ttc_s,
         f"max_offset={row['max_abs_offset_m']:.2f}m "
         f"recovered={row['recovered']} fallback_timeout={row['used_fallback_timeout']}"
     )
+    if dangerous_near_miss:
+        print(
+            f"!! DANGEROUS NEAR MISS [{label}]: min_ttc={row['min_ttc_s']:.2f}s "
+            f"with braking NEVER engaged (min_ped_dist={row['min_ped_distance_m']:.2f}m)"
+        )
     return row
 
 
@@ -154,16 +186,20 @@ def _print_summary_table(rows):
     print(f"{'#'*100}")
     header = (
         f"{'label':32} {'collision':9} {'outcome':15} {'brake_dom':9} "
-        f"{'min_ped_m':9} {'max_off_m':9} {'recovered':9} {'fallback':8} {'reapp':6}"
+        f"{'min_ped_m':9} {'min_ttc_s':9} {'max_off_m':9} {'recovered':9} "
+        f"{'fallback':8} {'reapp':6} {'NEAR_MISS':9}"
     )
     print(header)
     print("-" * len(header))
     for row in rows:
+        flag = " !!!!" if row["dangerous_near_miss"] else ""
         print(
             f"{row['label']:32} {str(row['collision']):9} {row['outcome']:15} "
             f"{str(row['brake_dominated']):9} {row['min_ped_distance_m']:9.2f} "
+            f"{row['min_ttc_s']:9.2f} "
             f"{row['max_abs_offset_m']:9.2f} {str(row['recovered']):9} "
-            f"{str(row['used_fallback_timeout']):8} {str(row['hazard_reappeared_during_recovery']):6}"
+            f"{str(row['used_fallback_timeout']):8} {str(row['hazard_reappeared_during_recovery']):6} "
+            f"{str(row['dangerous_near_miss']):9}{flag}"
         )
 
     any_non_drivable = [
@@ -175,13 +211,28 @@ def _print_summary_table(rows):
         + (", ".join(any_non_drivable) if any_non_drivable else "none")
     )
 
+    dangerous_labels = [row["label"] for row in rows if row["dangerous_near_miss"]]
+    if dangerous_labels:
+        print(
+            f"\n!!!! {len(dangerous_labels)} DANGEROUS NEAR MISS(ES) "
+            f"(TTC < {NEAR_MISS_TTC_S}s with zero braking): "
+            + ", ".join(dangerous_labels)
+        )
+    else:
+        print(
+            f"\nNo dangerous near misses detected "
+            f"(TTC < {NEAR_MISS_TTC_S}s with zero braking): none"
+        )
+
     n_collisions = sum(1 for row in rows if row["collision"])
     n_brake_dominated = sum(1 for row in rows if row["brake_dominated"])
     n_recovered = sum(1 for row in rows if row["recovered"])
     n_fallback = sum(1 for row in rows if row["used_fallback_timeout"])
+    n_dangerous = len(dangerous_labels)
     print(
         f"\nTotals: collisions={n_collisions}/12  brake_dominated={n_brake_dominated}/12  "
-        f"recovered={n_recovered}/12  used_fallback_timeout={n_fallback}/12"
+        f"recovered={n_recovered}/12  used_fallback_timeout={n_fallback}/12  "
+        f"dangerous_near_misses={n_dangerous}/12"
     )
     print(
         "\nReminder: this is a feasibility study of the scripted maneuver, hazard-based "

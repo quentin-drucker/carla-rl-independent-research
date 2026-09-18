@@ -1909,6 +1909,31 @@ Never delete them merely because they are not current; they are the only availab
 7. Would LiDAR + radar + RGB improve perception/generalization?
 8. Why did v2-2400k degrade, and what training instability or distribution issue mattered?
 
+## Open questions from Week 2 steering work (added 2026-09-18)
+
+**Should braking authority ever be allowed to follow a scripted evasive steering path
+instead of always braking for a hazard in the original lane, and if so, how?** Two
+independent hand-coded attempts on `experiment/preliminary-steering-test` (see PRs #3
+and #4) each failed a different way:
+
+1. A single-width LiDAR corridor check produced a dangerous false "clear" reading (2m
+   pedestrian clearance, 0.37s TTC, zero braking engaged in one live validation run).
+2. A hardened retry (an additional, wider corroborating corridor) fixed that specific
+   danger but introduced tick-to-tick flip-flopping between which corridor governs
+   braking, causing real drive-mode instability and a measurable quality regression
+   (successful route recovery dropped from 4/12 to 1/12 runs in the validation matrix,
+   one run's outcome got worse, jerk nearly doubled).
+
+Both attempts were reverted; the classical controller currently always brakes for the
+original, unswerved lane's own hazard reading, exactly as before this investigation.
+**Recommended framing for whoever picks this up (see the branch's own worklog for full
+numbers):** two different failure modes from two different hand-coded fixes suggests
+this is a genuinely hard design problem to solve as hand-tuned classical logic. Consider
+instead exposing the swept-path LiDAR clearance and map-drivability signals as
+*observations* to the future steering+braking SAC policy and letting it learn when to
+trust them, rather than continuing to hand-code an override rule in `lane_follow.py`.
+This is a design decision for the eventual expanded `carla_aeb_env.py`, not yet made.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

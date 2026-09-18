@@ -46,6 +46,7 @@ from spawning import prepare_spawn_context, spawn_ego_vehicle
 from lidar_sensor import attach_lidar_sensor
 from loop_utils import get_latest_lidar_frame
 from lane_follow import lane_follow_step
+from hazard_governance import is_original_corridor_confirmed_clear
 from run_stats import init_run_stats, update_run_stats, print_run_summary
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
 from spectator import SpectatorController
@@ -604,11 +605,10 @@ def run_scenario(
 
             _original_corridor_clear = False
             if telemetry is not None:
-                _d_min_original = telemetry.get("d_min_original_path_m")
-                _trigger_dist_prev = telemetry.get("trigger_distance_m", 0.0)
-                _original_corridor_clear = (
-                    _d_min_original is None
-                    or _d_min_original > (_trigger_dist_prev + RECOVERY_CLEAR_MARGIN_M)
+                _original_corridor_clear = is_original_corridor_confirmed_clear(
+                    telemetry.get("d_min_original_path_m"),
+                    telemetry.get("trigger_distance_m", 0.0),
+                    RECOVERY_CLEAR_MARGIN_M,
                 )
 
             hazard_clear_info = {

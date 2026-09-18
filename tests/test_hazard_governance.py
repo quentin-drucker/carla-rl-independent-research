@@ -6,7 +6,10 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from hazard_governance import select_hazard_governing_distance  # noqa: E402
+from hazard_governance import (  # noqa: E402
+    select_hazard_governing_distance,
+    is_original_corridor_confirmed_clear,
+)
 
 DRIVABLE = {"status": "drivable"}
 NON_DRIVABLE = {"status": "non_drivable"}
@@ -126,6 +129,32 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         )
         self.assertEqual(distance, 100.0)
         self.assertEqual(source, "transition")
+
+
+class IsOriginalCorridorConfirmedClearTests(unittest.TestCase):
+    def test_none_reading_is_not_clear(self):
+        # The core fix: unlike lane_follow_step()'s own hazard_clear check
+        # (which treats None as "nothing detected = clear" outside
+        # STOP_HOLD), this must always treat a missing LiDAR return as
+        # unknown -- never as confirmation of safety.
+        self.assertFalse(
+            is_original_corridor_confirmed_clear(None, 20.0, 1.0)
+        )
+
+    def test_confirmed_distant_reading_is_clear(self):
+        self.assertTrue(
+            is_original_corridor_confirmed_clear(30.0, 20.0, 1.0)
+        )
+
+    def test_reading_inside_margin_is_not_clear(self):
+        self.assertFalse(
+            is_original_corridor_confirmed_clear(20.5, 20.0, 1.0)
+        )
+
+    def test_reading_exactly_at_margin_boundary_is_not_clear(self):
+        self.assertFalse(
+            is_original_corridor_confirmed_clear(21.0, 20.0, 1.0)
+        )
 
 
 if __name__ == "__main__":

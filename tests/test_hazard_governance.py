@@ -21,6 +21,7 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=100.0,
+            d_min_transition_path_wide_m=100.0,
             transition_path_drivability=DRIVABLE,
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -33,6 +34,7 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=100.0,
+            d_min_transition_path_wide_m=100.0,
             transition_path_drivability=DRIVABLE,
             requested_lateral_offset_m=0.05,  # below the commit threshold
             trigger_distance_m=20.0,
@@ -41,10 +43,11 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         self.assertEqual(distance, 10.0)
         self.assertEqual(source, "original")
 
-    def test_shifts_to_transition_when_clear_and_drivable_and_committed(self):
+    def test_shifts_to_transition_when_both_corridors_clear_and_drivable(self):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,   # would be a hazard on its own
-            d_min_transition_path_m=100.0,  # transition path is far clearer
+            d_min_transition_path_m=100.0,  # normal corridor far clearer
+            d_min_transition_path_wide_m=100.0,  # wide corridor agrees
             transition_path_drivability=DRIVABLE,
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -53,12 +56,13 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         self.assertEqual(distance, 100.0)
         self.assertEqual(source, "transition")
 
-    def test_none_transition_reading_counts_as_clear(self):
-        # No LiDAR return on the transition corridor at all -- same
-        # "nothing detected = clear" convention the original corridor uses.
+    def test_none_readings_on_both_corridors_count_as_clear(self):
+        # No LiDAR return on either corridor at all -- same "nothing
+        # detected = clear" convention the original corridor uses.
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=None,
+            d_min_transition_path_wide_m=None,
             transition_path_drivability=DRIVABLE,
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -67,10 +71,47 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         self.assertIsNone(distance)
         self.assertEqual(source, "transition")
 
-    def test_falls_back_to_original_when_transition_lidar_not_clear(self):
+    def test_falls_back_to_original_when_normal_transition_not_clear(self):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=15.0,  # still inside trigger_distance_m
+            d_min_transition_path_wide_m=100.0,
+            transition_path_drivability=DRIVABLE,
+            requested_lateral_offset_m=1.5,
+            trigger_distance_m=20.0,
+            monitor_lateral_corridors=True,
+        )
+        self.assertEqual(distance, 10.0)
+        self.assertEqual(source, "original")
+
+    def test_reproduces_2026_09_18_regression_and_confirms_it_is_now_caught(self):
+        """This is the exact shape of the live regression found and reverted
+        on 2026-09-18: the normal-width transition corridor reads a
+        persistent false "clear" (None -- the pedestrian sat just outside
+        its narrow band) while the vehicle actually passed within ~2m of
+        the pedestrian. The wider corroborating corridor, sized to comfortably
+        cover that specific miss distance, must catch it and keep braking
+        authority on the original corridor.
+        """
+        distance, source = select_hazard_governing_distance(
+            d_min_original_path_m=10.0,
+            d_min_transition_path_m=None,  # the exact false-clear signal seen live
+            d_min_transition_path_wide_m=2.0,  # wider band picks up the pedestrian
+            transition_path_drivability=DRIVABLE,
+            requested_lateral_offset_m=1.48,  # matches the live regression's offset
+            trigger_distance_m=21.75,  # matches the live regression's trigger distance
+            monitor_lateral_corridors=True,
+        )
+        self.assertEqual(distance, 10.0)
+        self.assertEqual(source, "original")
+
+    def test_falls_back_to_original_when_wide_transition_not_clear(self):
+        # Normal corridor reads clear, but the wider corroborating corridor
+        # catches something the narrow one missed -- must not shift.
+        distance, source = select_hazard_governing_distance(
+            d_min_original_path_m=10.0,
+            d_min_transition_path_m=100.0,
+            d_min_transition_path_wide_m=15.0,  # inside trigger_distance_m
             transition_path_drivability=DRIVABLE,
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -83,6 +124,7 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=100.0,  # LiDAR-clear
+            d_min_transition_path_wide_m=100.0,
             transition_path_drivability=NON_DRIVABLE,  # but off-road
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -96,6 +138,7 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=100.0,
+            d_min_transition_path_wide_m=100.0,
             transition_path_drivability=UNKNOWN,
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -108,6 +151,7 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=100.0,
+            d_min_transition_path_wide_m=100.0,
             transition_path_drivability=None,
             requested_lateral_offset_m=1.5,
             trigger_distance_m=20.0,
@@ -122,6 +166,7 @@ class SelectHazardGoverningDistanceTests(unittest.TestCase):
         distance, source = select_hazard_governing_distance(
             d_min_original_path_m=10.0,
             d_min_transition_path_m=100.0,
+            d_min_transition_path_wide_m=100.0,
             transition_path_drivability=DRIVABLE,
             requested_lateral_offset_m=-1.5,
             trigger_distance_m=20.0,

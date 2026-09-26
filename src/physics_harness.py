@@ -1,0 +1,493 @@
+"""
+physics_harness.py
+
+Shared harness for the Week 3 CARLA vehicle physical-limits test suite
+(steering lock, rollover, braking, throttle/brake response) -- see
+Workstream 2 of plans/Week-3_2026-09-26_1052_physical-limits-trajectory-plan.md.
+
+Design goals per the plan:
+  - One shared harness/schema instead of four unrelated scripts.
+  - Direct low-level VehicleControl so route-following, hazard logic, and
+    SAC never confound a vehicle-model measurement.
+  - Pure calculation/classification functions are kept separate from live
+    CARLA calls so they can be offline-tested before any live run
+    (tests/test_physics_harness.py exercises exactly these functions).
+  - Evidence-status vocabulary throughout: "confirmed" / "not_observed_in_
+    tested_range" / "inconclusive" / "not_measurable" -- never a bare
+    True/False claim about a physical phenomenon CARLA may not expose.
+
+CARLA does not model production ABS (recorded in MASTER_CARLA_RESEARCH_
+SUMMARY.md and scenario_config.py already) -- this is a stated study
+limitation, not something this module re-derives or works around.
+"""
+
+import math
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import carla
+
+from math_utils import get_speed_mps, mps_to_mph  # noqa: F401  (mps_to_mph: convenience re-export)
+from trace_schema import TraceTick
+
+MPH_TO_MPS = 0.44704
+
+# CARLA 0.9.16's Python API does not expose a validated per-wheel slip-ratio
+# or wheel-lock signal. If a future CARLA version adds one, wire it in here
+# and update the manifest/trace docstrings -- do not infer lock/skid from
+# speed or steering angle alone.
+WHEEL_SLIP_SIGNAL_AVAILABLE = False
+
+# Two independent live findings (test9 braking, 2026-09-26; test10 steering
+# lock, 2026-09-26) found reproducible, physically implausible single-tick
+# discontinuities in this CARLA vehicle model below roughly 5 m/s residual
+# speed: test9 found a deceleration transient (~-27 m/s^2, ~9x a real
+# vehicle's sustained braking capability) independent of commanded brake
+# level; test10 found a velocity-DIRECTION discontinuity after a hard
+# full-lock turn (speed 6.38 -> 2.02 m/s in one 0.02s tick, implying
+# -218 m/s^2 -- over 20g, not physically possible) that corrupts any
+# velocity-heading-based metric (body slip angle) computed from it. Treat
+# this as a general "low-speed artifact zone" for this vehicle model and
+# exclude it from any derivative/heading-based metric by default, rather
+# than re-discovering it per test family.
+LOW_SPEED_ARTIFACT_THRESHOLD_MPS = 5.0
+
+
+# ----------------------------------------------------------------------
+# Pure calculation helpers (no CARLA object access -- offline-testable)
+# ----------------------------------------------------------------------
+
+def compute_derived_kinematics(
+    *,
+    prev_speed_mps: Optional[float],
+    curr_speed_mps: float,
+    prev_yaw_deg: Optional[float],
+    curr_yaw_deg: float,
+    dt_s: float,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Finite-difference longitudinal accel (m/s^2) and yaw rate (deg/s).
+
+    Returns (None, None) if there is no previous sample (first tick of a
+    run) or if dt_s is non-positive (would divide by zero / be meaningless).
+    Yaw wrap-around (e.g. 179 -> -179 deg) is unwrapped to the shortest
+    signed turn before differencing.
+    """
+    if prev_speed_mps is None or prev_yaw_deg is None or dt_s <= 0:
+        return None, None
+
+    accel_mps2 = (curr_speed_mps - prev_speed_mps) / dt_s
+
+    yaw_delta_deg = curr_yaw_deg - prev_yaw_deg
+    # Unwrap to [-180, 180] so a wrap-around doesn't look like a huge spike.
+    while yaw_delta_deg > 180.0:
+        yaw_delta_deg -= 360.0
+    while yaw_delta_deg < -180.0:
+        yaw_delta_deg += 360.0
+    yaw_rate_dps = yaw_delta_deg / dt_s
+
+    return accel_mps2, yaw_rate_dps
+
+
+def compute_lateral_displacement_m(
+    *,
+    start_x_m: float,
+    start_y_m: float,
+    start_yaw_deg: float,
+    curr_x_m: float,
+    curr_y_m: float,
+) -> float:
+    """Signed perpendicular distance of (curr_x, curr_y) from the straight
+    reference line through (start_x, start_y) at heading start_yaw_deg.
+
+    Positive = to the right of the original heading (consistent with the
+    route-right-positive convention already used in route_lateral_control.py
+    for scenario runs). Used by the physical-limits tests, which have no
+    planned route to measure against -- the initial heading line is the
+    reference instead.
+    """
+    yaw_rad = math.radians(start_yaw_deg)
+    forward_x, forward_y = math.cos(yaw_rad), math.sin(yaw_rad)
+    # Right-hand perpendicular of (forward_x, forward_y) in a left-handed,
+    # z-up world (CARLA convention) is (-forward_y, forward_x) rotated to
+    # match route_lateral_control's existing "route-right" sign convention.
+    right_x, right_y = -forward_y, forward_x
+
+    dx = curr_x_m - start_x_m
+    dy = curr_y_m - start_y_m
+    return dx * right_x + dy * right_y
+
+
+def compute_body_slip_angle_deg(
+    *, vel_x_mps: float, vel_y_mps: float, yaw_deg: float,
+    min_speed_mps: float = LOW_SPEED_ARTIFACT_THRESHOLD_MPS,
+) -> Optional[float]:
+    """Whole-body sideslip angle: the angle between the vehicle's velocity
+    vector and its heading (yaw), in degrees, signed and wrapped to
+    [-180, 180].
+
+    This is a standard vehicle-dynamics quantity computable purely from
+    position/velocity and yaw -- it does NOT require or imply any per-wheel
+    slip/lock signal, and this module does not claim it as evidence of tire
+    skid. It is exposed as the plan's "observable loss-of-control proxy":
+    a large body slip angle means the car is travelling substantially
+    sideways relative to where it is pointed, which is measurable and
+    reportable without a skid/wheel-lock label.
+
+    Returns None below min_speed_mps (default LOW_SPEED_ARTIFACT_THRESHOLD_MPS)
+    -- a live steering-lock run (2026-09-26, test10) found a physically
+    implausible single-tick velocity-direction discontinuity (speed
+    6.38 -> 2.02 m/s in one 0.02s tick, implying over 20g of deceleration)
+    in exactly this low-speed regime, which corrupted this angle to >150 deg.
+    A bogus large angle from that artifact must not be reported as if it
+    were a real measurement of vehicle motion.
+    """
+    speed_mps = math.sqrt(vel_x_mps * vel_x_mps + vel_y_mps * vel_y_mps)
+    if speed_mps < min_speed_mps:
+        return None
+    velocity_heading_deg = math.degrees(math.atan2(vel_y_mps, vel_x_mps))
+    slip_deg = velocity_heading_deg - yaw_deg
+    while slip_deg > 180.0:
+        slip_deg -= 360.0
+    while slip_deg < -180.0:
+        slip_deg += 360.0
+    return slip_deg
+
+
+def compute_turn_radius_m(
+    *, speed_mps: float, yaw_rate_dps: Optional[float], min_yaw_rate_dps: float = 0.5
+) -> Optional[float]:
+    """Instantaneous turn radius from speed and yaw rate (radius = v / omega).
+
+    Returns None when yaw_rate_dps is None or near zero (not meaningfully
+    turning) -- a near-zero yaw rate would otherwise blow up to a
+    meaningless enormous radius rather than reporting "not turning".
+    """
+    if yaw_rate_dps is None or abs(yaw_rate_dps) < min_yaw_rate_dps:
+        return None
+    yaw_rate_rad_s = math.radians(yaw_rate_dps)
+    return speed_mps / abs(yaw_rate_rad_s)
+
+
+def compute_lateral_accel_from_yaw_rate(
+    *, speed_mps: float, yaw_rate_dps: Optional[float]
+) -> Optional[float]:
+    """Centripetal lateral acceleration approximation: a_lat = v * omega.
+
+    This is the standard planar kinematic approximation (ignores body slip
+    angle rate), adequate as a coarse proxy per the plan -- it is not a
+    claim about actual tire lateral force.
+    """
+    if yaw_rate_dps is None:
+        return None
+    return speed_mps * math.radians(yaw_rate_dps)
+
+
+def classify_stop_outcome(
+    *, final_speed_mps: float, stopped_threshold_mps: float = 0.15
+) -> str:
+    """"stopped" / "not_stopped" -- a plain, predeclared threshold check.
+
+    Deliberately does not attempt "smooth stop" vs "abrupt stop" labels
+    here; that is a jerk-based judgment made by the caller from the full
+    trace, not this single-value classifier.
+    """
+    return "stopped" if final_speed_mps < stopped_threshold_mps else "not_stopped"
+
+
+@dataclass
+class RolloverClassification:
+    rollover_detected: bool
+    evidence_status: str
+    # "confirmed" | "not_observed_in_tested_range"
+    max_abs_roll_deg: float
+    threshold_deg: float
+
+
+def classify_rollover(
+    *, max_abs_roll_deg: float, threshold_deg: float = 60.0
+) -> RolloverClassification:
+    """Conservative rollover classification from a predeclared roll-angle
+    threshold, not from visual appearance of the run.
+
+    A run that never crosses the threshold is reported as
+    "not_observed_in_tested_range" for the tested conditions, not as proof
+    rollover is impossible under different conditions.
+    """
+    detected = max_abs_roll_deg >= threshold_deg
+    return RolloverClassification(
+        rollover_detected=detected,
+        evidence_status="confirmed" if detected else "not_observed_in_tested_range",
+        max_abs_roll_deg=max_abs_roll_deg,
+        threshold_deg=threshold_deg,
+    )
+
+
+def detect_sustained_near_stop_onset_s(
+    *, speed_time_pairs, threshold_mps: float = 0.5
+) -> Optional[float]:
+    """Returns the sim_time_s of the first tick after which speed stays
+    below threshold_mps for the REST of the run, or None if the vehicle
+    never sustainedly drops below it.
+
+    Used to detect a maneuver that scrubbed off essentially all speed well
+    before its nominal duration ended (e.g. a live steering-lock run,
+    2026-09-26, found several full-lock cases came to a near-stop within
+    ~1.2-1.5s of a 5s maneuver via cornering drag alone) -- a "steady
+    state" window measured against the nominal duration would otherwise
+    silently summarize a near-stationary vehicle as if it were still
+    turning. Requires the LAST sample to also be below threshold (a
+    transient dip that recovers does not count), avoiding a false trigger
+    from a momentary noisy low reading.
+    """
+    pairs = list(speed_time_pairs)
+    if not pairs or pairs[-1][0] >= threshold_mps:
+        return None
+    for i in range(len(pairs) - 1, -1, -1):
+        speed, sim_time = pairs[i]
+        if speed >= threshold_mps:
+            return pairs[i + 1][1] if i + 1 < len(pairs) else None
+    return pairs[0][1]  # every sample was already below threshold
+
+
+@dataclass
+class DecelerationSummary:
+    normal_speed_peak_decel_mps2: Optional[float]
+    normal_speed_mean_decel_mps2: Optional[float]
+    low_speed_transient_peak_decel_mps2: Optional[float]
+    threshold_mps: float
+
+
+def summarize_deceleration(
+    *, speed_accel_pairs, threshold_mps: float = 5.0
+) -> DecelerationSummary:
+    """Splits accel samples into a "normal-speed" regime (speed >=
+    threshold_mps) and a "low-speed" regime (speed < threshold_mps) before
+    computing peak/mean deceleration.
+
+    Exists because a live braking test (2026-09-26, test9) found a sharp,
+    reproducible deceleration transient below ~5 m/s that landed near the
+    same ~-27 m/s^2 value across commanded brake levels 0.25-1.00, while the
+    normal-speed peak scaled with brake level as expected (-6.1, -6.8,
+    -22.3, -27.1 m/s^2 for 0.25/0.50/0.75/1.00). A single un-split peak/mean
+    metric would silently mix the two regimes and hide that partial brake
+    commands do not scale linearly all the way to a stop. This is reported
+    as an observed CARLA vehicle-model characteristic, not a skid/wheel-lock
+    claim -- no validated slip signal supports that label.
+
+    speed_accel_pairs: iterable of (speed_mps, accel_mps2) tuples; accel_mps2
+    may be None (e.g. the first tick of a run) and is skipped.
+    """
+    normal = [a for s, a in speed_accel_pairs if a is not None and s >= threshold_mps]
+    low = [a for s, a in speed_accel_pairs if a is not None and s < threshold_mps]
+    return DecelerationSummary(
+        normal_speed_peak_decel_mps2=min(normal) if normal else None,
+        normal_speed_mean_decel_mps2=(sum(normal) / len(normal)) if normal else None,
+        low_speed_transient_peak_decel_mps2=min(low) if low else None,
+        threshold_mps=threshold_mps,
+    )
+
+
+def classify_throttle_brake_symmetry(
+    *, accel_response_mps2: float, decel_response_mps2: float, tolerance_ratio: float = 0.15
+) -> str:
+    """Compares magnitude of an acceleration response against a matched-
+    magnitude deceleration response for the same commanded [0,1] value.
+
+    Returns "symmetric" if the two magnitudes are within tolerance_ratio of
+    the larger one, otherwise "asymmetric". Does not claim which direction
+    is "better" -- only whether equal numeric commands produced comparable
+    physical magnitudes, per the plan's RL-design framing.
+    """
+    a = abs(accel_response_mps2)
+    d = abs(decel_response_mps2)
+    if a == 0.0 and d == 0.0:
+        return "inconclusive"
+    larger = max(a, d)
+    diff = abs(a - d)
+    return "symmetric" if (diff / larger) <= tolerance_ratio else "asymmetric"
+
+
+def get_wheel_steer_angle_deg(vehicle) -> Optional[float]:
+    """Front-left wheel steer angle in degrees, or None if the API call
+    fails. Wrapped in try/except because this is a live-actor call whose
+    availability should never crash an otherwise-valid tick capture --
+    callers must treat None as "not measurable this tick", not as zero.
+
+    NOTE: FL alone is direction-biased under Ackermann steering geometry --
+    see get_front_wheel_steer_angles_deg() for a direction-fair pair.
+    """
+    try:
+        return vehicle.get_wheel_steer_angle(carla.VehicleWheelLocation.FL_Wheel)
+    except Exception:
+        return None
+
+
+def get_front_wheel_steer_angles_deg(vehicle) -> Tuple[Optional[float], Optional[float]]:
+    """(front_left, front_right) steer angles in degrees, each None if its
+    API call fails independently.
+
+    A live steering-lock run (2026-09-26, test10) found FL and FR reading
+    very different magnitudes at full lock in opposite turn directions
+    (e.g. ~46.7 deg one way, ~68.8 deg the other) despite every other
+    measured quantity (yaw rate, turn radius, slip angle, speed loss) being
+    symmetric between directions. This is Ackermann steering geometry, not
+    an asymmetric vehicle response: the inner front wheel of a turn steers
+    further than the outer one. A single "achieved wheel angle" summary
+    should use max(|FL|, |FR|) (the inner wheel), not FL alone, to avoid
+    manufacturing a false left/right asymmetry finding.
+    """
+    fl = get_wheel_steer_angle_deg(vehicle)
+    try:
+        fr = vehicle.get_wheel_steer_angle(carla.VehicleWheelLocation.FR_Wheel)
+    except Exception:
+        fr = None
+    return fl, fr
+
+
+def inner_wheel_steer_angle_deg(
+    *, front_left_deg: Optional[float], front_right_deg: Optional[float]
+) -> Optional[float]:
+    """Signed steer angle of whichever front wheel has the larger magnitude
+    (the geometrically inner wheel of the current turn), or None if both
+    inputs are None. See get_front_wheel_steer_angles_deg() for why FL alone
+    is not a fair direction-independent summary.
+    """
+    candidates = [a for a in (front_left_deg, front_right_deg) if a is not None]
+    if not candidates:
+        return None
+    return max(candidates, key=abs)
+
+
+def apply_uniform_tire_friction(vehicle, friction: Optional[float]) -> None:
+    """Applies one friction coefficient to all four wheels, or leaves
+    CARLA's default physics untouched if friction is None. Mirrors
+    brake_test.py's existing _apply_friction() so both the harness and the
+    older diagnostic report the same physical configuration.
+    """
+    if friction is None:
+        return
+    phys = vehicle.get_physics_control()
+    wheels = phys.wheels
+    for w in wheels:
+        w.tire_friction = friction
+    phys.wheels = wheels
+    vehicle.apply_physics_control(phys)
+
+
+# ----------------------------------------------------------------------
+# Live-CARLA helpers (thin -- not offline-testable, kept minimal)
+# ----------------------------------------------------------------------
+
+def read_physics_settings(world) -> dict:
+    """Reads the world's current substepping configuration for manifest
+    provenance. Returns raw settings values, no interpretation.
+    """
+    settings = world.get_settings()
+    return {
+        "fixed_delta_seconds": settings.fixed_delta_seconds,
+        "substepping_enabled": settings.substepping,
+        "max_substep_delta_time": settings.max_substep_delta_time,
+        "max_substeps": settings.max_substeps,
+    }
+
+
+def capture_tick_from_actor(
+    *,
+    vehicle,
+    tick_index: int,
+    sim_time_s: float,
+    requested_control,
+    prev_speed_mps: Optional[float],
+    prev_yaw_deg: Optional[float],
+    dt_s: float,
+    start_pose: Optional[Tuple[float, float, float]] = None,
+) -> TraceTick:
+    """Builds one TraceTick from a live CARLA vehicle actor.
+
+    requested_control: the carla.VehicleControl this tick's caller applied
+    (used for the requested_* fields; applied_* is read back separately via
+    vehicle.get_control(), since CARLA can clamp/modify it internally).
+    start_pose: (x, y, yaw_deg) of the first tick, used to compute
+    lateral_displacement_m against the vehicle's own initial heading. None
+    skips lateral-displacement computation (leaves it None on the tick).
+    """
+    transform = vehicle.get_transform()
+    loc = transform.location
+    rot = transform.rotation
+    speed_mps = get_speed_mps(vehicle)
+    velocity = vehicle.get_velocity()
+    body_slip_angle_deg = compute_body_slip_angle_deg(
+        vel_x_mps=velocity.x, vel_y_mps=velocity.y, yaw_deg=rot.yaw
+    )
+
+    accel_mps2, yaw_rate_dps = compute_derived_kinematics(
+        prev_speed_mps=prev_speed_mps,
+        curr_speed_mps=speed_mps,
+        prev_yaw_deg=prev_yaw_deg,
+        curr_yaw_deg=rot.yaw,
+        dt_s=dt_s,
+    )
+
+    lateral_displacement_m = None
+    if start_pose is not None:
+        start_x, start_y, start_yaw = start_pose
+        lateral_displacement_m = compute_lateral_displacement_m(
+            start_x_m=start_x,
+            start_y_m=start_y,
+            start_yaw_deg=start_yaw,
+            curr_x_m=loc.x,
+            curr_y_m=loc.y,
+        )
+
+    applied = vehicle.get_control()
+    fl_wheel_angle_deg, fr_wheel_angle_deg = get_front_wheel_steer_angles_deg(vehicle)
+
+    return TraceTick(
+        tick_index=tick_index,
+        sim_time_s=sim_time_s,
+        pos_x_m=loc.x,
+        pos_y_m=loc.y,
+        pos_z_m=loc.z,
+        yaw_deg=rot.yaw,
+        pitch_deg=rot.pitch,
+        roll_deg=rot.roll,
+        speed_mps=speed_mps,
+        vel_x_mps=velocity.x,
+        vel_y_mps=velocity.y,
+        accel_mps2=accel_mps2,
+        yaw_rate_dps=yaw_rate_dps,
+        body_slip_angle_deg=body_slip_angle_deg,
+        requested_throttle=requested_control.throttle,
+        requested_brake=requested_control.brake,
+        requested_steer=requested_control.steer,
+        applied_throttle=applied.throttle,
+        applied_brake=applied.brake,
+        applied_steer=applied.steer,
+        lateral_displacement_m=lateral_displacement_m,
+        front_wheel_steer_angle_deg=fl_wheel_angle_deg,
+        front_right_wheel_steer_angle_deg=fr_wheel_angle_deg,
+    )
+
+
+def accelerate_to_matched_entry_speed(
+    *,
+    world,
+    vehicle,
+    target_mps: float,
+    fixed_dt: float,
+    max_ticks: int = 2000,
+    speed_fraction: float = 0.97,
+) -> float:
+    """Accelerates under full throttle until reaching speed_fraction of
+    target_mps, then returns the ACTUAL speed achieved at that moment (not
+    target_mps) -- per the plan's "use matched actual entry speeds rather
+    than requested speeds." Callers should log the returned value as the
+    test's true entry speed, not the requested target.
+    """
+    vehicle.apply_control(carla.VehicleControl(throttle=1.0, brake=0.0))
+    for _ in range(max_ticks):
+        world.tick()
+        current = get_speed_mps(vehicle)
+        if current >= target_mps * speed_fraction:
+            return current
+    return get_speed_mps(vehicle)

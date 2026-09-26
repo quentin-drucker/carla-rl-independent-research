@@ -10,6 +10,10 @@ src/checkpoints/
 src/runs/*/run_*/
 previous_src_tests/test3_rare_hazard_scenario/runs/*/run_*/
 
+# Raw per-tick physical-limits traces/manifests (Week 3 physics harness) --
+# keep code, compact summaries, and findings in worklogs/PRs, not raw traces.
+src/runs/physics/
+
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 

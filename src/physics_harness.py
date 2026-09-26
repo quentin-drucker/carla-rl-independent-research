@@ -287,6 +287,16 @@ def summarize_deceleration(
     )
 
 
+def classify_upright_recovery(*, final_abs_roll_deg: float, upright_threshold_deg: float = 15.0) -> str:
+    """"upright" / "not_upright" -- a plain, predeclared threshold check on
+    the vehicle's roll angle after a maneuver has ended and it has settled.
+    Deliberately coarse (matches the plan's "whether the vehicle recovers
+    upright" requirement) -- does not attempt a "how close to tipping"
+    gradation.
+    """
+    return "upright" if final_abs_roll_deg < upright_threshold_deg else "not_upright"
+
+
 def classify_throttle_brake_symmetry(
     *, accel_response_mps2: float, decel_response_mps2: float, tolerance_ratio: float = 0.15
 ) -> str:
@@ -491,3 +501,23 @@ def accelerate_to_matched_entry_speed(
         if current >= target_mps * speed_fraction:
             return current
     return get_speed_mps(vehicle)
+
+
+def attach_collision_sensor(world, bp_lib, vehicle) -> Tuple[object, dict]:
+    """Attaches a collision sensor to vehicle. Returns (sensor_actor,
+    flag_dict); flag_dict["hit"] becomes True if any collision fires.
+    Mirrors test3___ped_intrusion_scenario.py's `_attach_collision_sensor`
+    so both use the same pattern -- kept here as a shared harness utility
+    since the rollover substudy needs it and future substudies may too.
+    """
+    collision_bp = bp_lib.find("sensor.other.collision")
+    sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=vehicle)
+    flag = {"hit": False, "other_actor": None}
+
+    def _on_collision(event):
+        other = event.other_actor
+        flag["hit"] = True
+        flag["other_actor"] = other.type_id if other else "unknown"
+
+    sensor.listen(_on_collision)
+    return sensor, flag

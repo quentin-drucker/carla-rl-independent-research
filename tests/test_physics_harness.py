@@ -14,6 +14,7 @@ from physics_harness import (  # noqa: E402
     compute_lateral_accel_from_yaw_rate,
     classify_stop_outcome,
     classify_rollover,
+    classify_upright_recovery,
     classify_throttle_brake_symmetry,
     get_wheel_steer_angle_deg,
     get_front_wheel_steer_angles_deg,
@@ -113,6 +114,15 @@ class ClassifyRolloverTests(unittest.TestCase):
         result = classify_rollover(max_abs_roll_deg=95.0, threshold_deg=60.0)
         self.assertTrue(result.rollover_detected)
         self.assertEqual(result.evidence_status, "confirmed")
+
+
+class ClassifyUprightRecoveryTests(unittest.TestCase):
+    def test_below_threshold_is_upright(self):
+        self.assertEqual(classify_upright_recovery(final_abs_roll_deg=2.0), "upright")
+
+    def test_at_or_above_threshold_is_not_upright(self):
+        self.assertEqual(classify_upright_recovery(final_abs_roll_deg=15.0), "not_upright")
+        self.assertEqual(classify_upright_recovery(final_abs_roll_deg=90.0), "not_upright")
 
 
 class ClassifyThrottleBrakeSymmetryTests(unittest.TestCase):

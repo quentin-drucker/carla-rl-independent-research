@@ -19,6 +19,7 @@ from lidar_utils import (
     lidar_min_distance_along_transition_corridor,
 )
 from map_drivability import check_corridor_drivability
+from vehicle_occupancy import check_corridor_occupancy, gather_occupancy_actors
 from hazard_governance import GOVERNANCE_WIDTH_MARGIN_M
 # hazard_governance.select_hazard_governing_distance() is intentionally NOT
 # wired in here -- see the DISABLED comment below where hazard_governing_*
@@ -265,6 +266,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     transition_corridor_points_world = None
     commanded_path_drivability = None
     transition_path_drivability = None
+    commanded_path_occupancy = None
+    transition_path_occupancy = None
 
     if NOODLE_ENABLE:
         lidar_actor = speed_state.get("lidar_actor", None)
@@ -374,6 +377,33 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                     )
                     transition_path_drivability = check_corridor_drivability(
                         carla_map, transition_corridor_points_world
+                    )
+
+                # -------------------------------------------------
+                # Dynamic vehicle-occupancy check (independent of LiDAR
+                # clearance and map drivability)
+                # -------------------------------------------------
+                # Map drivability answers "is this corridor on a driving
+                # lane at all?"; LiDAR clearance answers "is any material
+                # return sitting in this corridor right now?" -- neither
+                # answers "is another VEHICLE currently occupying this
+                # corridor?" specifically. This is the "check whether a car
+                # is in its way to swerve" gap the advisor raised
+                # (2026-09-08) and Quentin flagged (2026-09-18) as the one
+                # traffic-related addition promoted into Week 3. Kept
+                # observational this week, same as the drivability check
+                # above: it does not gate braking or steering.
+                if speed_state.get("monitor_vehicle_occupancy", True):
+                    occupancy_actors = gather_occupancy_actors(world, vehicle)
+                    commanded_path_occupancy = check_corridor_occupancy(
+                        corridor_points_world.get(requested_lateral_offset_m),
+                        occupancy_actors,
+                        lateral_half_width_m=NOODLE_HALF_WIDTH_M,
+                    )
+                    transition_path_occupancy = check_corridor_occupancy(
+                        transition_corridor_points_world,
+                        occupancy_actors,
+                        lateral_half_width_m=NOODLE_HALF_WIDTH_M,
                     )
             else:
                 d_min_ahead, noodle_points_world = lidar_min_distance_along_route_noodle(
@@ -808,6 +838,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "d_min_transition_path_wide_m": d_min_transition_path_wide_m,
         "commanded_path_drivability": commanded_path_drivability,
         "transition_path_drivability": transition_path_drivability,
+        "commanded_path_occupancy": commanded_path_occupancy,
+        "transition_path_occupancy": transition_path_occupancy,
         "hazard_governing_source": hazard_governing_source,  # "original" | "transition"
         "hazard_governing_distance_m": hazard_governing_distance_m,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)

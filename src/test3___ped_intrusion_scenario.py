@@ -25,6 +25,8 @@ import time
 import os
 import sys
 
+from route_lateral_control import offset_point_xy
+
 # -------------------------------------------------
 # CARLA PythonAPI / agents path setup
 # -------------------------------------------------
@@ -250,6 +252,7 @@ def run_scenario(
     tick_observer=None,
     post_crossing_settle_s: float = 3.0,
     transition_blend_distance_m: float = 20.0,
+    other_vehicle_offset_m: float = None,
 ) -> RunResult:
     """
     Run one full scenario with the given config. Returns a RunResult.
@@ -277,6 +280,12 @@ def run_scenario(
                     observational swept transition corridor blends from the
                     ego's actual lateral offset to the commanded target
                     offset. Only used when monitor_lateral_corridors=True.
+        other_vehicle_offset_m: If not None, spawns one stationary "other
+                    vehicle" actor at the encounter waypoint, shifted this
+                    many meters route-right (negative = route-left) of the
+                    route centerline -- for Week 3 Workstream 1.2 candidate-
+                    path occupancy validation (test13). None (default)
+                    spawns no other vehicle, matching every existing caller.
     """
     TARGET_SPEED_MPS = cfg.target_mph * 0.44704
     total_ticks = int(cfg.sim_seconds / FIXED_DT)
@@ -341,6 +350,8 @@ def run_scenario(
     lidar           = None
     collision_sensor = None
     walker          = None
+    other_vehicle   = None
+    stats           = None
 
     try:
         # ------------------------------------------------------------------
@@ -414,6 +425,41 @@ def run_scenario(
         walker = spawn_scripted_walker(world, start_tf=walker_tf)
         if walker is None:
             raise RuntimeError("Failed to spawn scripted walker.")
+
+        if other_vehicle_offset_m is not None:
+            # Placed a bit FORWARD of the encounter waypoint (not exactly at
+            # it) so the blocker never spawn-collides with the pedestrian --
+            # the walker's own start position is computed from the same
+            # enc_loc a few lines up, and a "left" candidate offset can
+            # otherwise coincide almost exactly with a left-side walker
+            # start (found live, 2026-09-26: CARLA rejected the overlapping
+            # spawn with try_spawn_actor returning None). Still well within
+            # the candidate/transition corridor region the ego traverses.
+            other_vehicle_wp = _get_route_waypoint_at_distance(
+                route_wps, cfg.encounter_distance_m + 6.0
+            )
+            other_anchor_loc = other_vehicle_wp.transform.location
+            other_x, other_y = offset_point_xy(route_points_world, other_anchor_loc, other_vehicle_offset_m)
+            other_tf = carla.Transform(
+                carla.Location(x=other_x, y=other_y, z=other_anchor_loc.z + 0.3),
+                other_vehicle_wp.transform.rotation,
+            )
+            other_bp = bp_lib.find("vehicle.tesla.model3")
+            other_vehicle = world.try_spawn_actor(other_bp, other_tf)
+            if other_vehicle is None:
+                raise RuntimeError(
+                    f"Failed to spawn other-vehicle actor at offset={other_vehicle_offset_m:+.2f}m "
+                    "(spawn point likely overlapping ego or walker)."
+                )
+            other_vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0, hand_brake=True))
+            world.debug.draw_point(
+                other_tf.location + carla.Location(z=1.0),
+                size=0.25, color=carla.Color(255, 165, 0), life_time=30.0,
+            )
+            world.debug.draw_string(
+                other_tf.location + carla.Location(z=1.8), "OTHER_VEHICLE",
+                color=carla.Color(255, 165, 0), life_time=30.0,
+            )
 
         world.debug.draw_point(walker_start_loc + carla.Location(z=0.9),
                                size=0.18, color=carla.Color(255, 0, 0), life_time=30.0)
@@ -818,13 +864,16 @@ def run_scenario(
     finally:
         spec_controller.close()
 
-        print_run_summary(stats)
+        if stats is not None:
+            print_run_summary(stats)
 
         # Destroy actors
         if collision_sensor is not None:
             collision_sensor.stop()     # pyright: ignore
             collision_sensor.destroy()
         destroy_scripted_walker(walker)
+        if other_vehicle is not None:
+            other_vehicle.destroy()
         if lidar is not None:
             lidar.destroy()
         if vehicle is not None:

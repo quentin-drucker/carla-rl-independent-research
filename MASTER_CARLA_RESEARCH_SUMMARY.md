@@ -1501,6 +1501,89 @@ The retained matched CSV reproduces:
 
 **Limitation:** Reproduction shows that the presentation numbers came from the data. It does not make cross-controller interpretations valid. Measurement-window, censoring, and classifier problems remain.
 
+## Week 3 physical-limits finding: low-speed braking transient is largely independent of commanded brake level (added 2026-09-26)
+
+**What was observed:** `src/test9___physical_limits_braking.py`, built on the new
+`src/physics_harness.py`/`src/trace_schema.py` shared harness (`experiment/physical-limits-suite`
+branch), ran the Tesla Model 3 on `Town04_Opt` at a matched actual entry speed of ~34.1 mph
+(requested 35 mph) under four constant brake levels (0.25, 0.50, 0.75, 1.00), CARLA-default
+tire friction. At normal speed (>= 5 m/s), peak deceleration scaled with commanded brake
+level as expected: approximately -6.1, -6.8, -22.3, and -27.1 m/s² for 0.25/0.50/0.75/1.00
+respectively. Below approximately 5 m/s, a sharp deceleration transient appeared in every
+run and reached approximately -27 m/s² **regardless of commanded brake level** (-27.1,
+-27.2, -27.1, -27.0 m/s² for the same four brake levels) -- i.e. a 0.25 brake command
+produced essentially the same terminal deceleration as a 1.00 command once the vehicle
+slowed below that threshold. Stopping distance and time still scaled with brake level as
+expected overall (25.8 m/2.68 s at 0.25 down to 17.6 m/1.76 s at 1.00), since the low-speed
+transient is brief and occurs near the end of the stop.
+
+**Evidence status:** **CONFIRMED** for the tested conditions (reproduced identically across
+3 separate live runs in the same session). **NOT YET TESTED** across other speeds,
+frictions, or a fresh CARLA server launch -- do not generalize beyond Tesla Model 3 /
+`Town04_Opt` / default friction / ~34 mph entry yet.
+
+**Why this matters:** Directly relevant to the advisor's Sep 22 questions ("is throttle/brake
+control symmetric", "does max braking do better than partial braking assuming no skidding").
+Within this tested range, higher brake commands ARE meaningfully stronger during normal-speed
+braking (a real signal for a combined action-space design), but that distinction
+disappears near the end of every stop in this vehicle model regardless of command. This is
+reported strictly as an observed CARLA vehicle-model characteristic, **not** a skid or
+wheel-lock claim: CARLA 0.9.16's Python API exposes no validated per-wheel slip/lock signal
+(`wheel_slip_signal="not_measurable"` in every logged case), and CARLA does not model a
+validated production ABS system (existing limitation, restated here rather than re-derived).
+**Next:** broaden to more speeds/frictions and repeat across a fresh CARLA launch before
+treating the ~5 m/s threshold value itself as anything more than descriptive of this run.
+
+## Week 3 physical-limits finding: full-lock steering response and the Sep 22 advisor question (added 2026-09-26)
+
+**What was observed:** `src/test10___physical_limits_steering_lock.py` (same
+`experiment/physical-limits-suite` branch/harness) ran the Tesla Model 3 through 12 coasting
+(zero throttle) full-lock turns: 3 entry speeds (15/30/45 mph) x left/right x step/ramp
+steering command. Across every case that sustained the turn (i.e. did not stop early), the
+achieved inner-front-wheel steer angle was consistently ~68.6-70.0° and the turn radius was
+consistently ~2.64-2.66 m, essentially independent of entry speed and direction. Coasting
+through a full-lock turn also produced severe speed loss from cornering drag alone: 5 of 12
+cases scrubbed off effectively all speed within 1.2-1.7 s of applying full lock, well before
+the 5 s maneuver window ended (this timing was NOT symmetric between left and right at the
+same speed/command in this single session -- flagged as needing a fresh-launch repeat, not
+yet treated as a real directional asymmetry). Body slip angle (velocity heading vs. yaw --
+a measurable whole-body kinematic quantity) grew progressively during sustained turns,
+reaching 20-29° in the cases that did not stop early.
+
+**Two measurement bugs were caught and fixed during this run, both by inspecting raw traces
+rather than trusting summary numbers, and are recorded here because they affect how any
+future consumer of `get_wheel_steer_angle()` on this API should read it:**
+1. Reading only the front-left wheel's steer angle initially made left and right turns look
+   asymmetric (46.7° vs 68.8° at the same speed) despite every other measured quantity
+   (yaw rate, turn radius, slip angle) being symmetric. This is Ackermann steering geometry
+   (the inner front wheel of a turn steers further than the outer one), not a real vehicle
+   asymmetry -- fixed by reading FL and FR independently and reporting whichever has the
+   larger magnitude.
+2. A single 0.02 s tick showing speed drop from 6.38 to 2.02 m/s (implying over 20g of
+   deceleration -- physically impossible) corrupted the slip-angle calculation to >150° in
+   several cases. This is the same class of low-speed CARLA physics-engine artifact already
+   found in the braking finding above (there, an anomalous deceleration; here, a velocity-
+   direction discontinuity), both landing below roughly 5 m/s residual speed. Any future
+   kinematic-derivative metric computed from this vehicle model's low-speed state should be
+   treated with the same caution.
+
+**Evidence status:** **CONFIRMED** (directly measured) for the achieved wheel angle/turn
+radius/drag-induced speed loss pattern, single live session, Tesla Model 3 / `Town04_Opt` /
+default friction only -- **NOT YET REPEATED** across a fresh CARLA launch. **No skid,
+wheel-lock, understeer, or oversteer claim is made** -- CARLA 0.9.16's Python API exposes no
+validated per-wheel slip signal, and this substudy did not attempt to define a measurable
+proxy strong enough to support those specific labels.
+
+**Why this matters:** Directly answers part of the advisor's Sep 15/22 question ("is
+over/understeer or skidding modeled in CARLA at all") as far as this vehicle model's Python
+API can answer it: turning response (radius, wheel angle) is stable and speed-independent at
+full lock, but the model does NOT preserve speed through a coasting full-lock turn -- cornering
+drag alone can bring the vehicle to a near-stop in ~1-2 seconds. This is directly relevant to
+any future steering-plus-braking action space: a policy that swerves hard without also
+managing throttle/brake will lose speed rapidly as an emergent consequence of this vehicle
+model, not because of any explicit penalty. **Next:** repeat across a fresh CARLA launch;
+rollover (2.3) and throttle/brake symmetry (2.5) substudies remain unstarted.
+
 ---
 
 # Tentative and Inconclusive Findings

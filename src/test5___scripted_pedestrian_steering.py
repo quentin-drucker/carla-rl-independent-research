@@ -174,6 +174,8 @@ class CorridorConsoleObserver:
         self.final_actual_offset_m = float("nan")
         self.commanded_ever_non_drivable = False
         self.transition_ever_non_drivable = False
+        self.commanded_ever_occupied = False
+        self.transition_ever_occupied = False
         self.ever_governed_by_transition = False
 
     def __call__(self, sim_time_s, triggered, telemetry):
@@ -202,6 +204,15 @@ class CorridorConsoleObserver:
         if transition_status == "non_drivable":
             self.transition_ever_non_drivable = True
 
+        commanded_occupancy = telemetry.get("commanded_path_occupancy")
+        transition_occupancy = telemetry.get("transition_path_occupancy")
+        commanded_occ_status = commanded_occupancy["status"] if commanded_occupancy else "--"
+        transition_occ_status = transition_occupancy["status"] if transition_occupancy else "--"
+        if commanded_occ_status == "occupied":
+            self.commanded_ever_occupied = True
+        if transition_occ_status == "occupied":
+            self.transition_ever_occupied = True
+
         if triggered and self._tick % self._print_every_ticks == 0:
             print(
                 f"[corridors] t={sim_time_s:5.2f}s "
@@ -213,6 +224,7 @@ class CorridorConsoleObserver:
                 f"left={_format_distance(telemetry['d_min_left_candidate_m'])}m "
                 f"right={_format_distance(telemetry['d_min_right_candidate_m'])}m | "
                 f"drivable(commanded={commanded_status}, transition={transition_status}) | "
+                f"occupied(commanded={commanded_occ_status}, transition={transition_occ_status}) | "
                 f"brake_governed_by={telemetry.get('hazard_governing_source')} "
                 f"mode={telemetry.get('drive_mode')}"
             )

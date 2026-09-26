@@ -20,6 +20,8 @@ from physics_harness import (  # noqa: E402
     get_front_wheel_steer_angles_deg,
     inner_wheel_steer_angle_deg,
     summarize_deceleration,
+    summarize_acceleration,
+    compute_rise_time_s,
     detect_sustained_near_stop_onset_s,
     LOW_SPEED_ARTIFACT_THRESHOLD_MPS,
 )
@@ -218,6 +220,48 @@ class ComputeLateralAccelFromYawRateTests(unittest.TestCase):
 
     def test_zero_yaw_rate_is_zero_lateral_accel(self):
         self.assertAlmostEqual(compute_lateral_accel_from_yaw_rate(speed_mps=10.0, yaw_rate_dps=0.0), 0.0)
+
+
+class SummarizeAccelerationTests(unittest.TestCase):
+    def test_splits_normal_and_low_speed_regimes(self):
+        pairs = [
+            (10.0, 3.0), (7.0, 4.0), (6.0, 5.0),  # normal speed (>=5)
+            (4.0, 20.0), (2.0, 25.0), (0.5, 18.0),  # low speed (<5)
+        ]
+        summary = summarize_acceleration(speed_accel_pairs=pairs, threshold_mps=5.0)
+        self.assertAlmostEqual(summary.normal_speed_peak_accel_mps2, 5.0)
+        self.assertAlmostEqual(summary.normal_speed_mean_accel_mps2, 4.0)
+        self.assertAlmostEqual(summary.low_speed_transient_peak_accel_mps2, 25.0)
+
+    def test_skips_none_accel_samples(self):
+        pairs = [(10.0, None), (10.0, 3.0), (2.0, None)]
+        summary = summarize_acceleration(speed_accel_pairs=pairs, threshold_mps=5.0)
+        self.assertAlmostEqual(summary.normal_speed_peak_accel_mps2, 3.0)
+        self.assertIsNone(summary.low_speed_transient_peak_accel_mps2)
+
+    def test_empty_regime_reports_none_not_zero(self):
+        pairs = [(10.0, 3.0), (8.0, 4.0)]
+        summary = summarize_acceleration(speed_accel_pairs=pairs, threshold_mps=5.0)
+        self.assertIsNone(summary.low_speed_transient_peak_accel_mps2)
+
+
+class ComputeRiseTimeTests(unittest.TestCase):
+    def test_empty_input_returns_none(self):
+        self.assertIsNone(compute_rise_time_s(time_speed_value_pairs=[]))
+
+    def test_zero_final_value_returns_none(self):
+        pairs = [(0.0, 0.0), (0.1, 0.0), (0.2, 0.0)]
+        self.assertIsNone(compute_rise_time_s(time_speed_value_pairs=pairs))
+
+    def test_finds_first_time_crossing_target_fraction(self):
+        pairs = [(0.0, 0.0), (0.1, 3.0), (0.2, 8.0), (0.3, 9.5), (0.4, 10.0)]
+        rise_time = compute_rise_time_s(time_speed_value_pairs=pairs, target_fraction=0.9)
+        self.assertAlmostEqual(rise_time, 0.3)
+
+    def test_negative_values_use_absolute_magnitude(self):
+        pairs = [(0.0, 0.0), (0.1, -3.0), (0.2, -9.0), (0.3, -10.0)]
+        rise_time = compute_rise_time_s(time_speed_value_pairs=pairs, target_fraction=0.9)
+        self.assertAlmostEqual(rise_time, 0.2)
 
 
 class DetectSustainedNearStopOnsetTests(unittest.TestCase):

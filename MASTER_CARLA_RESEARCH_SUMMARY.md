@@ -1618,6 +1618,37 @@ location in `Town04_Opt` (or elsewhere) with enough lateral clearance to actuall
 60-90 mph rollover dynamics, rather than treating "no rollover observed" from the confounded
 result as evidence of anything about that speed range.
 
+## Week 3 physical-limits finding: throttle and brake are NOT physically symmetric at matched [0,1] commands (added 2026-09-26)
+
+**What was observed:** `src/test12___physical_limits_throttle_brake_symmetry.py` (the fourth
+and last Workstream 2 substudy) applied 4 matched command magnitudes (0.25/0.50/0.75/1.00) --
+throttle from a standing start, brake from a matched actual 35 mph entry speed (same speed as
+the earlier braking finding) -- and compared normal-speed (>=5 m/s) peak response magnitudes.
+At every level where both sides produced a comparable measurement, the response was
+**asymmetric**: braking produced 3.3-4.9x the peak deceleration magnitude of the matched
+throttle command's peak acceleration (0.50: 2.05 vs. -6.78 m/s²; 0.75: 4.52 vs. -22.33 m/s²;
+1.00: 8.25 vs. -27.18 m/s²). At 0.25, throttle alone could not even reach the 5 m/s
+normal-speed regime within a 5-second window (topped out at 8.1 mph) while brake at the same
+0.25 command already produced -6.11 m/s² of peak deceleration -- reinforcing the same
+asymmetry qualitatively even where the formal comparison is reported as inconclusive for lack
+of comparable data, not forced into a number.
+
+**Evidence status:** **CONFIRMED** (measured directly, reproduced identically across 3 live
+runs during development) for this vehicle/map/friction/speed -- **NOT YET TESTED** across
+other speeds, frictions, or a longer throttle window (which might let the 0.25 level reach a
+comparable measurement). Not yet repeated across a fresh CARLA launch.
+
+**Why this matters:** Directly answers the advisor's Sep 22 question ("is throttle and brake
+control symmetric?") -- no. **RL-design consequence, stated by the plan itself and confirmed
+here empirically:** a combined action space mapping throttle and brake onto a single signed
+`[-1, 1]` axis would give the same numeric magnitude very different real physical
+consequences depending on sign. Any future combined actuator action likely needs asymmetric
+scaling, separate action dimensions, or different rate limits for throttle vs. brake, not a
+shared raw numeric range. This completes all four Workstream 2 physical-limits substudies
+(steering lock, rollover, braking, throttle/brake symmetry) at least once each; fresh-launch
+repeats for all four remain the standing gate before any of these findings should be treated
+as fully stable simulator behavior.
+
 ---
 
 # Tentative and Inconclusive Findings

@@ -1649,6 +1649,52 @@ shared raw numeric range. This completes all four Workstream 2 physical-limits s
 repeats for all four remain the standing gate before any of these findings should be treated
 as fully stable simulator behavior.
 
+## Week 3 addition: observational other-vehicle occupancy check for candidate paths (added 2026-09-26)
+
+**What was added:** `src/vehicle_occupancy.py` (Workstream 1.2) -- a conservative
+clear/occupied/unknown check for whether another vehicle currently occupies the commanded
+or swept-transition lateral corridor, wired into `lane_follow_step()` as
+`commanded_path_occupancy`/`transition_path_occupancy` telemetry, alongside (not replacing)
+the existing LiDAR-clearance and map-drivability signals. This is the "check whether a car
+is in its way to swerve" gap the advisor raised (2026-09-08). It is purely observational
+this week: it does not gate braking or steering, same as the map-drivability check before
+it. No prior scenario test had ever included another vehicle actor.
+
+**Validation status: CONFIRMED live** across all four required cases (no adjacent vehicle,
+an actor clearly inside the candidate path, an actor just outside it, a deliberately
+unavailable side), for both left and right scripted directions -- see
+`src/test13___candidate_path_occupancy_validation.py`. A vehicle placed on a candidate path
+is consistently reported occupied (575/576 observed ticks); a clearly-clear vehicle never
+is; an unavailable corridor reports "unknown", never a silently-promoted "clear".
+
+**Two bugs found and fixed during this work, one of them a real reliability issue beyond
+the occupancy feature itself:**
+1. The occupancy classifier's conservative circular footprint (built from the vehicle's own
+   bounding box) is larger than intuition suggests -- confirmed live, the Tesla Model 3's
+   occupancy radius is ~2.70m (from a 2.396m half-length, the larger of its two bounding-box
+   half-extents, plus a safety margin), giving a total occupancy threshold of ~4.10m from a
+   1.4m-half-width corridor. An initial test margin of 3.5m was not actually outside that
+   threshold and was live-caught as a false "occupied" -- not a bug in the check itself, but
+   a reminder that this conservative design produces a wider effective footprint than a car's
+   visual width alone would suggest.
+2. **A latent, pre-existing reliability bug in `test3___ped_intrusion_scenario.run_scenario()`**:
+   its `finally` cleanup block called `print_run_summary(stats)` before `stats` was
+   necessarily assigned, so any exception raised early in scenario setup (before `stats` is
+   set) raised a masking `UnboundLocalError` instead, which skipped the rest of `finally` --
+   including `restore_async_mode(world)`. Confirmed live: this left the CARLA world stuck in
+   `synchronous_mode=True` with no client ticking it after a setup-time crash. This was
+   triggered here by an other-vehicle spawn collision (fixed separately, see below), but the
+   underlying `finally`-ordering bug could have masked any other early-setup failure in any
+   scenario run, silently leaving the simulator in a bad state for the next script. Fixed by
+   initializing `stats = None` before the `try` block and guarding the summary print.
+
+**Secondary finding:** the specific highway spawn location used throughout this project's
+tests (`SPAWN_INDEX=242`, `Town04_Opt`) has an asymmetric usable road width -- a probed
+spawn point at 7.5m left of route center failed (collided with fixed scene geometry,
+consistent with the guardrail already found in the Week 3 rollover substudy), while the same
+7.5m to the right, and 7.0m to either side, spawned cleanly. Not yet characterized further;
+relevant to any future test needing a wide lateral working area at this location.
+
 ---
 
 # Tentative and Inconclusive Findings

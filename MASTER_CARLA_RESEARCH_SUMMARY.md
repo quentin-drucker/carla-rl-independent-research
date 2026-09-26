@@ -1584,6 +1584,40 @@ managing throttle/brake will lose speed rapidly as an emergent consequence of th
 model, not because of any explicit penalty. **Next:** repeat across a fresh CARLA launch;
 rollover (2.3) and throttle/brake symmetry (2.5) substudies remain unstarted.
 
+## Week 3 physical-limits finding: rollover boundary testing is confounded by roadside infrastructure above ~45 mph at the current test location (added 2026-09-26)
+
+**What was observed:** `src/test11___physical_limits_rollover.py` reused test10's coasting
+full-lock setup and increased speed through a bounded, predeclared sequence (30/45/60/75/90
+mph x left/right, step steering) at the repository's standard spawn point (`SPAWN_INDEX=242`,
+`Town04_Opt`). 7 of 10 cases (all of 60/75/90 mph, plus one 45 mph case) ran off the paved
+shoulder and collided with fixed roadside infrastructure (a guardrail, once a light pole)
+within 1.1-1.7 seconds -- before any intrinsic vehicle rollover dynamics could develop. This
+happens because the vehicle's turning arc during the high-speed portion of a full-lock turn
+is much wider than the tight ~2.65 m radius the steering-lock substudy measured once the
+vehicle has already slowed down; at highway entry speed that wide arc leaves the drivable
+surface. The 3 cases that were NOT confounded (30 mph both directions, 45 mph right) showed
+maximum roll under 1.5 degrees and the vehicle stayed upright throughout -- no rollover or
+near-miss observed in that narrow tested range. Notably, even the 7 guardrail-impact cases
+stayed upright despite a real, speed-scaling vertical bounce (vertical excursion grew from
+~0.02 m at low speed to ~0.78 m at 90 mph) -- no tip-over occurred in any of the 10 runs,
+though this is reported only as "no tip-over in these specific impacts," not as a general
+claim, since the impact itself is exactly the confound preventing a clean rollover test.
+
+**Evidence status:** **CONFIRMED** (measured directly) that this specific spawn location
+cannot cleanly test intrinsic rollover dynamics above ~45 mph -- the maneuver runs off the
+road into fixed infrastructure first. **NOT YET ANSWERED**: whether this vehicle model can
+roll over from steering alone at 60-90 mph, since that speed range was never actually tested
+by its own dynamics here. **NOT YET REPEATED** across a fresh CARLA launch.
+
+**Why this matters:** This is a methodology finding as much as a vehicle-dynamics one --
+future physical-limits work involving full-lock or otherwise wide-radius maneuvers at highway
+speed needs either an open, unobstructed spawn location, or must explicitly detect and label
+a map-geometry collision as its own outcome (as this substudy now does) rather than let it
+silently corrupt a following-dynamics measurement. **Next:** find or construct an open spawn
+location in `Town04_Opt` (or elsewhere) with enough lateral clearance to actually test
+60-90 mph rollover dynamics, rather than treating "no rollover observed" from the confounded
+result as evidence of anything about that speed range.
+
 ---
 
 # Tentative and Inconclusive Findings

@@ -287,6 +287,68 @@ def summarize_deceleration(
     )
 
 
+@dataclass
+class AccelerationSummary:
+    normal_speed_peak_accel_mps2: Optional[float]
+    normal_speed_mean_accel_mps2: Optional[float]
+    low_speed_transient_peak_accel_mps2: Optional[float]
+    threshold_mps: float
+
+
+def summarize_acceleration(
+    *, speed_accel_pairs, threshold_mps: float = LOW_SPEED_ARTIFACT_THRESHOLD_MPS
+) -> AccelerationSummary:
+    """Throttle-side counterpart of summarize_deceleration(): splits accel
+    samples into "normal-speed" (>= threshold_mps) and "low-speed"
+    (< threshold_mps) regimes before computing peak/mean acceleration.
+    Uses max() (most positive), not min(), since throttle response is
+    positive acceleration -- otherwise identical rationale: a standing
+    start begins inside the same low-speed artifact zone documented for
+    braking (test9) and steering (test10), so any acceleration-from-rest
+    measurement must not blindly average across it without checking
+    whether a similar artifact appears here too.
+
+    speed_accel_pairs: iterable of (speed_mps, accel_mps2) tuples; accel_mps2
+    may be None (e.g. the first tick of a run) and is skipped.
+    """
+    normal = [a for s, a in speed_accel_pairs if a is not None and s >= threshold_mps]
+    low = [a for s, a in speed_accel_pairs if a is not None and s < threshold_mps]
+    return AccelerationSummary(
+        normal_speed_peak_accel_mps2=max(normal) if normal else None,
+        normal_speed_mean_accel_mps2=(sum(normal) / len(normal)) if normal else None,
+        low_speed_transient_peak_accel_mps2=max(low) if low else None,
+        threshold_mps=threshold_mps,
+    )
+
+
+def compute_rise_time_s(
+    *, time_speed_value_pairs, target_fraction: float = 0.9
+) -> Optional[float]:
+    """First sim_time_s at which |value| reaches target_fraction of the
+    final sample's |value|, or None if the final value is ~0 (nothing to
+    rise to) or the input is empty.
+
+    A coarse, descriptive "how fast does the response build up" metric per
+    the plan's "time constants, saturation" requirement -- assumes a
+    roughly monotonic approach to the final value; does not attempt to fit
+    an actual first-order time constant.
+
+    time_speed_value_pairs: iterable of (sim_time_s, value) tuples, in
+    chronological order.
+    """
+    pairs = list(time_speed_value_pairs)
+    if not pairs:
+        return None
+    final_value = pairs[-1][1]
+    if abs(final_value) < 1e-9:
+        return None
+    target = abs(final_value) * target_fraction
+    for sim_time_s, value in pairs:
+        if abs(value) >= target:
+            return sim_time_s
+    return None
+
+
 def classify_upright_recovery(*, final_abs_roll_deg: float, upright_threshold_deg: float = 15.0) -> str:
     """"upright" / "not_upright" -- a plain, predeclared threshold check on
     the vehicle's roll angle after a maneuver has ended and it has settled.

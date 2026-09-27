@@ -8,7 +8,9 @@ if str(SRC_DIR) not in sys.path:
 
 from pedestrian_contact import (  # noqa: E402
     compute_ego_pedestrian_contact_radius_m,
+    compute_oriented_ego_pedestrian_clearance_m,
     detect_contact_ticks,
+    detect_oriented_contact_ticks,
 )
 
 
@@ -62,6 +64,35 @@ class DetectContactTicksTests(unittest.TestCase):
         ego = [(0.0, 0.0)] * 5
         ped = [(0.0, 0.0), (10.0, 10.0), (0.5, 0.0), (10.0, 10.0), (0.1, 0.1)]
         self.assertEqual(detect_contact_ticks(ego, ped, contact_radius_m=2.7), [0, 2, 4])
+
+
+class OrientedContactTests(unittest.TestCase):
+    def test_lateral_pass_not_mislabeled_by_half_length(self):
+        clearance = compute_oriented_ego_pedestrian_clearance_m(
+            ego_x_m=0.0,
+            ego_y_m=0.0,
+            ego_yaw_deg=0.0,
+            pedestrian_x_m=0.0,
+            pedestrian_y_m=1.68,
+        )
+        self.assertAlmostEqual(clearance, 0.298)
+
+    def test_detects_front_contact_and_not_safe_lateral_pass(self):
+        ego_poses = [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)]
+        pedestrians = [(2.5, 0.0), (0.0, 1.68)]
+        self.assertEqual(
+            detect_oriented_contact_ticks(ego_poses, pedestrians),
+            [0],
+        )
+
+    def test_oriented_detector_skips_missing_samples(self):
+        self.assertEqual(
+            detect_oriented_contact_ticks(
+                [None, (0.0, 0.0, 0.0)],
+                [(0.0, 0.0), None],
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

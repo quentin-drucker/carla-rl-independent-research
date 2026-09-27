@@ -263,6 +263,7 @@ def run_scenario(
     transition_blend_distance_m: float = 20.0,
     other_vehicle_offset_m: float = None,
     use_geometric_clearance_override: bool = False,
+    use_swept_path_clearance_override: bool = False,
 ) -> RunResult:
     """
     Run one full scenario with the given config. Returns a RunResult.
@@ -304,8 +305,19 @@ def run_scenario(
                     ego_clearance_override.py). False (default) passes no
                     pedestrian position through, matching every existing
                     caller's behavior exactly.
+        use_swept_path_clearance_override: If True, enables the experimental
+                    ego-rooted swept-path LiDAR/clearance decision. Requires
+                    monitor_lateral_corridors=True. The pedestrian position
+                    is supplied as controlled-scenario ground truth for the
+                    positive-clearance gate; defaults False, so existing
+                    scenarios retain their prior behavior.
     """
     TARGET_SPEED_MPS = cfg.target_mph * 0.44704
+    if use_swept_path_clearance_override and not monitor_lateral_corridors:
+        raise ValueError(
+            "use_swept_path_clearance_override requires "
+            "monitor_lateral_corridors=True"
+        )
     total_ticks = int(cfg.sim_seconds / FIXED_DT)
 
     print(f"\n{'='*60}")
@@ -695,7 +707,11 @@ def run_scenario(
             # (_ped_loc3), not a new actor query.
             _geo_pedestrian_x_m = None
             _geo_pedestrian_y_m = None
-            if use_geometric_clearance_override and triggered and walker is not None:
+            if (
+                (use_geometric_clearance_override or use_swept_path_clearance_override)
+                and triggered
+                and walker is not None
+            ):
                 _geo_pedestrian_x_m = _ped_loc3.x
                 _geo_pedestrian_y_m = _ped_loc3.y
 
@@ -718,6 +734,7 @@ def run_scenario(
                 lateral_offset_m=requested_lateral_offset_m,
                 pedestrian_x_m=_geo_pedestrian_x_m,
                 pedestrian_y_m=_geo_pedestrian_y_m,
+                use_swept_path_clearance_override=use_swept_path_clearance_override,
             )
 
             # Belt-and-suspenders: once the ego has made a full emergency stop,

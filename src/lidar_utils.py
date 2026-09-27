@@ -893,6 +893,114 @@ def lidar_min_distance_along_transition_corridor(
     return min_d, shifted_points
 
 
+def lidar_min_along_path_distance_in_swept_tube(
+    lidar_actor,
+    lidar_data,
+    path_points_world,
+    *,
+    tube_half_width_m: float,
+    z_min: float,
+    z_max: float,
+    min_along_path_m: float,
+    max_along_path_m: float,
+):
+    """Return nearest along-path LiDAR distance inside one swept-path tube.
+
+    Unlike the older route-corridor functions, the supplied path is already
+    ego-rooted and represents the one trajectory the vehicle intends to
+    execute. Distance is measured as arc length along that path, which is the
+    quantity the braking headway is meant to bound.
+
+    There is intentionally no ``lidar_point.point.x`` gate. A point can lie on
+    a turning ego path without being in the sensor's positive-X half-plane;
+    the projection's positive along-path distance is the authoritative
+    definition of "ahead" here.
+    """
+    if (
+        lidar_data is None
+        or lidar_actor is None
+        or not path_points_world
+        or len(path_points_world) < 2
+    ):
+        return None
+    if tube_half_width_m < 0.0:
+        raise ValueError("tube_half_width_m must be non-negative")
+
+    path_xy = []
+    path_s = [0.0]
+    for point in path_points_world:
+        if hasattr(point, "x") and hasattr(point, "y"):
+            point_xy = (float(point.x), float(point.y))
+        else:
+            point_xy = (float(point[0]), float(point[1]))
+        if path_xy and math.hypot(
+            point_xy[0] - path_xy[-1][0], point_xy[1] - path_xy[-1][1]
+        ) <= 1e-9:
+            continue
+        if path_xy:
+            path_s.append(
+                path_s[-1]
+                + math.hypot(
+                    point_xy[0] - path_xy[-1][0],
+                    point_xy[1] - path_xy[-1][1],
+                )
+            )
+        path_xy.append(point_xy)
+
+    if len(path_xy) < 2:
+        return None
+
+    lidar_transform = lidar_actor.get_transform()
+    tube_half_width_sq = tube_half_width_m * tube_half_width_m
+    minimum_along_path_m = None
+
+    for lidar_point in lidar_data:
+        local_z = lidar_point.point.z
+        if local_z < z_min or local_z > z_max:
+            continue
+        world_location = lidar_transform.transform(
+            carla.Location(
+                x=lidar_point.point.x,
+                y=lidar_point.point.y,
+                z=lidar_point.point.z,
+            )
+        )
+
+        best_lateral_distance_sq = None
+        best_along_path_m = None
+        for index in range(len(path_xy) - 1):
+            projection, _, _, lateral_distance_sq = _project_point_to_segment_2d(
+                world_location.x,
+                world_location.y,
+                path_xy[index][0],
+                path_xy[index][1],
+                path_xy[index + 1][0],
+                path_xy[index + 1][1],
+            )
+            if (
+                best_lateral_distance_sq is None
+                or lateral_distance_sq < best_lateral_distance_sq
+            ):
+                best_lateral_distance_sq = lateral_distance_sq
+                best_along_path_m = path_s[index] + projection * (
+                    path_s[index + 1] - path_s[index]
+                )
+
+        if best_lateral_distance_sq is None or best_along_path_m is None:
+            continue
+        if best_lateral_distance_sq > tube_half_width_sq:
+            continue
+        if not (min_along_path_m < best_along_path_m <= max_along_path_m):
+            continue
+        if (
+            minimum_along_path_m is None
+            or best_along_path_m < minimum_along_path_m
+        ):
+            minimum_along_path_m = best_along_path_m
+
+    return minimum_along_path_m
+
+
 def draw_lane_noodle_corridor(
     world,
     noodle_points_world,

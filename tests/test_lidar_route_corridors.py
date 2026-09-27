@@ -14,6 +14,7 @@ import carla  # noqa: E402
 from lidar_utils import (  # noqa: E402
     lidar_min_distances_along_route_corridors,
     lidar_min_distance_along_transition_corridor,
+    lidar_min_along_path_distance_in_swept_tube,
 )
 
 
@@ -119,6 +120,67 @@ class TransitionCorridorTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(d_min, math.hypot(10.0, 1.0))
+
+
+class EgoRootedSweptTubeTests(unittest.TestCase):
+    def test_reports_arc_length_not_sensor_euclidean_distance(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=10, y=0, z=0),
+            carla.Location(x=10, y=10, z=0),
+        ]
+        frame = [SimpleNamespace(point=carla.Location(x=10, y=5, z=0))]
+        distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=0.5,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        self.assertAlmostEqual(distance, 15.0)
+
+    def test_turning_path_does_not_require_positive_sensor_x(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=0, y=10, z=0),
+        ]
+        # Sensor-local x is zero, so the old forward-X gate would discard it.
+        frame = [SimpleNamespace(point=carla.Location(x=0, y=5, z=0))]
+        distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=0.5,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        self.assertAlmostEqual(distance, 5.0)
+
+    def test_ignores_points_outside_tube_or_behind_minimum_distance(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=20, y=0, z=0),
+        ]
+        frame = [
+            SimpleNamespace(point=carla.Location(x=0.5, y=0, z=0)),
+            SimpleNamespace(point=carla.Location(x=5, y=2, z=0)),
+        ]
+        distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=1.0,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        self.assertIsNone(distance)
 
 
 if __name__ == "__main__":

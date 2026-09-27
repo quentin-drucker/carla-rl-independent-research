@@ -1819,6 +1819,48 @@ across several overlaid runs that end near the same position still stack.
 overlay. Not required by the plan's 3.3 success criterion; left for a future pass if this
 tool sees continued use.
 
+## Week 3 addition: the swerve-then-merge-back capability already exists and works -- it just needed a scenario that had never been tried (added 2026-09-27)
+
+**What prompted this:** Quentin watched test13 live and noticed the ego always just stops for
+the pedestrian rather than visibly swerving around and continuing. His hypothesis was that
+the LiDAR hazard corridor governing braking needs to "move with" the ego's swerve. That
+specific idea is exactly the approach already tried twice (2026-09-18, see the "Two
+attempts... reverted" note near the top of this document) and is an explicit Non-goal in the
+Week 3 plan pending real design review -- it was NOT re-attempted here.
+
+**What was actually found:** every existing scenario script (test5/test6/test7/test8/test13/
+test14) uses `ScenarioConfig(walker_cross="near")` -- the pedestrian walks to lane center and
+stays there indefinitely. Original-lane braking is deliberately anchored to the pedestrian's
+own position, not the ego's, so a permanently in-lane pedestrian correctly forces a full stop
+no matter how well the ego swerves -- that is the safety net working as intended, not a bug.
+The already-built `HazardClearRecoveryController` (test5, unmodified) supports a full
+swerve-out -> hold -> hazard-clear -> return-to-lane cycle, gated on
+`hazard_governance.is_original_corridor_confirmed_clear()` -- which reads the ORIGINAL
+corridor's live LiDAR state and will naturally read clear once a pedestrian who is actually
+transiting the lane (`walker_cross="far"`) exits it. No existing script had ever used
+`walker_cross="far"`, so this cycle had simply never been exercised.
+
+**What was built:** `src/test16___far_cross_swerve_and_merge_back.py` -- a new scenario
+composition script, zero changes to any existing file or any safety-relevant control logic.
+Uses `walker_cross="far"`, a generous `trigger_ttc_s=5.0`, and the existing, unmodified
+evasive-offset recovery controller.
+
+**Result (live, single run):** `outcome=slowed_avoided`, NOT `full_stop` -- the ego slowed
+from ~11 m/s cruise to ~8.5 m/s at its lowest point but never stopped. The lateral-offset
+trace shows a clean swerve-out to +1.5 m (t=4.5-6.5s), a hold through the pedestrian's
+crossing, and a smooth ramp back to 0.0 m (t=10.5-12.0s) once the pedestrian actually cleared
+the lane -- a genuine merge-back. `recovered=True`, triggered by a real hazard-clear signal
+(`used_fallback_timeout=False`), no collision, `min_ped_distance=1.49m`.
+
+**Evidence status: measured directly, single live session, one configuration** (25 mph, one
+TTC, one peak offset). This demonstrates the capability exists and works under favorable
+timing -- it is not yet a characterized boundary. **Caveat:** the run's own printed
+`min_ttc=0.14s` looks alarming but is straight-line distance/speed regardless of the ego's
+lateral offset, so it does not credit the swerve at all; `min_ped_distance` is the more
+meaningful number here. **Not yet done:** repeats, and a sweep across speed/TTC/peak-offset
+to find where this reverts to a forced full stop (or worse) the way the near-cross matrix
+(test6/test7/test8) already did for the "near" case.
+
 ---
 
 # Tentative and Inconclusive Findings

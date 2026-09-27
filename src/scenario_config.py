@@ -49,8 +49,12 @@ class ScenarioConfig:
 
     walker_cross: str = "far"
     # How far across the lane the pedestrian walks.
-    # "near" = stops roughly at lane center (partial intrusion).
-    # "far"  = crosses all the way to the opposite lane edge.
+    # "near"       = stops roughly at lane center (partial intrusion).
+    # "far"        = crosses all the way to the opposite lane edge.
+    # "stationary" = never walks at all; stands at lane center for the
+    #                whole encounter (added 2026-09-27 for testing swerve-
+    #                offset sizing against a known, fixed pedestrian
+    #                position without a moving-target complication).
 
     walker_startup_s: float = 0.5
     # Seconds the pedestrian waits (standing still) after the trigger

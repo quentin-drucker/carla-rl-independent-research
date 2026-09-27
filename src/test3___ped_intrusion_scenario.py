@@ -184,8 +184,17 @@ def _compute_crossing_endpoints_from_waypoint(encounter_wp, *, side, cross, lane
         end_lat = 0.0
     elif cross.lower() == "far":
         end_lat = -start_lat
+    elif cross.lower() == "stationary":
+        # A pedestrian who never walks anywhere -- stands directly in the
+        # ego's original lane (lane center) for the whole encounter. Added
+        # 2026-09-27 to test reactive swerve-offset sizing (compute the
+        # offset needed to clear a KNOWN, fixed pedestrian position) without
+        # the added complexity of a moving crossing target. start_lat is
+        # irrelevant here since the walker never leaves end_lat.
+        start_lat = 0.0
+        end_lat = 0.0
     else:
-        raise ValueError("cross must be 'near' or 'far'")
+        raise ValueError("cross must be 'near', 'far', or 'stationary'")
 
     start_loc = carla.Location(
         x=lane_center.x + right.x * start_lat,

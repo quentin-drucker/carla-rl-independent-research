@@ -49,7 +49,27 @@ def compute_required_clearance_offset_m(
     Only correct for a pedestrian whose lateral position is not expected to
     change further before the ego reaches them -- see module docstring.
     """
-    clearance_m = ego_half_width_m + pedestrian_radius_m + safety_margin_m
+    clearance_m = compute_minimum_lateral_clearance_m(
+        ego_half_width_m=ego_half_width_m,
+        pedestrian_radius_m=pedestrian_radius_m,
+        safety_margin_m=safety_margin_m,
+    )
     if side_sign >= 0:
         return pedestrian_lateral_m + clearance_m
     return pedestrian_lateral_m - clearance_m
+
+
+def compute_minimum_lateral_clearance_m(
+    *,
+    ego_half_width_m: float = 1.082,
+    pedestrian_radius_m: float = 0.3,
+    safety_margin_m: float = 0.3,
+) -> float:
+    """The minimum center-to-center lateral separation to treat as "clear".
+
+    Shared by compute_required_clearance_offset_m() (what offset to aim for)
+    and ego_clearance_override.py (whether the ego's CURRENT actual position
+    already satisfies that same clearance) -- one definition of "clear" used
+    both prospectively and retrospectively.
+    """
+    return ego_half_width_m + pedestrian_radius_m + safety_margin_m

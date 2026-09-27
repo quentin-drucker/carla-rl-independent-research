@@ -1,35 +1,31 @@
 """test16___far_cross_swerve_and_merge_back.py
 
-Demonstrates a full swerve-avoid-and-merge-back cycle using ONLY already-
-validated, unmodified code -- no changes to braking authority, hazard
-governance, or any safety-relevant control logic.
+WARNING (2026-09-27): this script's ORIGINAL config (peak_offset_m=1.5)
+produces a REAL COLLISION -- confirmed live by Quentin (visually, the
+pedestrian's geometry glitches/gets shoved) and independently by
+pedestrian_contact.py's ground-truth geometric check (a sustained 0.5s
+contact window). CARLA's own collision sensor did NOT report it
+(result.collision_detected read False in reproducible automated runs) --
+see MASTER_CARLA_RESEARCH_SUMMARY.md's "a real coverage gap found via a
+far-crossing pedestrian test" entry for the full root-cause trace. This
+script currently demonstrates a discovered SAFETY GAP, not a validated
+swerve-and-merge-back success. Do not treat a clean printed outcome from
+this script as proof of no collision -- verify with pedestrian_contact.py
+against the recorded trace, exactly as this investigation had to.
 
-Context (2026-09-27): Quentin watched test13 and noticed the ego always
-just stops for the pedestrian rather than visibly swerving around it and
-resuming. The instinct was that the LiDAR hazard corridor governing
-braking needs to "move with" the swerve. That specific idea -- letting
-steering suppress/override original-lane braking -- is exactly the
-approach already tried TWICE (2026-09-18) and reverted both times: the
-first attempt produced a dangerous false clearance; the hardened retry
-fixed that but introduced governing-source chatter, reduced recovery
-success, worsened one outcome, and nearly doubled jerk. The Week 3 plan
-explicitly lists a third such attempt as a Non-goal pending real design
-review. This script does NOT do that.
-
-The actual, safer explanation: every existing test (test5/test6/test7/
-test8/test13/test14) uses ScenarioConfig(walker_cross="near") -- the
-pedestrian walks to lane center and STAYS there. Original-lane braking is
-deliberately anchored to the pedestrian's own position, not the ego's, so
-a stationary in-lane pedestrian correctly forces the ego to a full stop
-regardless of how well it swerves -- that's the safety net working as
-designed, not a bug. The already-built, already-validated
-HazardClearRecoveryController (test5) DOES support a full swerve-out ->
-hold -> hazard-clear -> return-to-lane cycle; it has just never been
-exercised against a pedestrian who actually finishes crossing and exits
-the lane. That requires walker_cross="far" -- and no existing script uses
-it. This script does, with generous timing so the pedestrian very likely
-clears the lane before the ego's original-lane braking would force it all
-the way to zero.
+Original intent (still not achieved as of 2026-09-27): demonstrate a full
+swerve-avoid-and-merge-back cycle using ONLY already-validated, unmodified
+code -- no changes to braking authority, hazard governance, or any
+safety-relevant control logic. That non-goal (see the Week 3 plan's "Two
+attempts... reverted" history) is still respected -- nothing here touches
+braking authority. The actual problem found instead: the original-lane
+hazard corridor only watches a band +/-1.4m from route centerline, but
+this walker_cross="far" pedestrian ends up at +2.55m -- well outside it.
+Once they exit that band, NOTHING currently watches that space for a
+pedestrian hazard (the commanded/transition corridors are observational
+telemetry only, and only track vehicle actors regardless). Widening the
+swerve offset alone (tested up to 3.2m) does not fix this, since the
+corridor's blind spot doesn't move with the ego's offset.
 
 Usage (CARLA must already be running, windowed so you can watch):
     python -X utf8 test16___far_cross_swerve_and_merge_back.py
@@ -77,12 +73,13 @@ def main():
     recovery_controller = build_evasive_offset_fn(peak_offset_m=1.5)
 
     print("=" * 70)
-    print("test16: far-crossing pedestrian -- full swerve/avoid/merge-back demo")
-    print("Watch the console for drive_mode and lateral offset over time.")
-    print("Expected: swerve out (~1.5m) while the pedestrian crosses, brief")
-    print("slow-down (may or may not reach a full stop depending on timing),")
-    print("then lateral offset ramps back toward 0.0m once the pedestrian")
-    print("clears the original lane -- that ramp-back IS the merge-back.")
+    print("test16: far-crossing pedestrian scenario")
+    print("KNOWN ISSUE (2026-09-27): this config produces a REAL COLLISION")
+    print("around 3s after the pedestrian finishes crossing, which CARLA's")
+    print("own collision sensor does NOT reliably report. Do not trust the")
+    print("printed 'Collision: False' below at face value -- verify against")
+    print("the recorded trace with pedestrian_contact.py. See this script's")
+    print("module docstring and MASTER_CARLA_RESEARCH_SUMMARY.md.")
     print("=" * 70)
 
     result = run_scenario(

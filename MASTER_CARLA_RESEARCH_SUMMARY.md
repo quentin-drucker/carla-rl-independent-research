@@ -1819,7 +1819,7 @@ across several overlaid runs that end near the same position still stack.
 overlay. Not required by the plan's 3.3 success criterion; left for a future pass if this
 tool sees continued use.
 
-## Week 3 addition: the swerve-then-merge-back capability already exists and works -- it just needed a scenario that had never been tried (added 2026-09-27)
+## Week 3 addition: a real coverage gap found via a far-crossing pedestrian test -- CARLA's collision sensor missed it too (added 2026-09-27, corrected same day)
 
 **What prompted this:** Quentin watched test13 live and noticed the ego always just stops for
 the pedestrian rather than visibly swerving around and continuing. His hypothesis was that
@@ -1828,38 +1828,58 @@ specific idea is exactly the approach already tried twice (2026-09-18, see the "
 attempts... reverted" note near the top of this document) and is an explicit Non-goal in the
 Week 3 plan pending real design review -- it was NOT re-attempted here.
 
-**What was actually found:** every existing scenario script (test5/test6/test7/test8/test13/
-test14) uses `ScenarioConfig(walker_cross="near")` -- the pedestrian walks to lane center and
-stays there indefinitely. Original-lane braking is deliberately anchored to the pedestrian's
-own position, not the ego's, so a permanently in-lane pedestrian correctly forces a full stop
-no matter how well the ego swerves -- that is the safety net working as intended, not a bug.
-The already-built `HazardClearRecoveryController` (test5, unmodified) supports a full
-swerve-out -> hold -> hazard-clear -> return-to-lane cycle, gated on
-`hazard_governance.is_original_corridor_confirmed_clear()` -- which reads the ORIGINAL
-corridor's live LiDAR state and will naturally read clear once a pedestrian who is actually
-transiting the lane (`walker_cross="far"`) exits it. No existing script had ever used
-`walker_cross="far"`, so this cycle had simply never been exercised.
+**First pass (superseded below):** every existing scenario script (test5/test6/test7/test8/
+test13/test14) uses `ScenarioConfig(walker_cross="near")` -- the pedestrian walks to lane
+center and stays there indefinitely, which correctly forces a full stop regardless of swerve
+quality (the safety net working as intended). No script had ever used `walker_cross="far"`
+(pedestrian actually exits the lane), so a new script, `src/test16___far_cross_swerve_and_
+merge_back.py`, exercised it for the first time. A first automated run reported
+`outcome=slowed_avoided`, `collision_detected=False` -- this was reported as a clean success.
+**It was not.** Quentin ran the same script live and watched the ego actually hit the
+pedestrian (visually confirmed: the pedestrian's geometry glitched/was shoved as the ego drove
+through it), directly contradicting the automated result. Re-verifying with an independent,
+offline-tested geometric contact check (`src/pedestrian_contact.py`, using the Tesla Model 3's
+real bounding-box dimensions, deliberately built because CARLA's own sensor had just been
+shown unreliable here) confirmed a sustained 0.5-second contact window (26 consecutive ticks),
+not a single-tick glitch -- strong independent corroboration of what Quentin saw. This is
+recorded as a caution against trusting a single clean-looking automated result, exactly the
+"inspect traces, not aggregate labels" discipline this project has otherwise followed.
 
-**What was built:** `src/test16___far_cross_swerve_and_merge_back.py` -- a new scenario
-composition script, zero changes to any existing file or any safety-relevant control logic.
-Uses `walker_cross="far"`, a generous `trigger_ttc_s=5.0`, and the existing, unmodified
-evasive-offset recovery controller.
+**Root cause, traced from the full per-tick record:**
+1. The original-lane hazard corridor only watches a band +/-1.4m from route centerline
+   (`NOODLE_HALF_WIDTH_M`). The far-crossing pedestrian ends up at +2.55m from centerline --
+   outside that band.
+2. Once the pedestrian crosses past 1.4m (~5s into the encounter), the corridor loses them
+   completely -- it reports no LiDAR return at all for nearly the rest of the encounter, not
+   just briefly.
+3. The swerve's peak offset (1.5m) happened to land almost exactly on that same 1.4m boundary
+   -- nowhere near the pedestrian's actual 2.55m excursion. Re-testing with a much larger
+   offset (3.2m) did NOT meaningfully improve the outcome, since the corridor's blind spot is
+   unrelated to how far the ego itself swerves.
+4. The scripted recovery controller's clear-confirmation logic deliberately treats a missing
+   LiDAR return as "unknown, not confirmed clear" (a real, intentional safety choice from an
+   earlier, unrelated 2026-09-18 bug fix) -- but combined with the corridor now returning "no
+   data" almost every tick, confirmed clearance (and the return-to-lane it gates) was delayed
+   by roughly 3 extra seconds past when the pedestrian was actually long gone.
+5. During that multi-second window, the ego cruised at full speed, still holding its offset,
+   through a stretch of space nothing was watching: the original corridor structurally cannot
+   see it (outside its band), and the commanded/transition corridor checks that DO cover that
+   space are observational-only telemetry (see the Workstream 1.2 finding above) that, even if
+   wired up, only track vehicle actors, not pedestrians.
 
-**Result (live, single run):** `outcome=slowed_avoided`, NOT `full_stop` -- the ego slowed
-from ~11 m/s cruise to ~8.5 m/s at its lowest point but never stopped. The lateral-offset
-trace shows a clean swerve-out to +1.5 m (t=4.5-6.5s), a hold through the pedestrian's
-crossing, and a smooth ramp back to 0.0 m (t=10.5-12.0s) once the pedestrian actually cleared
-the lane -- a genuine merge-back. `recovered=True`, triggered by a real hazard-clear signal
-(`used_fallback_timeout=False`), no collision, `min_ped_distance=1.49m`.
+**The actual finding:** this is a genuine, previously-undiscovered coverage gap, distinct from
+the flagged braking-authority Non-goal. It is not about which corridor's reading should govern
+braking -- it is that no existing corridor, watched or observational, covers a pedestrian who
+has moved outside the original lane's narrow band but remains physically reachable by the
+ego's own chosen escape path.
 
-**Evidence status: measured directly, single live session, one configuration** (25 mph, one
-TTC, one peak offset). This demonstrates the capability exists and works under favorable
-timing -- it is not yet a characterized boundary. **Caveat:** the run's own printed
-`min_ttc=0.14s` looks alarming but is straight-line distance/speed regardless of the ego's
-lateral offset, so it does not credit the swerve at all; `min_ped_distance` is the more
-meaningful number here. **Not yet done:** repeats, and a sweep across speed/TTC/peak-offset
-to find where this reverts to a forced full stop (or worse) the way the near-cross matrix
-(test6/test7/test8) already did for the "near" case.
+**Evidence status: CONFIRMED** (a real collision, independently verified two ways -- visual
+observation and an offline-tested geometric check -- across a reproducible, deterministic
+scenario). **Not done:** no fix implemented. A candidate safe direction exists (a new, purely
+additive ego-centered pedestrian-proximity check that could only ever add a hazard-brake
+trigger, never remove the original corridor's authority) but this is a real change to
+safety-relevant control logic and awaits explicit direction before implementation, consistent
+with how every other safety-relevant decision in this project has been handled.
 
 ---
 

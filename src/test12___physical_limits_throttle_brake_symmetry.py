@@ -44,6 +44,7 @@ import carla
 
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
 from math_utils import get_speed_mps
+from spectator import update_spectator_follow
 from physics_harness import (
     LOW_SPEED_ARTIFACT_THRESHOLD_MPS,
     MPH_TO_MPS,
@@ -74,7 +75,7 @@ DECEL_TARGET_MPH = 35.0  # matches test9's braking substudy for direct comparabi
 RUN_FAMILY = "throttle_brake_symmetry"
 
 
-def _run_throttle_case(*, world, bp_lib, spawn_tf, command_level, run_dir):
+def _run_throttle_case(*, world, bp_lib, spawn_tf, command_level, run_dir, spectator=None):
     case_id = f"throttle_{command_level:.2f}"
 
     bp = bp_lib.find("vehicle.tesla.model3")
@@ -96,6 +97,7 @@ def _run_throttle_case(*, world, bp_lib, spawn_tf, command_level, run_dir):
     for tick_index in range(duration_ticks):
         vehicle.apply_control(control)
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         sim_time_s += FIXED_DT
         tick = capture_tick_from_actor(
             vehicle=vehicle, tick_index=tick_index, sim_time_s=sim_time_s, requested_control=control,
@@ -108,6 +110,7 @@ def _run_throttle_case(*, world, bp_lib, spawn_tf, command_level, run_dir):
     vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
     for _ in range(MAX_STOP_TICKS):
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         if get_speed_mps(vehicle) < STOPPED_MPS:
             break
     vehicle.destroy()
@@ -158,7 +161,7 @@ def _run_throttle_case(*, world, bp_lib, spawn_tf, command_level, run_dir):
     }
 
 
-def _run_brake_case(*, world, bp_lib, spawn_tf, command_level, run_dir):
+def _run_brake_case(*, world, bp_lib, spawn_tf, command_level, run_dir, spectator=None):
     case_id = f"brake_{command_level:.2f}"
     target_mps = DECEL_TARGET_MPH * MPH_TO_MPS
 
@@ -181,6 +184,7 @@ def _run_brake_case(*, world, bp_lib, spawn_tf, command_level, run_dir):
     for tick_index in range(MAX_STOP_TICKS):
         vehicle.apply_control(control)
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         sim_time_s += FIXED_DT
         tick = capture_tick_from_actor(
             vehicle=vehicle, tick_index=tick_index, sim_time_s=sim_time_s, requested_control=control,
@@ -249,13 +253,14 @@ def main():
 
     spawn_tf = world.get_map().get_spawn_points()[SPAWN_INDEX]
     bp_lib = world.get_blueprint_library()
+    spectator = world.get_spectator()
 
     throttle_results = {}
     brake_results = {}
     try:
         for level in COMMAND_LEVELS:
             print(f"[test12] running throttle={level:.2f} from rest ...", end=" ", flush=True)
-            row = _run_throttle_case(world=world, bp_lib=bp_lib, spawn_tf=spawn_tf, command_level=level, run_dir=run_dir)
+            row = _run_throttle_case(world=world, bp_lib=bp_lib, spawn_tf=spawn_tf, command_level=level, run_dir=run_dir, spectator=spectator)
             throttle_results[level] = row
             print(
                 f"peak={row['peak_response_mps2']} mean={row['mean_response_mps2']} "
@@ -264,7 +269,7 @@ def main():
             )
         for level in COMMAND_LEVELS:
             print(f"[test12] running brake={level:.2f} from {DECEL_TARGET_MPH:.0f}mph ...", end=" ", flush=True)
-            row = _run_brake_case(world=world, bp_lib=bp_lib, spawn_tf=spawn_tf, command_level=level, run_dir=run_dir)
+            row = _run_brake_case(world=world, bp_lib=bp_lib, spawn_tf=spawn_tf, command_level=level, run_dir=run_dir, spectator=spectator)
             brake_results[level] = row
             print(
                 f"peak={row['peak_response_mps2']:.2f} mean={row['mean_response_mps2']:.2f} "

@@ -565,6 +565,47 @@ def accelerate_to_matched_entry_speed(
     return get_speed_mps(vehicle)
 
 
+def compute_forward_velocity_components(*, yaw_deg: float, speed_mps: float) -> Tuple[float, float]:
+    """World-frame (vx, vy) for a velocity of speed_mps pointed along yaw_deg.
+
+    Pure trig, offline-testable -- factored out of set_instant_entry_velocity
+    so the actual CARLA call (live-only) carries no untested math. Uses the
+    same yaw convention as carla.Rotation.yaw (degrees, CARLA's left-handed
+    world frame), matching compute_lateral_displacement_m elsewhere in this
+    module.
+    """
+    yaw_rad = math.radians(yaw_deg)
+    return speed_mps * math.cos(yaw_rad), speed_mps * math.sin(yaw_rad)
+
+
+def set_instant_entry_velocity(
+    *, world, vehicle, yaw_deg: float, target_mps: float, settle_ticks: int = 15
+) -> float:
+    """Sets the vehicle's velocity directly to target_mps along yaw_deg via
+    carla.Actor.set_target_velocity(), then ticks settle_ticks times and
+    returns the actual achieved speed.
+
+    Use this INSTEAD OF accelerate_to_matched_entry_speed() when the test
+    location does not have enough straight-line distance for a full-throttle
+    ramp -- found live (2026-09-27) that accelerate_to_matched_entry_speed
+    can cover 100+ meters reaching 90 mph, which silently carries a coasting
+    maneuver's start point far past wherever a caller checked for open space
+    around the nominal spawn. This settles to within ~1% of target_mps in
+    about 3 ticks (0.06s at 50 Hz) with a smooth ramp, not a discontinuity --
+    verified live, distinct from the physically-impossible single-tick drops
+    already documented as LOW_SPEED_ARTIFACT_THRESHOLD_MPS. Not a substitute
+    for accelerate_to_matched_entry_speed() where the throttle-achieved
+    acceleration phase itself is part of what's being measured (e.g. test9,
+    test12) -- only appropriate for coasting-only tests (steering lock,
+    rollover) where the entry speed is a precondition, not the measurement.
+    """
+    vx, vy = compute_forward_velocity_components(yaw_deg=yaw_deg, speed_mps=target_mps)
+    vehicle.set_target_velocity(carla.Vector3D(x=vx, y=vy, z=0.0))
+    for _ in range(settle_ticks):
+        world.tick()
+    return get_speed_mps(vehicle)
+
+
 def attach_collision_sensor(world, bp_lib, vehicle) -> Tuple[object, dict]:
     """Attaches a collision sensor to vehicle. Returns (sensor_actor,
     flag_dict); flag_dict["hit"] becomes True if any collision fires.

@@ -40,6 +40,7 @@ import carla
 
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
 from math_utils import get_speed_mps
+from spectator import update_spectator_follow
 from physics_harness import (
     MPH_TO_MPS,
     accelerate_to_matched_entry_speed,
@@ -76,7 +77,7 @@ LOW_SPEED_TRANSIENT_THRESHOLD_MPS = 5.0
 
 
 def _run_one_braking_case(
-    *, world, bp_lib, spawn_tf, target_mph: float, brake_level: float, run_dir: str
+    *, world, bp_lib, spawn_tf, target_mph: float, brake_level: float, run_dir: str, spectator=None
 ) -> dict:
     target_mps = target_mph * MPH_TO_MPS
 
@@ -103,6 +104,7 @@ def _run_one_braking_case(
     sim_time_s = 0.0
     for tick_index in range(MAX_TICKS):
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         sim_time_s += FIXED_DT
         tick = capture_tick_from_actor(
             vehicle=vehicle,
@@ -193,6 +195,7 @@ def main():
     spawn_points = carla_map.get_spawn_points()
     spawn_tf = spawn_points[SPAWN_INDEX]
     bp_lib = world.get_blueprint_library()
+    spectator = world.get_spectator()
 
     results = []
     try:
@@ -202,6 +205,7 @@ def main():
                 row = _run_one_braking_case(
                     world=world, bp_lib=bp_lib, spawn_tf=spawn_tf,
                     target_mph=target_mph, brake_level=brake_level, run_dir=run_dir,
+                    spectator=spectator,
                 )
                 results.append(row)
                 print(

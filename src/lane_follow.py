@@ -21,11 +21,24 @@ from lidar_utils import (
 from map_drivability import check_corridor_drivability
 from vehicle_occupancy import check_corridor_occupancy, gather_occupancy_actors
 from hazard_governance import GOVERNANCE_WIDTH_MARGIN_M
+from ego_clearance_override import (
+    compute_ego_pedestrian_distance_m,
+    is_ego_geometrically_clear_of_pedestrian,
+    is_pedestrian_behind_ego,
+)
 # hazard_governance.select_hazard_governing_distance() is intentionally NOT
 # wired in here -- see the DISABLED comment below where hazard_governing_*
 # is computed for why. The wider corroborating corridor it depends on is
 # still computed and exposed in telemetry (observational), matching this
 # week's general pattern for not-yet-trusted signals.
+
+# How many consecutive ticks the ego's ACTUAL position must be geometrically
+# clear of the pedestrian's ACTUAL position (ego_clearance_override.py)
+# before original-lane braking is suppressed. Same value/rationale as
+# HAZARD_CLEAR_TICKS_REQ below (~0.2s at dt=0.02) -- a single-tick reading
+# is not enough to trust given the sparse/false-clear failure modes already
+# found in this project's other corridor-based attempts.
+GEOMETRIC_CLEAR_TICKS_REQ = 10
 
 
 # -------------------------------------------------
@@ -99,6 +112,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                      brake_profile="proportional_ramp",  # see ScenarioConfig.brake_profile for options
                      rl_brake_override=None,  # float [0,1] set by RL agent; bypasses profile logic when not None
                      lateral_offset_m=0.0,  # signed route-relative target: +right / -left
+                     pedestrian_x_m=None,  # ground-truth pedestrian world position (meters); None = feature disabled, zero behavior change
+                     pedestrian_y_m=None,
                      ):
     """
     Lane-follow "brain" for one simulation step (meaning one tick).
@@ -495,6 +510,49 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     )
 
     # -------------------------------------------------
+    # Geometric ego-clearance override (2026-09-27, opt-in, off by default)
+    # -------------------------------------------------
+    # Original-lane braking above is blind to the ego's own actual position
+    # -- it only knows whether the original lane was EVER occupied, never
+    # whether the ego has since physically cleared the pedestrian via a
+    # verified-safe swerve (test17 finding). This suppresses hazard_active
+    # ONLY when the ego's real, current position is confirmed clear of the
+    # pedestrian's real, current position for GEOMETRIC_CLEAR_TICKS_REQ
+    # consecutive ticks -- ground truth, not a second LiDAR corridor (the
+    # mechanism that failed twice before: false clearance, then chatter).
+    # pedestrian_x_m/y_m default to None, so every existing caller that
+    # doesn't pass them gets byte-for-byte identical behavior to before.
+    if pedestrian_x_m is not None and pedestrian_y_m is not None:
+        _fwd = tf.get_forward_vector()
+        _ego_pedestrian_distance_m = compute_ego_pedestrian_distance_m(
+            ego_x_m=loc.x, ego_y_m=loc.y,
+            pedestrian_x_m=pedestrian_x_m, pedestrian_y_m=pedestrian_y_m,
+        )
+        _pedestrian_is_behind = is_pedestrian_behind_ego(
+            ego_x_m=loc.x, ego_y_m=loc.y,
+            ego_forward_x=_fwd.x, ego_forward_y=_fwd.y,
+            pedestrian_x_m=pedestrian_x_m, pedestrian_y_m=pedestrian_y_m,
+        )
+        if _pedestrian_is_behind and is_ego_geometrically_clear_of_pedestrian(distance_m=_ego_pedestrian_distance_m):
+            speed_state["geometric_clear_ticks"] = speed_state.get("geometric_clear_ticks", 0) + 1
+        else:
+            speed_state["geometric_clear_ticks"] = 0
+    else:
+        speed_state["geometric_clear_ticks"] = 0
+
+    # geometric_confirmed_clear is applied to BOTH hazard_active (below,
+    # suppresses new/continued braking) and hazard_clear (further down,
+    # lets the mode state machine actually transition HAZARD_BRAKE/STOP_HOLD
+    # -> RECOVER) -- applying it to only one of the two would leave the mode
+    # stuck in HAZARD_BRAKE with throttle force-suppressed even after
+    # brake_target has already dropped to 0, which would look like "slows
+    # down and coasts" rather than the "swerve without unnecessary braking"
+    # this override exists to demonstrate.
+    geometric_confirmed_clear = speed_state["geometric_clear_ticks"] >= GEOMETRIC_CLEAR_TICKS_REQ
+    if geometric_confirmed_clear:
+        hazard_active = False
+
+    # -------------------------------------------------
     # Simple brake ramp (optional comfort layer)
     # -------------------------------------------------
     # Goal: reduce 'on/off' / '0/1' jitter, but still allow emergency full brake close-in.
@@ -613,12 +671,12 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         hazard_clear = (
             hazard_governing_distance_m is not None and
             hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M)
-        )
+        ) or geometric_confirmed_clear
     else:
         hazard_clear = (
             (hazard_governing_distance_m is None) or
             (hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M))
-        )
+        ) or geometric_confirmed_clear
 
     # Count consecutive clear ticks (for stability)
     if hazard_clear:

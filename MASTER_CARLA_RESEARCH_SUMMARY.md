@@ -1618,6 +1618,46 @@ location in `Town04_Opt` (or elsewhere) with enough lateral clearance to actuall
 60-90 mph rollover dynamics, rather than treating "no rollover observed" from the confounded
 result as evidence of anything about that speed range.
 
+## Week 3 follow-up: open-location rollover retest answers the question the confounded result couldn't (added 2026-09-27)
+
+**What was done:** Quentin asked to revisit this specific gap and whether a different
+map/spawn point might have more room. Systematic search found Town04_Opt is guardrail-lined
+on essentially every road tried (8 locations tested across the highway loop and side streets,
+all hit a guardrail/pole within 0.6-1.6s at 60-90 mph), and Town05_Opt scored no better on an
+openness scan. Town03_Opt eventually yielded a clean location -- but no single spawn point
+was open in both turn directions, so `src/test15___physical_limits_rollover_open_location.py`
+uses two spawn points (90 for right turns, 92 for left turns, ~20 m apart, facing roughly
+opposite directions), each independently live-verified collision-free across the full target
+speed range before being used for data collection. Also introduced
+`physics_harness.set_instant_entry_velocity()` (offline-tested pure trig +
+`carla.Actor.set_target_velocity()`) in place of the throttle-ramp method for this substudy,
+since the ramp covers 100+ meters reaching 90 mph -- far more room than a short street segment
+offers, and irrelevant here since this substudy only cares about the coasting phase.
+
+**Result:** All 6 cases (60/75/90 mph x left/right) came back clean -- **zero collisions,
+zero confounds.** Every case: `rollover=not_observed_in_tested_range`, upright, no collision.
+Maximum roll across all 6 cases was 4.29 degrees (90 mph, right turn); every other case stayed
+under 1.0 degree. The 90 mph right-turn case (the highest-roll case, and a brand-new location)
+was manually repeated and reproduced exactly (max roll 4.3 deg, final roll 0.4 deg, z-range
+0.187 m, upright, no collision both times) -- not a one-off.
+
+**Evidence status: CONFIRMED** (measured directly, single live session, Town03_Opt spawns
+90/92, repeated once for the boundary case) -- across the full bounded 60-90 mph range, in
+both directions, on an unconfounded surface, this vehicle model does not approach the 45-deg
+early-stop threshold (let alone the 60-deg rollover-confirm threshold) at any tested speed.
+This is the direct answer to the advisor's original question that the Town04_Opt result could
+not provide: full-lock coasting alone, at these speeds, on this vehicle/tire model, does not
+produce rollover.
+
+**Scope caveat (important, not a footnote):** this result is on **Town03_Opt**, a different
+map from the rest of the physical-limits suite (Town04_Opt) -- surface friction, camber, and
+road geometry are not otherwise confirmed identical between maps. This finding should be
+reported as "this vehicle's rollover dynamics on Town03_Opt," not silently pooled with the
+Town04_Opt braking/steering-lock/throttle-brake findings as if map were held constant across
+the whole suite. Above 90 mph remains genuinely untested (this substudy's own predeclared
+ceiling, not escalated further); no fresh-CARLA-launch repeat yet (same outstanding gate as
+every other Workstream 2 substudy).
+
 ## Week 3 physical-limits finding: throttle and brake are NOT physically symmetric at matched [0,1] commands (added 2026-09-26)
 
 **What was observed:** `src/test12___physical_limits_throttle_brake_symmetry.py` (the fourth

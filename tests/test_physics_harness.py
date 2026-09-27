@@ -23,6 +23,7 @@ from physics_harness import (  # noqa: E402
     summarize_acceleration,
     compute_rise_time_s,
     detect_sustained_near_stop_onset_s,
+    compute_forward_velocity_components,
     LOW_SPEED_ARTIFACT_THRESHOLD_MPS,
 )
 
@@ -381,6 +382,34 @@ class InnerWheelSteerAngleTests(unittest.TestCase):
 
     def test_both_none_returns_none(self):
         self.assertIsNone(inner_wheel_steer_angle_deg(front_left_deg=None, front_right_deg=None))
+
+
+class ComputeForwardVelocityComponentsTests(unittest.TestCase):
+    def test_yaw_zero_points_along_positive_x(self):
+        vx, vy = compute_forward_velocity_components(yaw_deg=0.0, speed_mps=10.0)
+        self.assertAlmostEqual(vx, 10.0)
+        self.assertAlmostEqual(vy, 0.0, places=9)
+
+    def test_yaw_90_points_along_positive_y(self):
+        vx, vy = compute_forward_velocity_components(yaw_deg=90.0, speed_mps=10.0)
+        self.assertAlmostEqual(vx, 0.0, places=9)
+        self.assertAlmostEqual(vy, 10.0)
+
+    def test_yaw_180_points_along_negative_x(self):
+        vx, vy = compute_forward_velocity_components(yaw_deg=180.0, speed_mps=10.0)
+        self.assertAlmostEqual(vx, -10.0, places=9)
+        self.assertAlmostEqual(vy, 0.0, places=9)
+
+    def test_magnitude_matches_speed_at_arbitrary_yaw(self):
+        # Reproduces the actual spawn-90 heading found live 2026-09-27
+        # (Town03_Opt open-location rollover retest).
+        vx, vy = compute_forward_velocity_components(yaw_deg=-144.4, speed_mps=40.2)
+        self.assertAlmostEqual((vx ** 2 + vy ** 2) ** 0.5, 40.2, places=6)
+
+    def test_zero_speed_returns_zero_vector(self):
+        vx, vy = compute_forward_velocity_components(yaw_deg=37.0, speed_mps=0.0)
+        self.assertAlmostEqual(vx, 0.0, places=9)
+        self.assertAlmostEqual(vy, 0.0, places=9)
 
 
 if __name__ == "__main__":

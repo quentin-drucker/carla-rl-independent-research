@@ -1695,6 +1695,45 @@ consistent with the guardrail already found in the Week 3 rollover substudy), wh
 7.5m to the right, and 7.0m to either side, spawned cleanly. Not yet characterized further;
 relevant to any future test needing a wide lateral working area at this location.
 
+## Week 3 addition: trajectory-visualization tooling MVP (Workstream 3, added 2026-09-27)
+
+**What was added:** `src/trajectory_recording.py` (a `TraceTick`-based recorder that plugs
+into `run_scenario()`'s existing `tick_observer` hook, no changes to control logic) and
+`src/trajectory_plot.py` (pure coordinate/series-preparation functions, offline-testable
+against synthetic straight/curved trajectories, plus matplotlib rendering of a world-frame
+spatial overlay and a companion time-series panel). `TraceTick` (trace_schema.py) gained a
+`requested_lateral_offset_m` field; `lane_follow_step()` and `run_scenario()` additively
+expose pose and pedestrian position in their existing telemetry dict (reusing already-read
+CARLA state, no new API calls). See `src/test14___trajectory_visualization_mvp.py` for the
+assembled live tool.
+
+**Validation status: CONFIRMED live**, per the plan's own 3.3 success criterion. On
+Town04_Opt: 3 identical fixed-condition repeats came back bit-for-bit identical (deterministic
+sim under synchronous mode -- zero run-to-run spread is the correct/expected result here, not
+a failure to detect spread). A first positive control (pedestrian starting side only) came
+back nearly indistinguishable from baseline in the spatial plot -- found by inspecting the
+actual overlay image, not just the aggregate outcome label, per the standing rule to inspect
+traces rather than summaries. Root cause: this scripted controller has no lateral reaction to
+which side the pedestrian starts from in near-cross mode, so that variable barely perturbs
+the ego's own path -- a real but weak differentiator for this particular tool test. A second
+positive control using the already-validated evasive-swerve controller
+(`build_evasive_offset_fn`, peak_offset_m=2.5) produced a clearly, visibly distinguishable
+spatial curve (CTE mean 0.412m/max 1.735m vs. ~0.035m/0.355m baseline) and confirmed
+event-marker (trigger/hazard_activation/closest_approach/termination) placement matches the
+raw per-tick position/distance data by hand-checking the CSV.
+
+**One bug found and fixed:** event-marker text labels on the spatial overlay plot rendered on
+top of each other illegibly when multiple event types landed near the same position (the
+common case for a short straight scenario). Fixed with a fixed per-event-type vertical
+label stagger. Not fixed (cosmetic, left as follow-up): labels for the *same* event type
+across several overlaid runs that end near the same position still stack.
+
+**Known scope limitation:** route-centerline overlay is implemented and offline-tested
+(`prepare_route_reference`), but `run_scenario()` does not currently expose its internal
+`route_points_world` to a caller, so the live MVP runs above did not include a centerline
+overlay. Not required by the plan's 3.3 success criterion; left for a future pass if this
+tool sees continued use.
+
 ---
 
 # Tentative and Inconclusive Findings

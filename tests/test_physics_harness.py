@@ -23,6 +23,7 @@ from physics_harness import (  # noqa: E402
     summarize_acceleration,
     compute_rise_time_s,
     detect_sustained_near_stop_onset_s,
+    detect_low_speed_snap_events,
     compute_forward_velocity_components,
     LOW_SPEED_ARTIFACT_THRESHOLD_MPS,
 )
@@ -289,6 +290,38 @@ class DetectSustainedNearStopOnsetTests(unittest.TestCase):
 
     def test_empty_input_returns_none(self):
         self.assertIsNone(detect_sustained_near_stop_onset_s(speed_time_pairs=[], threshold_mps=0.5))
+
+
+class DetectLowSpeedSnapEventsTests(unittest.TestCase):
+    def test_no_events_below_threshold(self):
+        pairs = [(-5.0, 0.0), (-10.0, 0.02), (-27.0, 0.04)]  # normal + braking-transient magnitudes
+        self.assertEqual(detect_low_speed_snap_events(pairs), [])
+
+    def test_flags_single_extreme_tick(self):
+        # Reproduces the exact 2026-09-26 test10 finding (45mph_left_step,
+        # tick 58): speed 6.38 -> 2.02 m/s in one 0.02s tick.
+        pairs = [(-13.6, 0.92), (-12.2, 1.02), (-218.23, 1.18), (-32.6, 1.20)]
+        events = detect_low_speed_snap_events(pairs)
+        self.assertEqual(len(events), 1)
+        self.assertAlmostEqual(events[0][0], 1.18)
+        self.assertAlmostEqual(events[0][1], -218.23)
+
+    def test_flags_positive_and_negative_extremes(self):
+        pairs = [(150.0, 0.5), (-150.0, 0.6)]
+        events = detect_low_speed_snap_events(pairs)
+        self.assertEqual(len(events), 2)
+
+    def test_none_accel_is_skipped_not_a_crash(self):
+        pairs = [(None, 0.0), (-5.0, 0.02)]
+        self.assertEqual(detect_low_speed_snap_events(pairs), [])
+
+    def test_custom_threshold(self):
+        pairs = [(-27.1, 0.5)]  # the already-documented braking transient magnitude
+        self.assertEqual(detect_low_speed_snap_events(pairs), [])
+        self.assertEqual(len(detect_low_speed_snap_events(pairs, accel_threshold_mps2=20.0)), 1)
+
+    def test_empty_input_returns_empty_list(self):
+        self.assertEqual(detect_low_speed_snap_events([]), [])
 
 
 class SummarizeDecelerationTests(unittest.TestCase):

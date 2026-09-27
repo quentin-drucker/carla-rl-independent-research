@@ -49,6 +49,7 @@ import carla
 
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
 from math_utils import get_speed_mps
+from spectator import update_spectator_follow
 from physics_harness import (
     MPH_TO_MPS,
     accelerate_to_matched_entry_speed,
@@ -92,7 +93,8 @@ def _steer_command_for_tick(*, command_type: str, elapsed_s: float, direction_si
 
 
 def _run_one_case(
-    *, world, bp_lib, spawn_tf, target_mph, direction_name, direction_sign, command_type, run_dir
+    *, world, bp_lib, spawn_tf, target_mph, direction_name, direction_sign, command_type, run_dir,
+    spectator=None,
 ):
     target_mps = target_mph * MPH_TO_MPS
     case_id = f"{target_mph:.0f}mph_{direction_name}_{command_type}"
@@ -121,6 +123,7 @@ def _run_one_case(
         control = carla.VehicleControl(throttle=0.0, brake=0.0, steer=steer)
         vehicle.apply_control(control)
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         sim_time_s += FIXED_DT
         tick = capture_tick_from_actor(
             vehicle=vehicle,
@@ -141,6 +144,7 @@ def _run_one_case(
     vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0, steer=0.0))
     for _ in range(MAX_STOP_TICKS):
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         if get_speed_mps(vehicle) < STOPPED_MPS:
             break
 
@@ -247,6 +251,7 @@ def main():
     spawn_points = carla_map.get_spawn_points()
     spawn_tf = spawn_points[SPAWN_INDEX]
     bp_lib = world.get_blueprint_library()
+    spectator = world.get_spectator()
 
     results = []
     try:
@@ -257,7 +262,7 @@ def main():
             row = _run_one_case(
                 world=world, bp_lib=bp_lib, spawn_tf=spawn_tf,
                 target_mph=target_mph, direction_name=direction_name, direction_sign=direction_sign,
-                command_type=command_type, run_dir=run_dir,
+                command_type=command_type, run_dir=run_dir, spectator=spectator,
             )
             results.append(row)
             near_stop_str = f"{row['near_stop_onset_s']:.2f}s" if row['near_stop_onset_s'] is not None else "no"

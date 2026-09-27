@@ -54,6 +54,7 @@ import carla
 
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
 from map_drivability import classify_point_drivability
+from spectator import update_spectator_follow
 from physics_harness import (
     MPH_TO_MPS,
     attach_collision_sensor,
@@ -91,7 +92,7 @@ UPRIGHT_ROLL_DEG = 15.0
 RUN_FAMILY = "rollover_open_location"
 
 
-def _run_one_case(*, world, bp_lib, spawn_tf, target_mph, direction_name, direction_sign, run_dir):
+def _run_one_case(*, world, bp_lib, spawn_tf, target_mph, direction_name, direction_sign, run_dir, spectator=None):
     target_mps = target_mph * MPH_TO_MPS
     case_id = f"{target_mph:.0f}mph_{direction_name}"
 
@@ -125,6 +126,7 @@ def _run_one_case(*, world, bp_lib, spawn_tf, target_mph, direction_name, direct
             control = carla.VehicleControl(throttle=0.0, brake=0.0, steer=direction_sign * 1.0)
         vehicle.apply_control(control)
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         sim_time_s += FIXED_DT
         tick = capture_tick_from_actor(
             vehicle=vehicle, tick_index=tick_index, sim_time_s=sim_time_s, requested_control=control,
@@ -159,6 +161,7 @@ def _run_one_case(*, world, bp_lib, spawn_tf, target_mph, direction_name, direct
         control = carla.VehicleControl(throttle=0.0, brake=1.0, steer=0.0)
         vehicle.apply_control(control)
         world.tick()
+        update_spectator_follow(spectator, vehicle)
         sim_time_s += FIXED_DT
         tick = capture_tick_from_actor(
             vehicle=vehicle, tick_index=tick_index, sim_time_s=sim_time_s, requested_control=control,
@@ -251,7 +254,7 @@ def _print_row(row):
     )
 
 
-def _run_matrix(world, bp_lib, spawn_points, run_dir, repeat_suffix=""):
+def _run_matrix(world, bp_lib, spawn_points, run_dir, repeat_suffix="", spectator=None):
     results = []
     first_boundary_case = None
     for target_mph in TARGET_SPEEDS_MPH:
@@ -261,7 +264,7 @@ def _run_matrix(world, bp_lib, spawn_points, run_dir, repeat_suffix=""):
             row = _run_one_case(
                 world=world, bp_lib=bp_lib, spawn_tf=spawn_tf,
                 target_mph=target_mph, direction_name=direction_name,
-                direction_sign=loc_cfg["direction_sign"], run_dir=run_dir,
+                direction_sign=loc_cfg["direction_sign"], run_dir=run_dir, spectator=spectator,
             )
             row["case_id"] += repeat_suffix
             results.append(row)
@@ -281,10 +284,11 @@ def main():
     carla_map = world.get_map()
     spawn_points = carla_map.get_spawn_points()
     bp_lib = world.get_blueprint_library()
+    spectator = world.get_spectator()
 
     all_results = []
     try:
-        results, first_boundary_case = _run_matrix(world, bp_lib, spawn_points, run_dir)
+        results, first_boundary_case = _run_matrix(world, bp_lib, spawn_points, run_dir, spectator=spectator)
         all_results.extend(results)
 
         if first_boundary_case is not None:
@@ -297,7 +301,7 @@ def main():
             repeat_row = _run_one_case(
                 world=world, bp_lib=bp_lib, spawn_tf=spawn_points[loc_cfg["spawn_index"]],
                 target_mph=target_mph, direction_name=direction_name,
-                direction_sign=loc_cfg["direction_sign"], run_dir=run_dir,
+                direction_sign=loc_cfg["direction_sign"], run_dir=run_dir, spectator=spectator,
             )
             repeat_row["case_id"] += "_repeat"
             all_results.append(repeat_row)

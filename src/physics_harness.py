@@ -50,6 +50,23 @@ WHEEL_SLIP_SIGNAL_AVAILABLE = False
 # this as a general "low-speed artifact zone" for this vehicle model and
 # exclude it from any derivative/heading-based metric by default, rather
 # than re-discovering it per test family.
+#
+# Third occurrence, and a resolved mystery (2026-09-27): the same test10
+# matrix's "near_stop_onset" timing looked asymmetric between left/right
+# turns at the same speed (e.g. 45mph_left_step stopped early, 45mph_right_
+# step never did). detect_low_speed_snap_events(), run across all 12 traces,
+# found this is fully explained by the same snap phenomenon occurring in 4
+# of the 5 early-stop cases, at DIFFERENT residual speeds (4.56-7.82 m/s)
+# and in BOTH directions (3 left, 1 right) -- ruling out a fixed speed
+# threshold and a real left/right vehicle-dynamics bias. The two directions'
+# trajectories are numerically near-identical mirror images right up to the
+# tick before one of them snaps, consistent with a sharp, narrow-window tire/
+# vehicle-model transition that a trajectory either crosses or narrowly
+# avoids depending on its exact evolving state -- not a systematic asymmetry.
+# The 5th early-stop case (15mph_left_step) showed NO snap event at all; it
+# simply lacked enough speed to stay above the near-stop threshold for the
+# full 5s window under ordinary cornering drag -- a second, unrelated and
+# unremarkable mechanism, not a third variant of the snap.
 LOW_SPEED_ARTIFACT_THRESHOLD_MPS = 5.0
 
 
@@ -247,6 +264,38 @@ def detect_sustained_near_stop_onset_s(
         if speed >= threshold_mps:
             return pairs[i + 1][1] if i + 1 < len(pairs) else None
     return pairs[0][1]  # every sample was already below threshold
+
+
+def detect_low_speed_snap_events(
+    accel_time_pairs, *, accel_threshold_mps2: float = 100.0
+):
+    """Flags ticks where |accel_mps2| exceeds accel_threshold_mps2 -- a
+    single-tick deceleration/acceleration magnitude no real vehicle can
+    produce (100 m/s^2 is roughly 10g; the default is set well above the
+    milder ~27 m/s^2 low-speed braking transient already characterized by
+    summarize_deceleration(), so this flags the more extreme, distinct
+    "snap" phenomenon rather than double-counting that one).
+
+    Built to programmatically confirm a pattern found by hand while
+    investigating why test10's steering-lock matrix hit `near_stop_onset`
+    asymmetrically between left/right at the same speed (2026-09-27): the
+    two cases inspected directly (45mph_left_step, 45mph_right_ramp) each
+    showed a SINGLE 0.02s tick with accel around -167 to -218 m/s^2 (>15g),
+    at DIFFERENT residual speeds (6.38 m/s and 4.68 m/s) and in BOTH
+    steering directions -- ruling out both "a fixed speed threshold" and "a
+    left/right vehicle-dynamics asymmetry" as the explanation. Returns the
+    list of (sim_time_s, accel_mps2) pairs for every tick that crosses the
+    threshold, so a caller can confirm how many events occurred and when,
+    rather than just a yes/no flag.
+
+    accel_time_pairs: iterable of (accel_mps2, sim_time_s) tuples; accel_mps2
+    may be None (first tick of a run) and is skipped.
+    """
+    events = []
+    for accel_mps2, sim_time_s in accel_time_pairs:
+        if accel_mps2 is not None and abs(accel_mps2) > accel_threshold_mps2:
+            events.append((sim_time_s, accel_mps2))
+    return events
 
 
 @dataclass

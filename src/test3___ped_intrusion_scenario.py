@@ -702,6 +702,18 @@ def run_scenario(
             if telemetry is not None:
                 telemetry["jerk_mps3"]  = _jerk if triggered else float("nan")
                 telemetry["ttc_s"]      = _ttc_this_tick if _ttc_this_tick != float("inf") else float("nan")
+                # Pedestrian world position -- added for Week 3 Workstream 3
+                # (trajectory-visualization tooling). walker.get_location() is
+                # already called elsewhere in this loop for TTC/collision
+                # checks; this is one more read of the same actor, not a new
+                # dependency.
+                if walker is not None:
+                    _ped_loc_tel = walker.get_location()
+                    telemetry["pedestrian_x_m"] = _ped_loc_tel.x
+                    telemetry["pedestrian_y_m"] = _ped_loc_tel.y
+                else:
+                    telemetry["pedestrian_x_m"] = None
+                    telemetry["pedestrian_y_m"] = None
 
             if tick_observer is not None:
                 tick_observer(sim_time_s, triggered, telemetry)

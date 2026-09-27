@@ -80,6 +80,12 @@ class TraceTick:
     applied_throttle: Optional[float] = None
     applied_brake: Optional[float] = None
     applied_steer: Optional[float] = None
+    # Signed route-relative lateral offset commanded by the controller this
+    # tick (route-right-positive), distinct from applied_steer -- the plan's
+    # Workstream 3.1 lists these as two separate quantities: a controller's
+    # high-level lateral TARGET vs. the low-level steer angle used to chase
+    # it. None outside a scenario run with an active lateral_offset_fn.
+    requested_lateral_offset_m: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Lateral quantities

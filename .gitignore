@@ -14,6 +14,11 @@ previous_src_tests/test3_rare_hazard_scenario/runs/*/run_*/
 # keep code, compact summaries, and findings in worklogs/PRs, not raw traces.
 src/runs/physics/
 
+# Raw per-tick trajectory traces + rendered plots (Week 3 trajectory
+# visualization tooling) -- same reasoning, keep the tool and findings, not
+# raw run data/images.
+src/runs/trajectory_viz/
+
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 

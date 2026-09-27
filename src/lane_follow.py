@@ -32,7 +32,9 @@ from swept_path_clearance import (
     DEFAULT_PATH_CLEAR_MARGIN_M,
     PATH_COMMIT_THRESHOLD_M,
     build_ego_rooted_path_xy,
+    classify_swept_path_lidar_observation,
     pedestrian_clearance_from_swept_path_m,
+    update_active_path_authority,
     update_swept_path_clearance_decision,
 )
 # hazard_governance.select_hazard_governing_distance() is intentionally NOT
@@ -53,6 +55,7 @@ GEOMETRIC_CLEAR_TICKS_REQ = 10
 # and actual lateral motion. Five ticks (0.10s at dt=0.02) still rejects a
 # one-frame blip without consuming the very small window before a full stop.
 SWEPT_PATH_CLEAR_TICKS_REQ = 5
+ACTIVE_PATH_COMMIT_TICKS_REQ = 5
 
 
 # -------------------------------------------------
@@ -128,6 +131,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                      lateral_offset_m=0.0,  # signed route-relative target: +right / -left
                       pedestrian_x_m=None,  # ground-truth pedestrian world position (meters); None = feature disabled, zero behavior change
                       pedestrian_y_m=None,
+                      use_geometric_clearance_override=False,
                       use_swept_path_clearance_override=False,
                       ):
     """
@@ -554,14 +558,12 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # -------------------------------------------------
     # Ego-rooted swept-path experiment (opt-in, off by default)
     # -------------------------------------------------
-    # The swept-path LiDAR signal is additive: an obstacle on the actually
-    # intended path can activate braking even after it leaves the original
-    # lane corridor (test16's coverage gap). For the controlled pedestrian
-    # scenarios only, original-lane braking may be released after the known
-    # pedestrian is positively clear of that same path, and only while the
-    # path is committed, drivable, unoccupied by another vehicle, and its
-    # own LiDAR tube is clear. This is not yet a general object tracker;
-    # pedestrian ground truth is still an explicit experimental limitation.
+    # Before path commitment, swept LiDAR is additive so an obstacle on the
+    # intended maneuver cannot be missed while the original route still owns
+    # braking (test16's coverage gap). The stable authority decision below
+    # then makes the swept path exclusive for the rest of the maneuver. This
+    # is not yet a general object tracker; pedestrian ground truth remains an
+    # explicit experimental limitation for authorizing that handoff.
     if use_swept_path_clearance_override and d_min_ego_swept_path_m is not None:
         if (
             hazard_governing_distance_m is None
@@ -615,6 +617,47 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         hazard_governing_distance_m = d_min_ego_swept_path_m
         hazard_governing_source = "ego_swept_clear"
 
+    # Stable single-path authority handoff. The original route governs until
+    # the ego has genuinely entered a pedestrian-clear maneuver path. After
+    # commitment, only the ego-rooted intended path governs; an obstacle on
+    # that path is therefore handled at its own swept-LiDAR distance instead
+    # of keeping an unrelated original-lane pedestrian active.
+    active_path_authority = update_active_path_authority(
+        authority_was_active=(
+            speed_state.get("active_braking_path") == "ego_swept"
+        ),
+        previous_commit_ticks=speed_state.get("active_path_commit_ticks", 0),
+        required_commit_ticks=ACTIVE_PATH_COMMIT_TICKS_REQ,
+        requested_lateral_offset_m=requested_lateral_offset_m,
+        actual_lateral_offset_m=signed_route_lateral_offset_m,
+        pedestrian_clearance_m=swept_path_clearance_m,
+        pedestrian_clearance_required=(
+            pedestrian_x_m is not None and pedestrian_y_m is not None
+        ),
+        path_drivability_status=(
+            transition_path_drivability.get("status")
+            if transition_path_drivability is not None
+            else None
+        ),
+    )
+    speed_state["active_path_commit_ticks"] = (
+        active_path_authority.consecutive_commit_ticks
+    )
+    speed_state["active_braking_path"] = (
+        "ego_swept" if active_path_authority.active else "original"
+    )
+    if use_swept_path_clearance_override and active_path_authority.active:
+        hazard_governing_distance_m = d_min_ego_swept_path_m
+        hazard_governing_source = "ego_swept_active"
+        hazard_active = (
+            d_min_ego_swept_path_m is not None
+            and d_min_ego_swept_path_m < trigger_distance_m
+        )
+
+    swept_path_lidar_status = classify_swept_path_lidar_observation(
+        d_min_ego_swept_path_m, trigger_distance_m
+    )
+
     # -------------------------------------------------
     # Geometric ego-clearance override (2026-09-27, opt-in, off by default)
     # -------------------------------------------------
@@ -628,7 +671,11 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # mechanism that failed twice before: false clearance, then chatter).
     # pedestrian_x_m/y_m default to None, so every existing caller that
     # doesn't pass them gets byte-for-byte identical behavior to before.
-    if pedestrian_x_m is not None and pedestrian_y_m is not None:
+    if (
+        use_geometric_clearance_override
+        and pedestrian_x_m is not None
+        and pedestrian_y_m is not None
+    ):
         _fwd = tf.get_forward_vector()
         _ego_pedestrian_distance_m = compute_ego_pedestrian_distance_m(
             ego_x_m=loc.x, ego_y_m=loc.y,
@@ -1007,9 +1054,15 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "d_min_transition_path_m": d_min_transition_path_m,
         "d_min_transition_path_wide_m": d_min_transition_path_wide_m,
         "d_min_ego_swept_path_m": d_min_ego_swept_path_m,
+        "ego_swept_path_lidar_status": swept_path_lidar_status,
+        "active_braking_path": speed_state.get("active_braking_path", "original"),
+        "active_path_commit_ticks": speed_state.get("active_path_commit_ticks", 0),
         "swept_path_clearance_m": swept_path_clearance_m,
         "swept_path_clear_now": swept_path_clear_now,
         "swept_path_confirmed_clear": swept_path_confirmed_clear,
+        # Diagnostic geometry used by parked-car validation; consumers must
+        # not treat this path object itself as a control signal.
+        "ego_swept_path_points_xy": ego_swept_path_points_xy,
         "commanded_path_drivability": commanded_path_drivability,
         "transition_path_drivability": transition_path_drivability,
         "commanded_path_occupancy": commanded_path_occupancy,

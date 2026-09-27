@@ -43,11 +43,17 @@ if carla_pythonapi_carla not in sys.path:
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 
 from math_utils import get_speed_mps, mps_to_mph
-from lidar_utils import draw_lidar_points, draw_lane_noodle_corridor
+from lidar_utils import (
+    draw_lidar_points,
+    draw_lane_noodle_corridor,
+    lidar_return_height_stats_near_world_target,
+    lidar_return_path_projection_stats_near_world_target,
+)
 from spawning import prepare_spawn_context, spawn_ego_vehicle
 from lidar_sensor import attach_lidar_sensor
 from loop_utils import get_latest_lidar_frame
 from lane_follow import lane_follow_step
+from swept_path_clearance import point_to_polyline_distance_m
 from hazard_governance import is_original_corridor_confirmed_clear
 from run_stats import init_run_stats, update_run_stats, print_run_summary
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
@@ -715,6 +721,26 @@ def run_scenario(
                 _geo_pedestrian_x_m = _ped_loc3.x
                 _geo_pedestrian_y_m = _ped_loc3.y
 
+            # Ground-truth position of the stationary "other vehicle" blocker
+            # (if spawned) -- read once per tick since it never moves.
+            # Purely observational (test/telemetry only, same pattern as
+            # pedestrian_x_m/y_m above); does not feed any control decision.
+            _other_vehicle_x_m = None
+            _other_vehicle_y_m = None
+            _other_vehicle_lidar_height_stats = None
+            if other_vehicle is not None:
+                _other_vehicle_loc = other_vehicle.get_location()
+                _other_vehicle_x_m = _other_vehicle_loc.x
+                _other_vehicle_y_m = _other_vehicle_loc.y
+                _other_vehicle_lidar_height_stats = (
+                    lidar_return_height_stats_near_world_target(
+                        lidar,
+                        lidar_frame,
+                        target_x_m=_other_vehicle_x_m,
+                        target_y_m=_other_vehicle_y_m,
+                    )
+                )
+
             # --- Controller step ---
             telemetry = lane_follow_step(
                 world, vehicle,
@@ -734,6 +760,7 @@ def run_scenario(
                 lateral_offset_m=requested_lateral_offset_m,
                 pedestrian_x_m=_geo_pedestrian_x_m,
                 pedestrian_y_m=_geo_pedestrian_y_m,
+                use_geometric_clearance_override=use_geometric_clearance_override,
                 use_swept_path_clearance_override=use_swept_path_clearance_override,
             )
 
@@ -761,6 +788,34 @@ def run_scenario(
                 else:
                     telemetry["pedestrian_x_m"] = None
                     telemetry["pedestrian_y_m"] = None
+                telemetry["other_vehicle_x_m"] = _other_vehicle_x_m
+                telemetry["other_vehicle_y_m"] = _other_vehicle_y_m
+                telemetry["other_vehicle_lidar_height_stats"] = (
+                    _other_vehicle_lidar_height_stats
+                )
+                telemetry["other_vehicle_lidar_path_projection_stats"] = None
+                telemetry["other_vehicle_center_to_swept_path_m"] = None
+                if (
+                    _other_vehicle_x_m is not None
+                    and _other_vehicle_y_m is not None
+                    and telemetry.get("ego_swept_path_points_xy")
+                ):
+                    telemetry["other_vehicle_lidar_path_projection_stats"] = (
+                        lidar_return_path_projection_stats_near_world_target(
+                            lidar,
+                            lidar_frame,
+                            telemetry["ego_swept_path_points_xy"],
+                            target_x_m=_other_vehicle_x_m,
+                            target_y_m=_other_vehicle_y_m,
+                            tube_half_width_m=(1.082 + 0.25),
+                        )
+                    )
+                    telemetry["other_vehicle_center_to_swept_path_m"] = (
+                        point_to_polyline_distance_m(
+                            (_other_vehicle_x_m, _other_vehicle_y_m),
+                            telemetry["ego_swept_path_points_xy"],
+                        )
+                    )
 
             if tick_observer is not None:
                 tick_observer(sim_time_s, triggered, telemetry)

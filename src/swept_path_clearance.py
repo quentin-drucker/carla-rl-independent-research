@@ -23,6 +23,23 @@ class SweptPathClearanceDecision:
     confirmed_clear: bool
 
 
+@dataclass(frozen=True)
+class ActivePathAuthorityDecision:
+    """Stable handoff from the original route to the maneuver path."""
+
+    active: bool
+    consecutive_commit_ticks: int
+
+
+def classify_swept_path_lidar_observation(distance_m, trigger_distance_m: float) -> str:
+    """Separate sensor detection from the speed-dependent braking decision."""
+    if distance_m is None:
+        return "no_return"
+    if distance_m < trigger_distance_m:
+        return "hazard"
+    return "detected_beyond_trigger"
+
+
 def _xy(point):
     if hasattr(point, "x") and hasattr(point, "y"):
         return float(point.x), float(point.y)
@@ -100,6 +117,74 @@ def is_swept_path_confirmed_clear(
 ) -> bool:
     """True when measured swept-path clearance meets the safety margin."""
     return clearance_m >= required_margin_m
+
+
+def update_active_path_authority(
+    *,
+    authority_was_active: bool,
+    previous_commit_ticks: int,
+    required_commit_ticks: int,
+    requested_lateral_offset_m: float,
+    actual_lateral_offset_m: float,
+    pedestrian_clearance_m,
+    pedestrian_clearance_required: bool,
+    path_drivability_status,
+    required_margin_m: float = DEFAULT_PATH_CLEAR_MARGIN_M,
+    commit_threshold_m: float = PATH_COMMIT_THRESHOLD_M,
+    actual_motion_threshold_m: float = ACTUAL_MOTION_THRESHOLD_M,
+) -> ActivePathAuthorityDecision:
+    """Choose one braking path after a safe maneuver-path commitment.
+
+    Before commitment, the original route retains braking authority. Once the
+    intended swept path has been physically entered and is geometrically clear
+    of the original pedestrian for several ticks, that swept path becomes the
+    sole braking path until the lateral maneuver request ends.
+
+    Vehicle occupancy and swept-path LiDAR are intentionally *not* commitment
+    gates. They describe hazards on the new active path and must be handled by
+    that path's own distance signal; otherwise a parked car on the new path
+    incorrectly preserves braking authority for an unrelated old-lane hazard.
+    """
+    if previous_commit_ticks < 0 or required_commit_ticks <= 0:
+        raise ValueError("commit tick counts must be non-negative/positive")
+
+    maneuver_requested = abs(requested_lateral_offset_m) > commit_threshold_m
+    if not maneuver_requested:
+        return ActivePathAuthorityDecision(active=False, consecutive_commit_ticks=0)
+
+    # Do not reconsider the source every tick after handoff. The earlier
+    # corridor-governance experiment visibly chattered because it did exactly
+    # that. Authority lasts until the maneuver request returns to center.
+    if authority_was_active:
+        return ActivePathAuthorityDecision(
+            active=True,
+            consecutive_commit_ticks=max(previous_commit_ticks, required_commit_ticks),
+        )
+
+    tracking_requested_direction = (
+        abs(actual_lateral_offset_m) > actual_motion_threshold_m
+        and requested_lateral_offset_m * actual_lateral_offset_m > 0.0
+    )
+    pedestrian_clear = (
+        not pedestrian_clearance_required
+        or (
+            pedestrian_clearance_m is not None
+            and is_swept_path_confirmed_clear(
+                clearance_m=pedestrian_clearance_m,
+                required_margin_m=required_margin_m,
+            )
+        )
+    )
+    commit_ready = (
+        tracking_requested_direction
+        and pedestrian_clear
+        and path_drivability_status == "drivable"
+    )
+    consecutive_commit_ticks = previous_commit_ticks + 1 if commit_ready else 0
+    return ActivePathAuthorityDecision(
+        active=consecutive_commit_ticks >= required_commit_ticks,
+        consecutive_commit_ticks=consecutive_commit_ticks,
+    )
 
 
 def update_swept_path_clearance_decision(

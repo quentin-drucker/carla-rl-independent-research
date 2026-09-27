@@ -2128,6 +2128,120 @@ instead exposing the swept-path LiDAR clearance and map-drivability signals as
 trust them, rather than continuing to hand-code an override rule in `lane_follow.py`.
 This is a design decision for the eventual expanded `carla_aeb_env.py`, not yet made.
 
+## Design artifact: tightening lateral constraints (Week 3 Workstream 1.3, added 2026-09-27)
+
+**Status: deliberately NOT implemented.** Per the Week 3 plan's own gate for this item
+("if the intended behavior remains ambiguous, keep this as a design artifact and do not
+guess in control code"), this section is the required design pass, not a spec for code
+written this week. No `lane_follow.py` changes accompany this entry.
+
+### The advisor's idea, as given (2026-09-15)
+
+> "think about how constraints are in play for steering; should it be unconstrained at
+> first but the lateral steer constraints close in as the pedestrian/hazard gets in view
+> so as to not run off the road or maybe so it can not over swerve and run off the road?"
+
+The Week 3 plan already flagged the core ambiguity directly: **"clarify whether
+constraints should tighten because time is running out, widen because urgency is
+increasing, or constrain rate while preserving an already committed maneuver."** Working
+through those three readings against this project's own already-measured evidence (not
+speculation) shows they are not just differently worded -- they prescribe different, and
+in one case directly opposed, controller behavior.
+
+### Three candidate formalizations
+
+All three share the same inputs the plan specifies -- speed, hazard distance/TTC, current
+offset, remaining drivable space (`map_drivability.py`, merged Week 2) and remaining
+unoccupied space (`vehicle_occupancy.py`, merged this week, PR #9) -- and differ only in
+how the allowed lateral target range responds to shrinking TTC.
+
+**A. Tighten as TTC shrinks** (allowed |offset| range shrinks as the hazard nears).
+Rationale: less time before impact means less time to execute and recover from a large
+swerve, and a late, aggressive swerve has a measured real cost -- test10 (this week, PR
+#6) found full-lock steering at speed can bring the vehicle to a near-stop within 1-2
+seconds purely from cornering drag, with body slip angle growing to 20-40 degrees in
+sustained turns. Reading Izmirli's own words literally ("constraints... close in... so
+as to not... over swerve"), this is the most direct interpretation.
+**Problem:** it can remove exactly the capability needed exactly when it is needed most.
+This project's own steering-plus-braking matrix (Week 2, PR #3) already found that
+`steering_only` never fully avoided a pedestrian without eventually invoking a last-resort
+stop -- a modest, bounded swerve was already not enough authority in several tested
+configurations. Shrinking the bound further as danger increases would make that worse,
+not better, in exactly the cases where a swerve is the last real option before impact.
+
+**B. Widen as TTC shrinks** (allowed |offset| range grows as the hazard nears).
+Rationale: as the situation becomes more certain and more dangerous, the controller
+should be given MORE lateral authority, not less, since a modest fixed offset already
+measured poorly: the Week 2 offset-magnitude sweep (`test8`, 2026-09-18) found that
+increasing the requested peak offset from 1.0m to 2.5m (2.5x larger) improved real minimum
+pedestrian clearance only from 3.50m to 3.90m, because total 3D clearance is dominated by
+the roughly offset-independent longitudinal braking gap, with lateral offset contributing
+only under a square root. Widening the bound near the hazard could let the controller draw
+on more of that limited lever exactly when the longitudinal gap is smallest.
+**Problem:** this is the reading Izmirli's own sentence argues against most directly
+("close in", not "open up"), and a widening bound with no other constraint is exactly the
+shape of rule that produces the outcome he explicitly said he wants to avoid ("run off the
+road" / "over swerve") if it is not simultaneously capped by remaining drivable and
+unoccupied space.
+
+**C. Constrain the RATE of change, not the offset magnitude, especially once a lateral
+target is already committed.**
+Rationale: this reframes "constraint" as being about smoothness/commitment rather than a
+shrinking or growing envelope on the final target. This project has already hit the
+concrete failure mode this reading targets, twice, independently, this semester:
+- The 2026-09-18 recovery-oscillation bug: a flickering "hazard clear" signal near a
+  stationary pedestrian let the recovery controller re-arm and reverse a committed
+  maneuver mid-execution (`request` bounced `+2.50 -> +0.36 -> +2.50m`), fixed by requiring
+  a sustained-clear window rather than a single-tick read.
+- The 2026-09-18 braking-governance-chatter regression (the hardened retry above): rapid
+  tick-to-tick switching of which corridor governed braking caused real instability
+  (`recovered` dropped 4/12 -> 1/12, jerk nearly doubled) despite fixing the danger it was
+  built to address.
+Both were fixed by adding *hysteresis to a decision*, not by changing the decision's
+target value -- exactly what interpretation C proposes as a general principle: once
+committed to a lateral target, changing that commitment should become harder as time runs
+out, independent of whether the target's own numeric magnitude should grow or shrink.
+
+### Cross-reference: this may be the same question as Workstream 4.1
+
+The advisor-backlog memory already records a near-identical open question from the
+Sep 22 meeting, filed under the *separate* per-tick-vs-macro-actions topic (Workstream
+4.1): "Ask Izmirli what failure mode he had in mind when he questioned per-tick decisions:
+unstable action switching, inability to commit early enough, poor credit assignment, or
+physical irreversibility once a maneuver starts." "Unstable action switching" and
+"inability to commit early enough" are, in substance, the same concern as interpretation C
+above. It is plausible Izmirli's tightening-constraint idea (1.3) and his per-tick-action
+skepticism (4.1) are the same underlying worry -- that a frame-by-frame controller can
+change its mind too easily -- expressed twice in two different framings a week apart,
+rather than two independent design questions. Worth surfacing to him as one combined
+question rather than two separate ones.
+
+### Recommendation
+
+**Do not implement any of A, B, or C in control code this week.** They are not just
+differently worded; A and B prescribe opposite bound directions, and C targets a different
+mechanism (rate/commitment) entirely. Guessing which one Izmirli meant and hand-coding it
+risks the same pattern already seen twice on this branch this semester: a plausible-looking
+fix that passes its own targeted check but introduces a different regression the broader
+matrix catches later (see the braking-authority open question above -- the parallel is
+direct).
+
+**Specific question to bring back to Izmirli** (combining this with the 4.1 question above
+into one conversation): *"When you said the lateral constraint should close in as the
+hazard comes into view, did you mean (a) the maximum allowed swerve distance should
+shrink as time-to-collision drops, (b) it should grow, or (c) once the car has committed to
+a swerve direction, it shouldn't be allowed to change its mind or reverse that commitment
+as time runs out -- and is this the same concern as when you questioned whether per-tick
+decisions could handle a committed maneuver?"*
+
+**If/when disambiguated:** whichever interpretation Izmirli confirms should still go
+through the same validation discipline used for every other control change this project
+has made this semester -- explicit monotonic/boundary test cases written offline first,
+one focused live positive and one focused live negative case, then the full validation
+matrix, inspecting traces rather than trusting aggregate outcome labels alone. This design
+artifact intentionally stops short of writing that specification, since committing to
+concrete boundary values for an ambiguous rule would itself be guessing.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

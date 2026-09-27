@@ -859,4 +859,14 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
 
         # Braking profile in use (for sweep CSV / comparison plots)
         "brake_profile": brake_profile,
+
+        # World-frame pose, reusing the `tf` already read above -- added for
+        # Week 3 Workstream 3 (trajectory-visualization tooling), which needs
+        # a controller-independent per-tick pose record. No new CARLA calls.
+        "pos_x_m": loc.x,
+        "pos_y_m": loc.y,
+        "pos_z_m": loc.z,
+        "yaw_deg": tf.rotation.yaw,
+        "pitch_deg": tf.rotation.pitch,
+        "roll_deg": tf.rotation.roll,
     }

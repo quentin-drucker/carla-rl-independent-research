@@ -1881,6 +1881,48 @@ trigger, never remove the original corridor's authority) but this is a real chan
 safety-relevant control logic and awaits explicit direction before implementation, consistent
 with how every other safety-relevant decision in this project has been handled.
 
+### Week 3 experimental follow-up: ego-rooted swept-path prototype (added 2026-09-27)
+
+An opt-in prototype now evaluates one intended swept path rooted at the ego's exact current
+position. Its LiDAR query uses arc length along that path, not Euclidean roof-sensor distance,
+and does not apply the older sensor-local forward-X gate. It is additive for hazards: a return
+inside the swept tube can trigger braking even when the original-route corridor misses it.
+For the controlled pedestrian scenarios only, it can also release irrelevant original-lane
+braking after five consecutive ticks where the known pedestrian is geometrically clear of the
+same path, the map reports the path drivable, no other vehicle occupies it, and the swept LiDAR
+tube contains no hazard. This is off by default and does not replace existing behavior.
+
+The contact oracle was also corrected for these experiments: a new oriented-rectangle-vs-circle
+check uses the Tesla's actual half-length, half-width, and yaw instead of applying its half-length
+as a circular radius in every direction. This resolved the earlier ambiguity around a lateral
+1.68m center separation: the old circular oracle could label such a lateral pass as contact even
+though width-aware geometry gives about 0.30m edge clearance.
+
+Focused live evidence is promising but preliminary:
+
+- Test18's buffered positive case requested a 1.982m offset (0.60m planned margin) with a 0.5s
+  smooth shift. Two consecutive live runs both avoided a full stop, completed lane recovery,
+  recorded zero oriented-contact ticks, and reported 2.20m minimum pedestrian center distance.
+- Test18's deliberately undersized 0.5m case never confirmed swept-path clearance, safely
+  full-stopped 6.30m from the pedestrian, and recorded zero oriented-contact ticks.
+- Test19 repeated test16's historically unsafe 1.5m far-cross path with the prototype enabled.
+  It recorded 125 swept-path LiDAR hazard ticks, zero oriented-contact ticks, and 7.69m minimum
+  center distance, ending `slowed_avoided` rather than colliding. It did not complete lane
+  recovery within the five-second post-crossing tail, so recovery remains unresolved.
+- The full offline suite passed 205 tests after these changes.
+
+Quentin subsequently ran and watched test18 and test19 himself. He visually confirmed the same
+behavior: test18's wide swerve cleared and continued, its undersized swerve retained braking,
+and test19 continued braking while the ego was outside the original corridor. This independent
+visual check is important because CARLA's collision event previously missed a real test16 hit.
+
+This is **not yet a general dynamic-obstacle solution**. Braking release still uses the scripted
+pedestrian's ground-truth position as positive clearance evidence; raw LiDAR supplies the
+additive hazard/veto signal but does not yet maintain persistent, actor-independent tracks.
+The live sample is also small. The next architectural step is temporal LiDAR clustering/tracking
+with uncertainty through missing frames, followed by repeated live validation and investigation
+of test19's delayed recovery.
+
 ---
 
 # Tentative and Inconclusive Findings

@@ -34,9 +34,7 @@ from scenario_config import ScenarioConfig
 from test3___ped_intrusion_scenario import run_scenario
 from test5___scripted_pedestrian_steering import build_evasive_offset_fn
 from reactive_avoidance import compute_required_clearance_offset_m
-from pedestrian_contact import compute_ego_pedestrian_contact_radius_m, detect_contact_ticks
-
-CONTACT_RADIUS_M = compute_ego_pedestrian_contact_radius_m()
+from pedestrian_contact import detect_oriented_contact_ticks
 
 
 def _make_observer():
@@ -48,8 +46,13 @@ def _make_observer():
             positions["pedestrian"].append(None)
             return
         px, py = telemetry.get("pos_x_m"), telemetry.get("pos_y_m")
+        yaw_deg = telemetry.get("yaw_deg")
         pdx, pdy = telemetry.get("pedestrian_x_m"), telemetry.get("pedestrian_y_m")
-        positions["ego"].append((px, py) if px is not None else None)
+        positions["ego"].append(
+            (px, py, yaw_deg)
+            if px is not None and py is not None and yaw_deg is not None
+            else None
+        )
         positions["pedestrian"].append((pdx, pdy) if pdx is not None else None)
 
     return observer, positions
@@ -88,8 +91,8 @@ def _run_case(*, label, peak_offset_m):
         post_crossing_settle_s=30.0,
     )
 
-    contact_ticks = detect_contact_ticks(
-        positions["ego"], positions["pedestrian"], contact_radius_m=CONTACT_RADIUS_M
+    contact_ticks = detect_oriented_contact_ticks(
+        positions["ego"], positions["pedestrian"]
     )
 
     print(f"  CARLA collision_detected: {result.collision_detected}")

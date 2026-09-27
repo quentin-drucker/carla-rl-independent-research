@@ -1545,8 +1545,8 @@ consistently ~2.64-2.66 m, essentially independent of entry speed and direction.
 through a full-lock turn also produced severe speed loss from cornering drag alone: 5 of 12
 cases scrubbed off effectively all speed within 1.2-1.7 s of applying full lock, well before
 the 5 s maneuver window ended (this timing was NOT symmetric between left and right at the
-same speed/command in this single session -- flagged as needing a fresh-launch repeat, not
-yet treated as a real directional asymmetry). Body slip angle (velocity heading vs. yaw --
+same speed/command in this single session -- **since resolved, not a real directional
+asymmetry, see the 2026-09-27 follow-up below**). Body slip angle (velocity heading vs. yaw --
 a measurable whole-body kinematic quantity) grew progressively during sustained turns,
 reaching 20-29° in the cases that did not stop early.
 
@@ -1583,6 +1583,51 @@ any future steering-plus-braking action space: a policy that swerves hard withou
 managing throttle/brake will lose speed rapidly as an emergent consequence of this vehicle
 model, not because of any explicit penalty. **Next:** repeat across a fresh CARLA launch;
 rollover (2.3) and throttle/brake symmetry (2.5) substudies remain unstarted.
+
+## Week 3 follow-up: the steering-lock near-stop asymmetry is a resolved artifact, not a directional bias (added 2026-09-27)
+
+**What was done:** Quentin asked to revisit unexplained gaps from earlier Week 3 work rather
+than move on. Inspected the existing test10 traces (no live CARLA needed) tick-by-tick for
+the starkest asymmetric pair, 45mph_left_step vs. 45mph_right_step: both cases track
+numerically identically (same speed, mirror-image yaw) through 1.02s, then diverge sharply --
+left's speed drops from 7.89 to 0.94 m/s within 8 ticks while right decays smoothly and never
+approaches near-stop in the 5s window. The exact divergence tick showed speed going 6.38 ->
+2.02 m/s in ONE 0.02s tick (-218 m/s^2, >20g) -- the same tick already documented in
+`physics_harness.py` as a low-speed artifact, initially just re-found rather than new.
+
+Built `physics_harness.detect_low_speed_snap_events()` (pure, offline-tested, flags any tick
+with |accel_mps2| > 100 -- well above the milder ~27 m/s^2 low-speed braking transient already
+characterized separately) and ran it across **all 12** existing test10 traces, not just the
+2 inspected by hand.
+
+**Result:** The detector found this snap event in exactly 4 of the 12 cases -- matching 4 of
+the original 5 `near_stop_onset` cases -- at DIFFERENT residual speeds (4.56, 4.68, 6.38, 7.82
+m/s: no fixed threshold) and in BOTH directions (3 left, 1 right: not a clean directional
+split). The 5th case (15mph_left_step) showed zero snap events: its speed decayed completely
+smoothly for the full 5s window, reaching near-stop late (4.98s) simply because 15mph doesn't
+carry enough energy to stay above 0.5 m/s for a full 5 seconds under continuous cornering
+drag alone -- an unrelated, unremarkable mechanism.
+
+**Evidence status: CONFIRMED** (measured directly from existing traces, single session,
+Tesla Model 3 / Town04_Opt / default friction) -- the previously-flagged left/right
+near-stop-onset asymmetry is fully explained by two separate, now-understood mechanisms, not
+one unexplained directional bias. The snap phenomenon is best read as a sharp, narrow-window
+transition in CARLA's underlying tire/vehicle model that a trajectory either crosses or
+narrowly avoids depending on its exact evolving state (two near-identical mirror-image
+trajectories diverge at the single tick one of them crosses it) -- **not** evidence that this
+vehicle model handles left and right turns differently. The 4:1 left:right split in this small
+sample is consistent with chance, not a real asymmetry.
+
+**Why this matters:** Prevents a future reader (or this project's own advisor report) from
+mis-citing the near-stop timing asymmetry as a genuine steering-direction bias in this vehicle
+model, when the actual, better-supported explanation is a known artifact class already
+documented for an unrelated reason (the braking-transient finding). `detect_low_speed_snap_
+events()` is now a reusable, tested harness utility any future substudy can call to
+auto-flag this artifact class rather than re-discovering it by hand. **Not yet done:** the
+exact mechanism inside CARLA's tire model is still unknown (no per-wheel slip signal exists to
+investigate further); this analysis reused the existing dataset rather than a fresh live run,
+so it does not by itself satisfy the still-outstanding fresh-CARLA-launch repeat gate for
+test10.
 
 ## Week 3 physical-limits finding: rollover boundary testing is confounded by roadside infrastructure above ~45 mph at the current test location (added 2026-09-26)
 

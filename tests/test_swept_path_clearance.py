@@ -10,9 +10,11 @@ if str(SRC_DIR) not in sys.path:
 
 from swept_path_clearance import (  # noqa: E402
     build_ego_rooted_path_xy,
+    classify_swept_path_lidar_observation,
     is_swept_path_confirmed_clear,
     pedestrian_clearance_from_swept_path_m,
     point_to_polyline_distance_m,
+    update_active_path_authority,
     update_swept_path_clearance_decision,
 )
 
@@ -110,6 +112,84 @@ class SweptPathClearanceDecisionTests(unittest.TestCase):
         )
         self.assertFalse(
             self.evaluate(path_occupancy_status="occupied").clear_now
+        )
+
+
+class ActivePathAuthorityTests(unittest.TestCase):
+    def evaluate(self, **overrides):
+        values = {
+            "authority_was_active": False,
+            "previous_commit_ticks": 0,
+            "required_commit_ticks": 5,
+            "requested_lateral_offset_m": 4.8,
+            "actual_lateral_offset_m": 4.6,
+            "pedestrian_clearance_m": 2.0,
+            "pedestrian_clearance_required": True,
+            "path_drivability_status": "drivable",
+        }
+        values.update(overrides)
+        return update_active_path_authority(**values)
+
+    def test_requires_stable_commitment_before_handoff(self):
+        fourth = self.evaluate(previous_commit_ticks=3)
+        fifth = self.evaluate(previous_commit_ticks=4)
+        self.assertFalse(fourth.active)
+        self.assertTrue(fifth.active)
+
+    def test_unsafe_pedestrian_geometry_prevents_handoff(self):
+        result = self.evaluate(previous_commit_ticks=4, pedestrian_clearance_m=-0.1)
+        self.assertFalse(result.active)
+        self.assertEqual(result.consecutive_commit_ticks, 0)
+
+    def test_wrong_direction_or_non_drivable_path_prevents_handoff(self):
+        self.assertFalse(self.evaluate(actual_lateral_offset_m=-4.0).active)
+        self.assertFalse(
+            self.evaluate(path_drivability_status="non_drivable").active
+        )
+
+    def test_authority_stays_stable_during_committed_maneuver(self):
+        result = self.evaluate(
+            authority_was_active=True,
+            previous_commit_ticks=5,
+            actual_lateral_offset_m=0.0,
+            pedestrian_clearance_m=None,
+            path_drivability_status="unknown",
+        )
+        self.assertTrue(result.active)
+
+    def test_authority_returns_to_route_when_maneuver_request_ends(self):
+        result = self.evaluate(
+            authority_was_active=True,
+            previous_commit_ticks=5,
+            requested_lateral_offset_m=0.0,
+        )
+        self.assertFalse(result.active)
+        self.assertEqual(result.consecutive_commit_ticks, 0)
+
+    def test_pedestrian_free_maneuver_can_own_active_path(self):
+        result = self.evaluate(
+            previous_commit_ticks=4,
+            pedestrian_clearance_m=None,
+            pedestrian_clearance_required=False,
+        )
+        self.assertTrue(result.active)
+
+
+class SweptPathLidarObservationTests(unittest.TestCase):
+    def test_no_return_is_distinct_from_detected_clear(self):
+        self.assertEqual(
+            classify_swept_path_lidar_observation(None, 30.0), "no_return"
+        )
+
+    def test_detection_beyond_dynamic_trigger_is_reported(self):
+        self.assertEqual(
+            classify_swept_path_lidar_observation(34.0, 25.0),
+            "detected_beyond_trigger",
+        )
+
+    def test_detection_inside_dynamic_trigger_is_hazard(self):
+        self.assertEqual(
+            classify_swept_path_lidar_observation(24.0, 25.0), "hazard"
         )
 
     def test_far_cross_pedestrian_on_escape_path_is_not_clear(self):

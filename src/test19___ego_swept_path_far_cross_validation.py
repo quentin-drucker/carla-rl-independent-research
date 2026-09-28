@@ -81,7 +81,8 @@ def main():
     print(f"Oriented contact ticks: {len(contact_ticks)}")
     print(f"Swept-path LiDAR hazard ticks: {samples['swept_hazard_ticks']}")
     print(f"Minimum pedestrian center distance: {result.min_ped_distance_m:.2f}m")
-    print(f"Recovered: {recovery_controller.recovered}")
+    print(f"Recovery command completed: {recovery_controller.recovered}")
+    print(f"Ego physically returned to route: {result.physically_returned_to_route}")
     print("=" * 70)
 
 

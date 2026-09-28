@@ -146,7 +146,9 @@ def main():
     print(f"Swept-path LiDAR detection ticks (any in-tube return): {samples['swept_detection_ticks']}")
     print(f"transition_path_occupancy statuses observed: {samples['occupancy_statuses']}")
     print(f"transition_path_drivability statuses observed: {samples['drivability_statuses']}")
-    print(f"Recovered (returned to lane): {recovery_controller.recovered}")
+    print(f"Recovery command completed: {recovery_controller.recovered}")
+    print(f"Ego physically returned to route: {result.physically_returned_to_route}")
+    print(f"Final measured route offset: {result.final_route_lateral_offset_m:+.2f}m")
     print("=" * 70)
 
 

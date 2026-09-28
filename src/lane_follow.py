@@ -29,11 +29,14 @@ from ego_clearance_override import (
 )
 from pedestrian_contact import EGO_HALF_WIDTH_M
 from swept_path_clearance import (
+    ActivePathAuthorityDecision,
     DEFAULT_PATH_CLEAR_MARGIN_M,
     PATH_COMMIT_THRESHOLD_M,
     build_ego_rooted_path_xy,
     classify_swept_path_lidar_observation,
+    is_active_path_release_blocked,
     pedestrian_clearance_from_swept_path_m,
+    should_hold_for_blocked_active_path,
     update_active_path_authority,
     update_swept_path_clearance_decision,
 )
@@ -622,24 +625,30 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # commitment, only the ego-rooted intended path governs; an obstacle on
     # that path is therefore handled at its own swept-LiDAR distance instead
     # of keeping an unrelated original-lane pedestrian active.
-    active_path_authority = update_active_path_authority(
-        authority_was_active=(
-            speed_state.get("active_braking_path") == "ego_swept"
-        ),
-        previous_commit_ticks=speed_state.get("active_path_commit_ticks", 0),
-        required_commit_ticks=ACTIVE_PATH_COMMIT_TICKS_REQ,
-        requested_lateral_offset_m=requested_lateral_offset_m,
-        actual_lateral_offset_m=signed_route_lateral_offset_m,
-        pedestrian_clearance_m=swept_path_clearance_m,
-        pedestrian_clearance_required=(
-            pedestrian_x_m is not None and pedestrian_y_m is not None
-        ),
-        path_drivability_status=(
-            transition_path_drivability.get("status")
-            if transition_path_drivability is not None
-            else None
-        ),
-    )
+    if use_swept_path_clearance_override:
+        active_path_authority = update_active_path_authority(
+            authority_was_active=(
+                speed_state.get("active_braking_path") == "ego_swept"
+            ),
+            previous_commit_ticks=speed_state.get("active_path_commit_ticks", 0),
+            required_commit_ticks=ACTIVE_PATH_COMMIT_TICKS_REQ,
+            requested_lateral_offset_m=requested_lateral_offset_m,
+            actual_lateral_offset_m=signed_route_lateral_offset_m,
+            pedestrian_clearance_m=swept_path_clearance_m,
+            pedestrian_clearance_required=(
+                pedestrian_x_m is not None and pedestrian_y_m is not None
+            ),
+            path_drivability_status=(
+                transition_path_drivability.get("status")
+                if transition_path_drivability is not None
+                else None
+            ),
+        )
+    else:
+        active_path_authority = ActivePathAuthorityDecision(
+            active=False,
+            consecutive_commit_ticks=0,
+        )
     speed_state["active_path_commit_ticks"] = (
         active_path_authority.consecutive_commit_ticks
     )
@@ -702,8 +711,21 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # down and coasts" rather than the "swerve without unnecessary braking"
     # this override exists to demonstrate.
     geometric_confirmed_clear = speed_state["geometric_clear_ticks"] >= GEOMETRIC_CLEAR_TICKS_REQ
-    if geometric_confirmed_clear:
+    geometric_clear_can_release = (
+        geometric_confirmed_clear and not active_path_authority.active
+    )
+    if geometric_clear_can_release:
         hazard_active = False
+
+    active_path_occupancy_status = (
+        transition_path_occupancy.get("status")
+        if transition_path_occupancy is not None
+        else None
+    )
+    active_path_release_blocked = is_active_path_release_blocked(
+        active_path_authority=active_path_authority.active,
+        path_occupancy_status=active_path_occupancy_status,
+    )
 
     # -------------------------------------------------
     # Simple brake ramp (optional comfort layer)
@@ -824,12 +846,18 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         hazard_clear = (
             hazard_governing_distance_m is not None and
             hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M)
-        ) or geometric_confirmed_clear or swept_path_confirmed_clear
+        ) or geometric_clear_can_release or swept_path_confirmed_clear
     else:
         hazard_clear = (
             (hazard_governing_distance_m is None) or
             (hazard_governing_distance_m > (trigger_distance_m + HAZARD_CLEAR_MARGIN_M))
-        ) or geometric_confirmed_clear or swept_path_confirmed_clear
+        ) or geometric_clear_can_release or swept_path_confirmed_clear
+
+    # A speed-dependent LiDAR threshold may shrink below a still-stationary
+    # vehicle as the ego slows. Do not interpret that as permission to resume
+    # while actor occupancy says the committed path remains blocked.
+    if active_path_release_blocked:
+        hazard_clear = False
 
     # Count consecutive clear ticks (for stability)
     if hazard_clear:
@@ -853,7 +881,12 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
             mode = "HAZARD_BRAKE"
 
     elif mode == "HAZARD_BRAKE":
-        if hazard_active and speed_mps <= STOP_SPEED_EPS_MPS:
+        if (
+            hazard_active and speed_mps <= STOP_SPEED_EPS_MPS
+        ) or should_hold_for_blocked_active_path(
+            release_blocked=active_path_release_blocked,
+            speed_mps=speed_mps,
+        ):
             mode = "STOP_HOLD"
         elif hazard_clear_stable:
             mode = "RECOVER"
@@ -1057,6 +1090,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "ego_swept_path_lidar_status": swept_path_lidar_status,
         "active_braking_path": speed_state.get("active_braking_path", "original"),
         "active_path_commit_ticks": speed_state.get("active_path_commit_ticks", 0),
+        "active_path_release_blocked": active_path_release_blocked,
         "swept_path_clearance_m": swept_path_clearance_m,
         "swept_path_clear_now": swept_path_clear_now,
         "swept_path_confirmed_clear": swept_path_confirmed_clear,

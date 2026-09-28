@@ -95,14 +95,16 @@ def _run_case(*, label, cfg, peak_offset_m, other_vehicle_offset_m=None, post_cr
         "collision_detected": result.collision_detected,
         "contact_ticks": len(contact_ticks),
         "min_ped_distance_m": result.min_ped_distance_m,
-        "recovered": recovery_controller.recovered,
+        "command_recovered": recovery_controller.recovered,
+        "physically_recovered": result.physically_returned_to_route,
         "swept_hazard_ticks": swept_hazard_ticks["count"],
     }
     print(
         f"  outcome={summary['outcome']} collision={summary['collision_detected']} "
         f"contact_ticks={summary['contact_ticks']} "
         f"min_ped_dist={summary['min_ped_distance_m']:.2f}m "
-        f"recovered={summary['recovered']} "
+        f"command_recovered={summary['command_recovered']} "
+        f"physically_recovered={summary['physically_recovered']} "
         f"swept_hazard_ticks={summary['swept_hazard_ticks']}"
     )
     return summary
@@ -241,7 +243,8 @@ def main():
         print(
             f"  {r['label']}\n"
             f"      -> {verdict} ({r['contact_ticks']} contact ticks) | "
-            f"outcome={r['outcome']} | recovered={r['recovered']} | "
+            f"outcome={r['outcome']} | command_recovered={r['command_recovered']} | "
+            f"physically_recovered={r['physically_recovered']} | "
             f"min_ped_dist={r['min_ped_distance_m']:.2f}m | "
             f"swept_hazard_ticks={r['swept_hazard_ticks']}"
         )

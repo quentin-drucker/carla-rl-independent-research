@@ -93,7 +93,8 @@ def main():
 
     print("\n" + "=" * 70)
     print(f"Outcome: {result.outcome}  (collision={result.collision_detected})")
-    print(f"Recovered (swerve returned to lane): {recovery_controller.recovered}")
+    print(f"Recovery command completed: {recovery_controller.recovered}")
+    print(f"Ego physically returned to route: {result.physically_returned_to_route}")
     print(f"Used fallback timeout instead of a real hazard-clear: {recovery_controller.used_fallback_timeout}")
     print(f"Hazard reappeared mid-recovery: {recovery_controller.hazard_reappeared_during_recovery}")
     print(f"Recovery (return-to-center) duration: {recovery_controller.recovery_time_s}")
@@ -104,8 +105,9 @@ def main():
             "stopped threshold at some point -- this can still happen even in a "
             "successful swerve+merge-back run (original-lane braking is anchored "
             "to the pedestrian, who is still crossing for the first couple "
-            "seconds). Check 'Recovered' above, not just 'Outcome', to see "
-            "whether the merge-back actually completed after that."
+            "seconds). Check 'Ego physically returned to route' above, not "
+            "just 'Outcome' or command completion, to see whether the "
+            "merge-back actually completed after that."
         )
 
 

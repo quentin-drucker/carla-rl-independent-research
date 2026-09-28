@@ -224,7 +224,9 @@ def main():
         "Parked-car CENTER distance to swept path at closest approach: "
         f"{samples['closest_target_center_to_path_m']}"
     )
-    print(f"Recovered (returned to lane): {recovery_controller.recovered}")
+    print(f"Recovery command completed: {recovery_controller.recovered}")
+    print(f"Ego physically returned to route: {result.physically_returned_to_route}")
+    print(f"Final measured route offset: {result.final_route_lateral_offset_m:+.2f}m")
 
     print("\n--- Per-tick trace while hazard braking was commanded (hazard_brake_cmd=1) ---")
     print(

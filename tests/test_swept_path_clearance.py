@@ -11,9 +11,11 @@ if str(SRC_DIR) not in sys.path:
 from swept_path_clearance import (  # noqa: E402
     build_ego_rooted_path_xy,
     classify_swept_path_lidar_observation,
+    is_active_path_release_blocked,
     is_swept_path_confirmed_clear,
     pedestrian_clearance_from_swept_path_m,
     point_to_polyline_distance_m,
+    should_hold_for_blocked_active_path,
     update_active_path_authority,
     update_swept_path_clearance_decision,
 )
@@ -156,6 +158,51 @@ class ActivePathAuthorityTests(unittest.TestCase):
             path_drivability_status="unknown",
         )
         self.assertTrue(result.active)
+
+    def test_occupied_or_unknown_active_path_blocks_brake_release(self):
+        self.assertTrue(
+            is_active_path_release_blocked(
+                active_path_authority=True,
+                path_occupancy_status="occupied",
+            )
+        )
+        self.assertTrue(
+            is_active_path_release_blocked(
+                active_path_authority=True,
+                path_occupancy_status="unknown",
+            )
+        )
+
+    def test_clear_or_inactive_path_does_not_block_release(self):
+        self.assertFalse(
+            is_active_path_release_blocked(
+                active_path_authority=True,
+                path_occupancy_status="clear",
+            )
+        )
+        self.assertFalse(
+            is_active_path_release_blocked(
+                active_path_authority=False,
+                path_occupancy_status="occupied",
+            )
+        )
+
+    def test_blocked_path_enters_hold_only_at_low_speed(self):
+        self.assertTrue(
+            should_hold_for_blocked_active_path(
+                release_blocked=True, speed_mps=0.8
+            )
+        )
+        self.assertFalse(
+            should_hold_for_blocked_active_path(
+                release_blocked=True, speed_mps=2.0
+            )
+        )
+        self.assertFalse(
+            should_hold_for_blocked_active_path(
+                release_blocked=False, speed_mps=0.1
+            )
+        )
 
     def test_authority_returns_to_route_when_maneuver_request_ends(self):
         result = self.evaluate(

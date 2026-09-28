@@ -125,7 +125,8 @@ def _run_case(*, label, peak_offset_m):
     print(f"  CARLA collision_detected: {result.collision_detected}")
     print(f"  Ground-truth contact ticks (independent check): {len(contact_ticks)}")
     print(f"  Outcome: {result.outcome}  min_ped_distance={result.min_ped_distance_m:.2f}m")
-    print(f"  Recovered (swerved back to lane): {recovery_controller.recovered}")
+    print(f"  Recovery command completed: {recovery_controller.recovered}")
+    print(f"  Ego physically returned to route: {result.physically_returned_to_route}")
     swept_samples = [sample for sample in positions["swept_path"] if sample is not None]
     clear_samples = [sample for sample in swept_samples if sample["clear_now"]]
     confirmed_samples = [sample for sample in swept_samples if sample["confirmed_clear"]]
@@ -158,7 +159,8 @@ def _run_case(*, label, peak_offset_m):
             blocker_counts[key] = blocker_counts.get(key, 0) + 1
         print(f"  Swept-path status counts (drivable, occupancy, lidar_hit): {blocker_counts}")
     return {"label": label, "contact_ticks": len(contact_ticks), "result": result,
-            "recovered": recovery_controller.recovered}
+            "command_recovered": recovery_controller.recovered,
+            "physically_recovered": result.physically_returned_to_route}
 
 
 def main():
@@ -184,7 +186,9 @@ def main():
     for case in (case_a, case_b):
         verdict = "CONTACT" if case["contact_ticks"] > 0 else "clear"
         print(f"  {case['label']}: {verdict} ({case['contact_ticks']} contact ticks), "
-              f"outcome={case['result'].outcome}, recovered={case['recovered']}")
+              f"outcome={case['result'].outcome}, "
+              f"command_recovered={case['command_recovered']}, "
+              f"physically_recovered={case['physically_recovered']}")
 
 
 if __name__ == "__main__":

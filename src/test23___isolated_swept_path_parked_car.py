@@ -93,6 +93,8 @@ def main():
     min_ego_car_distance_m = float("inf")
     first_swept_hazard = None
     max_actual_offset_m = 0.0
+    post_hazard_release_mode_ticks = 0
+    stop_hold_ticks = 0
 
     try:
         _, world = connect_and_load_world(
@@ -227,6 +229,11 @@ def main():
                     "trigger_distance_m": trigger_distance_m,
                     "speed_mph": mps_to_mph(get_speed_mps(ego)),
                 }
+            if first_swept_hazard is not None:
+                post_hazard_release_mode_ticks += int(
+                    telemetry["drive_mode"] in ("RECOVER", "CRUISE")
+                )
+                stop_hold_ticks += int(telemetry["drive_mode"] == "STOP_HOLD")
 
             if tick % 50 == 0:
                 print(
@@ -249,6 +256,8 @@ def main():
         print(f"Maximum brake command: {max_brake_cmd:.4f}")
         print(f"Minimum ego<->parked-car center distance: {min_ego_car_distance_m:.2f}m")
         print(f"First swept hazard: {first_swept_hazard}")
+        print(f"Post-hazard CRUISE/RECOVER ticks: {post_hazard_release_mode_ticks}")
+        print(f"STOP_HOLD ticks: {stop_hold_ticks}")
         checks = {
             "original corridor stayed clear": original_hazard_ticks == 0,
             "swept path detected returns": swept_detection_ticks > 0,
@@ -256,6 +265,10 @@ def main():
             "swept path governed braking": swept_governing_ticks > 0,
             "swept path owned committed maneuver": active_swept_path_ticks > 0,
             "braking was commanded": positive_brake_ticks > 0,
+            "blocked path never released after hazard": (
+                post_hazard_release_mode_ticks == 0
+            ),
+            "blocked path reached stop hold": stop_hold_ticks > 0,
         }
         print(f"Validation checks: {checks}")
         print(f"VALIDATION: {'PASS' if all(checks.values()) else 'FAIL'}")

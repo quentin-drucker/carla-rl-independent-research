@@ -1914,7 +1914,8 @@ Focused live evidence is promising but preliminary:
 - Test20's nine-run matrix covered both directions, two speeds/TTCs, stationary and moving
   pedestrians, an unsafe far-cross backstop, and a parked-car-blocked escape path. It recorded
   zero oriented-contact ticks in all nine runs; the blocked path correctly retained the stop.
-- The full offline suite passed 216 tests after the active-path handoff work below.
+- The full offline suite passed 225 tests after the active-path handoff, stop-hold, and physical
+  route-return tracking work below.
 
 Quentin subsequently ran and watched test18 and test19 himself. He visually confirmed the same
 behavior: test18's wide swerve cleared and continued, its undersized swerve retained braking,
@@ -1948,7 +1949,25 @@ pedestrian remains in the original lane.
 A proposed lower LiDAR height cutoff (`z_min=-1.8m` instead of `-1.0m`) was tested and rejected:
 it admitted road returns, caused 1,183 false hazard ticks from startup, and stopped the ego after
 only 3.5m. The safe cutoff remains unchanged. Test23 also exposed low-speed mode chatter/creep
-after the initial successful stop; that longitudinal-state issue remains separate follow-up work.
+after the initial successful stop. A pre-PR fix now prevents an occupied committed path from
+being treated as clear merely because the speed-dependent LiDAR trigger shrinks as the ego
+slows. Below 1m/s, a still-occupied path enters `STOP_HOLD`; the validated run reached 0.0mph,
+held about 9.8m center-to-center from the parked car, and recorded zero post-hazard
+`CRUISE`/`RECOVER` ticks.
+
+Recovery reporting now distinguishes the controller finishing its requested-offset schedule
+from the ego physically returning to the route. A generic tracker observes the measured
+route-relative lateral offset and only records a physical return after the ego has first
+departed and then remains within 0.25m of route center for ten consecutive simulation ticks
+while the requested offset is also centered. This matters for blocked cases such as test22:
+the debug/requested path can merge back and the recovery command can finish while the stationary
+parked car keeps the real ego stopped about one lane away. Such a run must report command
+completion separately from `physically_returned_to_route=False`, together with its final
+measured lateral offset. Live validation confirmed that distinction: blocked-path test22
+completed its recovery request but remained stopped at a measured +4.88m offset and correctly
+reported no physical return, while clear-path test18A completed the maneuver, returned to
++0.00m, and reported a physical return. Test18B retained the safety backstop, stopped without
+contact, and correctly reported no physical return.
 
 After the handoff change, the full nine-case test20 matrix again recorded zero oriented contacts.
 It covered both directions, 25/35mph, two TTC settings, stationary/far-cross pedestrians, an
@@ -1960,8 +1979,8 @@ the experimental handoff still uses its ground-truth position as positive eviden
 path clears the old obstacle. Raw LiDAR controls hazards after handoff but does not yet maintain
 persistent, actor-independent tracks. Validation is also still concentrated on one map/route.
 The next architectural step is temporal LiDAR clustering/tracking with uncertainty through
-missing frames, followed by investigation of test19's delayed recovery and test23's low-speed
-brake/creep chatter.
+missing frames, followed by investigation of test19's delayed recovery and broader validation
+of occupied-path hold/release behavior with moving vehicles.
 
 ---
 

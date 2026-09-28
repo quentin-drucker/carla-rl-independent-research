@@ -296,7 +296,8 @@ def main():
         f"(not just the original lane): {observer.ever_governed_by_transition}"
     )
     print(f"recovery controller final state: {recovery_controller.state}")
-    print(f"recovery completed (hazard/state-based): {recovery_controller.recovered}")
+    print(f"recovery command completed: {recovery_controller.recovered}")
+    print(f"ego physically returned to route: {result.physically_returned_to_route}")
     if recovery_controller.time_hazard_clear_to_recover_start_s is not None:
         print(
             "time from hazard-clear confirmation to recovery start: "

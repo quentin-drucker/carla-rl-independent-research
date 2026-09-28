@@ -31,6 +31,22 @@ class ActivePathAuthorityDecision:
     consecutive_commit_ticks: int
 
 
+def is_active_path_release_blocked(
+    *, active_path_authority: bool, path_occupancy_status
+) -> bool:
+    """Keep braking latched while a committed path is not positively unoccupied."""
+    return active_path_authority and path_occupancy_status != "clear"
+
+
+def should_hold_for_blocked_active_path(
+    *, release_blocked: bool, speed_mps: float, hold_entry_speed_mps: float = 1.0
+) -> bool:
+    """Enter a positive brake hold once a still-blocked path is nearly stopped."""
+    if speed_mps < 0.0 or hold_entry_speed_mps <= 0.0:
+        raise ValueError("speeds must be non-negative/positive")
+    return release_blocked and speed_mps <= hold_entry_speed_mps
+
+
 def classify_swept_path_lidar_observation(distance_m, trigger_distance_m: float) -> str:
     """Separate sensor detection from the speed-dependent braking decision."""
     if distance_m is None:

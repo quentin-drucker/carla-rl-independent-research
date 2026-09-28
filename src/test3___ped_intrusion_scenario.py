@@ -61,6 +61,7 @@ from spectator import SpectatorController
 from telemetry_plotting import TelemetryBuffer, plot_telemetry
 from scenario_config import ScenarioConfig
 from run_result import RunResult, print_run_result
+from route_recovery import PhysicalRouteReturnTracker
 
 from walker_utils import (
     spawn_scripted_walker,
@@ -369,6 +370,7 @@ def run_scenario(
     # braking ramp, slow enough to reject PhysX stiction/quantisation spikes.
     _JERK_LP_ALPHA   = 0.25
     _speed_lp        = 0.0  # initialised to 0; will converge before trigger fires
+    physical_route_return = PhysicalRouteReturnTracker()
 
     # ------------------------------------------------------------------
     # Connect + sync
@@ -774,6 +776,10 @@ def run_scenario(
                 speed_state["hazard_clear_ticks"] = 0
 
             if telemetry is not None:
+                physical_route_return.update(
+                    requested_offset_m=telemetry.get("lateral_offset_requested_m"),
+                    actual_offset_m=telemetry.get("signed_route_lateral_offset_m"),
+                )
                 telemetry["jerk_mps3"]  = _jerk if triggered else float("nan")
                 telemetry["ttc_s"]      = _ttc_this_tick if _ttc_this_tick != float("inf") else float("nan")
                 # Pedestrian world position -- added for Week 3 Workstream 3
@@ -1019,6 +1025,9 @@ def run_scenario(
             trigger_time_s=result_trigger_time_s,
             time_to_stop_s=result_time_to_stop_s,
             config=cfg,
+            lateral_maneuver_departed_route=physical_route_return.departed_route,
+            physically_returned_to_route=physical_route_return.physically_returned,
+            final_route_lateral_offset_m=physical_route_return.final_actual_offset_m,
         )
         print_run_result(result)
 

@@ -89,6 +89,13 @@ class RunResult:
     # ------------------------------------------------------------------
     config: ScenarioConfig
 
+    # Recovery metrics. ``physically_returned_to_route`` is deliberately
+    # measured from the ego's actual route-relative position, not inferred
+    # from a controller's requested-offset schedule or debug path.
+    lateral_maneuver_departed_route: bool = False
+    physically_returned_to_route: bool = False
+    final_route_lateral_offset_m: Optional[float] = None
+
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -149,4 +156,11 @@ def print_run_result(result: RunResult) -> None:
         print(f"Time to stop     : {result.time_to_stop_s:.2f}s after hazard brake")
     else:
         print("Time to stop     : (did not fully stop)")
+    if result.lateral_maneuver_departed_route:
+        print(f"Physically returned to route: {result.physically_returned_to_route}")
+        if result.final_route_lateral_offset_m is not None:
+            print(
+                "Final measured route offset: "
+                f"{result.final_route_lateral_offset_m:+.2f} m"
+            )
     print("=========================================================\n")

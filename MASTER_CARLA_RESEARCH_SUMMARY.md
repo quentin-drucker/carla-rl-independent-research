@@ -1819,6 +1819,169 @@ across several overlaid runs that end near the same position still stack.
 overlay. Not required by the plan's 3.3 success criterion; left for a future pass if this
 tool sees continued use.
 
+## Week 3 addition: a real coverage gap found via a far-crossing pedestrian test -- CARLA's collision sensor missed it too (added 2026-09-27, corrected same day)
+
+**What prompted this:** Quentin watched test13 live and noticed the ego always just stops for
+the pedestrian rather than visibly swerving around and continuing. His hypothesis was that
+the LiDAR hazard corridor governing braking needs to "move with" the ego's swerve. That
+specific idea is exactly the approach already tried twice (2026-09-18, see the "Two
+attempts... reverted" note near the top of this document) and is an explicit Non-goal in the
+Week 3 plan pending real design review -- it was NOT re-attempted here.
+
+**First pass (superseded below):** every existing scenario script (test5/test6/test7/test8/
+test13/test14) uses `ScenarioConfig(walker_cross="near")` -- the pedestrian walks to lane
+center and stays there indefinitely, which correctly forces a full stop regardless of swerve
+quality (the safety net working as intended). No script had ever used `walker_cross="far"`
+(pedestrian actually exits the lane), so a new script, `src/test16___far_cross_swerve_and_
+merge_back.py`, exercised it for the first time. A first automated run reported
+`outcome=slowed_avoided`, `collision_detected=False` -- this was reported as a clean success.
+**It was not.** Quentin ran the same script live and watched the ego actually hit the
+pedestrian (visually confirmed: the pedestrian's geometry glitched/was shoved as the ego drove
+through it), directly contradicting the automated result. Re-verifying with an independent,
+offline-tested geometric contact check (`src/pedestrian_contact.py`, using the Tesla Model 3's
+real bounding-box dimensions, deliberately built because CARLA's own sensor had just been
+shown unreliable here) confirmed a sustained 0.5-second contact window (26 consecutive ticks),
+not a single-tick glitch -- strong independent corroboration of what Quentin saw. This is
+recorded as a caution against trusting a single clean-looking automated result, exactly the
+"inspect traces, not aggregate labels" discipline this project has otherwise followed.
+
+**Root cause, traced from the full per-tick record:**
+1. The original-lane hazard corridor only watches a band +/-1.4m from route centerline
+   (`NOODLE_HALF_WIDTH_M`). The far-crossing pedestrian ends up at +2.55m from centerline --
+   outside that band.
+2. Once the pedestrian crosses past 1.4m (~5s into the encounter), the corridor loses them
+   completely -- it reports no LiDAR return at all for nearly the rest of the encounter, not
+   just briefly.
+3. The swerve's peak offset (1.5m) happened to land almost exactly on that same 1.4m boundary
+   -- nowhere near the pedestrian's actual 2.55m excursion. Re-testing with a much larger
+   offset (3.2m) did NOT meaningfully improve the outcome, since the corridor's blind spot is
+   unrelated to how far the ego itself swerves.
+4. The scripted recovery controller's clear-confirmation logic deliberately treats a missing
+   LiDAR return as "unknown, not confirmed clear" (a real, intentional safety choice from an
+   earlier, unrelated 2026-09-18 bug fix) -- but combined with the corridor now returning "no
+   data" almost every tick, confirmed clearance (and the return-to-lane it gates) was delayed
+   by roughly 3 extra seconds past when the pedestrian was actually long gone.
+5. During that multi-second window, the ego cruised at full speed, still holding its offset,
+   through a stretch of space nothing was watching: the original corridor structurally cannot
+   see it (outside its band), and the commanded/transition corridor checks that DO cover that
+   space are observational-only telemetry (see the Workstream 1.2 finding above) that, even if
+   wired up, only track vehicle actors, not pedestrians.
+
+**The actual finding:** this is a genuine, previously-undiscovered coverage gap, distinct from
+the flagged braking-authority Non-goal. It is not about which corridor's reading should govern
+braking -- it is that no existing corridor, watched or observational, covers a pedestrian who
+has moved outside the original lane's narrow band but remains physically reachable by the
+ego's own chosen escape path.
+
+**Evidence status: CONFIRMED** (a real collision, independently verified two ways -- visual
+observation and an offline-tested geometric check -- across a reproducible, deterministic
+scenario). **Not done:** no fix implemented. A candidate safe direction exists (a new, purely
+additive ego-centered pedestrian-proximity check that could only ever add a hazard-brake
+trigger, never remove the original corridor's authority) but this is a real change to
+safety-relevant control logic and awaits explicit direction before implementation, consistent
+with how every other safety-relevant decision in this project has been handled.
+
+### Week 3 experimental follow-up: ego-rooted swept-path prototype (added 2026-09-27)
+
+An opt-in prototype now evaluates one intended swept path rooted at the ego's exact current
+position. Its LiDAR query uses arc length along that path, not Euclidean roof-sensor distance,
+and does not apply the older sensor-local forward-X gate. Before a maneuver is committed, the
+original route retains braking authority. After five consecutive ticks where the ego is moving
+in the requested direction, the ego-rooted path is drivable, and any known pedestrian is
+geometrically clear of that path, authority transfers to the swept path and remains there until
+the lateral maneuver request ends. Only that active path then controls braking; the original
+corridor remains telemetry but cannot keep braking for an obstacle in the abandoned lane.
+Occupancy is deliberately not a handoff veto: a vehicle in the new path must instead trigger
+braking at its own swept-path distance. This remains opt-in and default-off.
+
+The contact oracle was also corrected for these experiments: a new oriented-rectangle-vs-circle
+check uses the Tesla's actual half-length, half-width, and yaw instead of applying its half-length
+as a circular radius in every direction. This resolved the earlier ambiguity around a lateral
+1.68m center separation: the old circular oracle could label such a lateral pass as contact even
+though width-aware geometry gives about 0.30m edge clearance.
+
+Focused live evidence is promising but preliminary:
+
+- Test18's buffered positive case requested a 1.982m offset (0.60m planned margin) with a 0.5s
+  smooth shift. Two consecutive live runs both avoided a full stop, completed lane recovery,
+  recorded zero oriented-contact ticks, and reported 2.20m minimum pedestrian center distance.
+- Test18's deliberately undersized 0.5m case never confirmed swept-path clearance, safely
+  full-stopped 6.30m from the pedestrian, and recorded zero oriented-contact ticks.
+- Test19 repeated test16's historically unsafe 1.5m far-cross path with the prototype enabled.
+  It recorded 125 swept-path LiDAR hazard ticks, zero oriented-contact ticks, and 7.69m minimum
+  center distance, ending `slowed_avoided` rather than colliding. It did not complete lane
+  recovery within the five-second post-crossing tail, so recovery remains unresolved.
+- Test20's nine-run matrix covered both directions, two speeds/TTCs, stationary and moving
+  pedestrians, an unsafe far-cross backstop, and a parked-car-blocked escape path. It recorded
+  zero oriented-contact ticks in all nine runs; the blocked path correctly retained the stop.
+- The full offline suite passed 225 tests after the active-path handoff, stop-hold, and physical
+  route-return tracking work below.
+
+Quentin subsequently ran and watched test18 and test19 himself. He visually confirmed the same
+behavior: test18's wide swerve cleared and continued, its undersized swerve retained braking,
+and test19 continued braking while the ego was outside the original corridor. This independent
+visual check is important because CARLA's collision event previously missed a real test16 hit.
+
+Test21/test22 initially appeared to show that the ego-rooted LiDAR tube never saw a parked car
+in the swerve lane. That interpretation was first corrected by separating `no_return`,
+`detected_beyond_trigger`, and `hazard`: the swept tube was seeing the car, but the original-lane
+pedestrian had already reduced speed and shrunk the dynamic braking threshold. A deeper control
+issue remained, however: parked-car occupancy vetoed clearance of the old pedestrian, conflating
+"the old obstacle is no longer on this path" with "there is a different obstacle farther along
+this path." The stable authority handoff above now separates those decisions.
+
+In the final live test22 run, authority transferred to the ego-swept path at t=4.74s. The old
+corridor continued to observe the pedestrian for diagnostic purposes but supplied zero active
+hazard ticks after handoff. Braking resumed at t=7.02s only when the parked car crossed the
+swept-path threshold (`32.64m` measured versus `32.76m` trigger). All 149 active hazard ticks
+were sourced from `ego_swept_active`; the ego stopped with 8.92m center separation from the car,
+5.76m from the pedestrian, and zero oriented pedestrian-contact ticks.
+
+Test23 removes that ambiguity entirely: no pedestrian is spawned, the ego voluntarily shifts
+4.882m, and only a parked Model 3 occupies the shifted path. In the repeated live validation,
+the original corridor recorded zero hazard ticks while the swept sensor recorded 609 detections,
+148 threshold crossings, and owned the committed maneuver for 886 ticks. It first crossed the
+threshold with the car 34.12m away at t=7.02s, matching test22's parked-car timing, and slowed
+from 24.8mph to near zero with a 7.55m minimum center separation. This confirms that the swept
+tube independently activates braking for the parked vehicle whether or not an irrelevant
+pedestrian remains in the original lane.
+
+A proposed lower LiDAR height cutoff (`z_min=-1.8m` instead of `-1.0m`) was tested and rejected:
+it admitted road returns, caused 1,183 false hazard ticks from startup, and stopped the ego after
+only 3.5m. The safe cutoff remains unchanged. Test23 also exposed low-speed mode chatter/creep
+after the initial successful stop. A pre-PR fix now prevents an occupied committed path from
+being treated as clear merely because the speed-dependent LiDAR trigger shrinks as the ego
+slows. Below 1m/s, a still-occupied path enters `STOP_HOLD`; the validated run reached 0.0mph,
+held about 9.8m center-to-center from the parked car, and recorded zero post-hazard
+`CRUISE`/`RECOVER` ticks.
+
+Recovery reporting now distinguishes the controller finishing its requested-offset schedule
+from the ego physically returning to the route. A generic tracker observes the measured
+route-relative lateral offset and only records a physical return after the ego has first
+departed and then remains within 0.25m of route center for ten consecutive simulation ticks
+while the requested offset is also centered. This matters for blocked cases such as test22:
+the debug/requested path can merge back and the recovery command can finish while the stationary
+parked car keeps the real ego stopped about one lane away. Such a run must report command
+completion separately from `physically_returned_to_route=False`, together with its final
+measured lateral offset. Live validation confirmed that distinction: blocked-path test22
+completed its recovery request but remained stopped at a measured +4.88m offset and correctly
+reported no physical return, while clear-path test18A completed the maneuver, returned to
++0.00m, and reported a physical return. Test18B retained the safety backstop, stopped without
+contact, and correctly reported no physical return.
+
+After the handoff change, the full nine-case test20 matrix again recorded zero oriented contacts.
+It covered both directions, 25/35mph, two TTC settings, stationary/far-cross pedestrians, an
+undersized far-cross path (140 swept hazard ticks), and a vehicle-blocked path that correctly
+full-stopped (133 swept hazard ticks). The valid cases continued and recovered as before.
+
+This is **not yet a general dynamic-obstacle solution**. When a scripted pedestrian is present,
+the experimental handoff still uses its ground-truth position as positive evidence that the new
+path clears the old obstacle. Raw LiDAR controls hazards after handoff but does not yet maintain
+persistent, actor-independent tracks. Validation is also still concentrated on one map/route.
+The next architectural step is temporal LiDAR clustering/tracking with uncertainty through
+missing frames, followed by investigation of test19's delayed recovery and broader validation
+of occupied-path hold/release behavior with moving vehicles.
+
 ---
 
 # Tentative and Inconclusive Findings

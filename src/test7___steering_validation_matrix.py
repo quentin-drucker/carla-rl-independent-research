@@ -158,7 +158,8 @@ def _run_one(*, direction_name, offset_m, timing_name, trigger_ttc_s,
         "final_offset_m": observer.final_actual_offset_m,
         "commanded_ever_non_drivable": observer.commanded_ever_non_drivable,
         "transition_ever_non_drivable": observer.transition_ever_non_drivable,
-        "recovered": recovery_controller.recovered,
+        "command_recovered": recovery_controller.recovered,
+        "physically_recovered": result.physically_returned_to_route,
         "recovery_time_s": recovery_controller.recovery_time_s,
         "used_fallback_timeout": recovery_controller.used_fallback_timeout,
         "hazard_reappeared_during_recovery": recovery_controller.hazard_reappeared_during_recovery,
@@ -170,7 +171,9 @@ def _run_one(*, direction_name, offset_m, timing_name, trigger_ttc_s,
         f"brake_dominated={row['brake_dominated']} "
         f"min_ped_dist={row['min_ped_distance_m']:.2f}m "
         f"max_offset={row['max_abs_offset_m']:.2f}m "
-        f"recovered={row['recovered']} fallback_timeout={row['used_fallback_timeout']}"
+        f"command_recovered={row['command_recovered']} "
+        f"physically_recovered={row['physically_recovered']} "
+        f"fallback_timeout={row['used_fallback_timeout']}"
     )
     if dangerous_near_miss:
         print(
@@ -186,7 +189,8 @@ def _print_summary_table(rows):
     print(f"{'#'*100}")
     header = (
         f"{'label':32} {'collision':9} {'outcome':15} {'brake_dom':9} "
-        f"{'min_ped_m':9} {'min_ttc_s':9} {'max_off_m':9} {'recovered':9} "
+        f"{'min_ped_m':9} {'min_ttc_s':9} {'max_off_m':9} "
+        f"{'cmd_recov':9} {'phys_recov':10} "
         f"{'fallback':8} {'reapp':6} {'NEAR_MISS':9}"
     )
     print(header)
@@ -197,7 +201,9 @@ def _print_summary_table(rows):
             f"{row['label']:32} {str(row['collision']):9} {row['outcome']:15} "
             f"{str(row['brake_dominated']):9} {row['min_ped_distance_m']:9.2f} "
             f"{row['min_ttc_s']:9.2f} "
-            f"{row['max_abs_offset_m']:9.2f} {str(row['recovered']):9} "
+            f"{row['max_abs_offset_m']:9.2f} "
+            f"{str(row['command_recovered']):9} "
+            f"{str(row['physically_recovered']):10} "
             f"{str(row['used_fallback_timeout']):8} {str(row['hazard_reappeared_during_recovery']):6} "
             f"{str(row['dangerous_near_miss']):9}{flag}"
         )
@@ -226,12 +232,15 @@ def _print_summary_table(rows):
 
     n_collisions = sum(1 for row in rows if row["collision"])
     n_brake_dominated = sum(1 for row in rows if row["brake_dominated"])
-    n_recovered = sum(1 for row in rows if row["recovered"])
+    n_command_recovered = sum(1 for row in rows if row["command_recovered"])
+    n_physically_recovered = sum(1 for row in rows if row["physically_recovered"])
     n_fallback = sum(1 for row in rows if row["used_fallback_timeout"])
     n_dangerous = len(dangerous_labels)
     print(
         f"\nTotals: collisions={n_collisions}/12  brake_dominated={n_brake_dominated}/12  "
-        f"recovered={n_recovered}/12  used_fallback_timeout={n_fallback}/12  "
+        f"command_recovered={n_command_recovered}/12  "
+        f"physically_recovered={n_physically_recovered}/12  "
+        f"used_fallback_timeout={n_fallback}/12  "
         f"dangerous_near_misses={n_dangerous}/12"
     )
     print(

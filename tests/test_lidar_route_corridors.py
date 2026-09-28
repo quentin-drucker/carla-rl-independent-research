@@ -14,6 +14,8 @@ import carla  # noqa: E402
 from lidar_utils import (  # noqa: E402
     lidar_min_distances_along_route_corridors,
     lidar_min_distance_along_transition_corridor,
+    lidar_min_along_path_distance_in_swept_tube,
+    lidar_return_height_stats_near_world_target,
 )
 
 
@@ -119,6 +121,124 @@ class TransitionCorridorTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(d_min, math.hypot(10.0, 1.0))
+
+
+class EgoRootedSweptTubeTests(unittest.TestCase):
+    def test_reports_arc_length_not_sensor_euclidean_distance(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=10, y=0, z=0),
+            carla.Location(x=10, y=10, z=0),
+        ]
+        frame = [SimpleNamespace(point=carla.Location(x=10, y=5, z=0))]
+        distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=0.5,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        self.assertAlmostEqual(distance, 15.0)
+
+    def test_turning_path_does_not_require_positive_sensor_x(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=0, y=10, z=0),
+        ]
+        # Sensor-local x is zero, so the old forward-X gate would discard it.
+        frame = [SimpleNamespace(point=carla.Location(x=0, y=5, z=0))]
+        distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=0.5,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        self.assertAlmostEqual(distance, 5.0)
+
+    def test_ignores_points_outside_tube_or_behind_minimum_distance(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=20, y=0, z=0),
+        ]
+        frame = [
+            SimpleNamespace(point=carla.Location(x=0.5, y=0, z=0)),
+            SimpleNamespace(point=carla.Location(x=5, y=2, z=0)),
+        ]
+        distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=1.0,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        self.assertIsNone(distance)
+
+    def test_vehicle_body_return_below_old_pedestrian_height_gate_is_detected(self):
+        path = [
+            carla.Location(x=0, y=0, z=0),
+            carla.Location(x=20, y=0, z=0),
+        ]
+        # The LiDAR is roof-mounted at z~=2m. A return from the rear/body of
+        # another Model 3 can therefore be around local z=-1.4m: below the
+        # historical pedestrian-oriented -1.0m cutoff, but still well above
+        # the road surface near -2.0m.
+        frame = [SimpleNamespace(point=carla.Location(x=8, y=0, z=-1.4))]
+
+        old_distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=1.4,
+            z_min=-1.0,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+        vehicle_capable_distance = lidar_min_along_path_distance_in_swept_tube(
+            FakeLidar(),
+            frame,
+            path,
+            tube_half_width_m=1.4,
+            z_min=-1.8,
+            z_max=2.5,
+            min_along_path_m=1.0,
+            max_along_path_m=30.0,
+        )
+
+        self.assertIsNone(old_distance)
+        self.assertAlmostEqual(vehicle_capable_distance, 8.0)
+
+
+class LidarTargetHeightDiagnosticTests(unittest.TestCase):
+    def test_groups_real_point_cloud_height_bands_near_target(self):
+        frame = [
+            SimpleNamespace(point=carla.Location(x=8.0, y=0.0, z=-0.5)),
+            SimpleNamespace(point=carla.Location(x=8.0, y=0.5, z=-1.4)),
+            SimpleNamespace(point=carla.Location(x=8.0, y=-0.5, z=-1.9)),
+            SimpleNamespace(point=carla.Location(x=20.0, y=0.0, z=0.0)),
+        ]
+        stats = lidar_return_height_stats_near_world_target(
+            FakeLidar(),
+            frame,
+            target_x_m=8.0,
+            target_y_m=0.0,
+            horizontal_radius_m=2.0,
+        )
+        self.assertEqual(stats["count"], 3)
+        self.assertEqual(stats["count_above_minus_1_0"], 1)
+        self.assertEqual(stats["count_between_minus_1_8_and_minus_1_0"], 1)
+        self.assertEqual(stats["count_below_minus_1_8"], 1)
+        self.assertAlmostEqual(stats["min_horizontal_distance_m"], 0.0)
 
 
 if __name__ == "__main__":

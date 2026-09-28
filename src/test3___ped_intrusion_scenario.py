@@ -43,11 +43,17 @@ if carla_pythonapi_carla not in sys.path:
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 
 from math_utils import get_speed_mps, mps_to_mph
-from lidar_utils import draw_lidar_points, draw_lane_noodle_corridor
+from lidar_utils import (
+    draw_lidar_points,
+    draw_lane_noodle_corridor,
+    lidar_return_height_stats_near_world_target,
+    lidar_return_path_projection_stats_near_world_target,
+)
 from spawning import prepare_spawn_context, spawn_ego_vehicle
 from lidar_sensor import attach_lidar_sensor
 from loop_utils import get_latest_lidar_frame
 from lane_follow import lane_follow_step
+from swept_path_clearance import point_to_polyline_distance_m
 from hazard_governance import is_original_corridor_confirmed_clear
 from run_stats import init_run_stats, update_run_stats, print_run_summary
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
@@ -55,6 +61,7 @@ from spectator import SpectatorController
 from telemetry_plotting import TelemetryBuffer, plot_telemetry
 from scenario_config import ScenarioConfig
 from run_result import RunResult, print_run_result
+from route_recovery import PhysicalRouteReturnTracker
 
 from walker_utils import (
     spawn_scripted_walker,
@@ -184,8 +191,17 @@ def _compute_crossing_endpoints_from_waypoint(encounter_wp, *, side, cross, lane
         end_lat = 0.0
     elif cross.lower() == "far":
         end_lat = -start_lat
+    elif cross.lower() == "stationary":
+        # A pedestrian who never walks anywhere -- stands directly in the
+        # ego's original lane (lane center) for the whole encounter. Added
+        # 2026-09-27 to test reactive swerve-offset sizing (compute the
+        # offset needed to clear a KNOWN, fixed pedestrian position) without
+        # the added complexity of a moving crossing target. start_lat is
+        # irrelevant here since the walker never leaves end_lat.
+        start_lat = 0.0
+        end_lat = 0.0
     else:
-        raise ValueError("cross must be 'near' or 'far'")
+        raise ValueError("cross must be 'near', 'far', or 'stationary'")
 
     start_loc = carla.Location(
         x=lane_center.x + right.x * start_lat,
@@ -253,6 +269,8 @@ def run_scenario(
     post_crossing_settle_s: float = 3.0,
     transition_blend_distance_m: float = 20.0,
     other_vehicle_offset_m: float = None,
+    use_geometric_clearance_override: bool = False,
+    use_swept_path_clearance_override: bool = False,
 ) -> RunResult:
     """
     Run one full scenario with the given config. Returns a RunResult.
@@ -286,8 +304,27 @@ def run_scenario(
                     route centerline -- for Week 3 Workstream 1.2 candidate-
                     path occupancy validation (test13). None (default)
                     spawns no other vehicle, matching every existing caller.
+        use_geometric_clearance_override: If True, feeds the pedestrian's
+                    live ground-truth world position into lane_follow_step()
+                    each tick (once triggered) so original-lane braking can
+                    be suppressed once the ego's OWN actual position is
+                    confirmed clear of the pedestrian (see
+                    ego_clearance_override.py). False (default) passes no
+                    pedestrian position through, matching every existing
+                    caller's behavior exactly.
+        use_swept_path_clearance_override: If True, enables the experimental
+                    ego-rooted swept-path LiDAR/clearance decision. Requires
+                    monitor_lateral_corridors=True. The pedestrian position
+                    is supplied as controlled-scenario ground truth for the
+                    positive-clearance gate; defaults False, so existing
+                    scenarios retain their prior behavior.
     """
     TARGET_SPEED_MPS = cfg.target_mph * 0.44704
+    if use_swept_path_clearance_override and not monitor_lateral_corridors:
+        raise ValueError(
+            "use_swept_path_clearance_override requires "
+            "monitor_lateral_corridors=True"
+        )
     total_ticks = int(cfg.sim_seconds / FIXED_DT)
 
     print(f"\n{'='*60}")
@@ -333,6 +370,7 @@ def run_scenario(
     # braking ramp, slow enough to reject PhysX stiction/quantisation spikes.
     _JERK_LP_ALPHA   = 0.25
     _speed_lp        = 0.0  # initialised to 0; will converge before trigger fires
+    physical_route_return = PhysicalRouteReturnTracker()
 
     # ------------------------------------------------------------------
     # Connect + sync
@@ -671,6 +709,40 @@ def run_scenario(
                     )
                 )
 
+            # Geometric ego-clearance override input: only fed in when the
+            # caller opted in AND the encounter has actually started -- reuses
+            # the walker location already read above for _pedestrian_behind_ego
+            # (_ped_loc3), not a new actor query.
+            _geo_pedestrian_x_m = None
+            _geo_pedestrian_y_m = None
+            if (
+                (use_geometric_clearance_override or use_swept_path_clearance_override)
+                and triggered
+                and walker is not None
+            ):
+                _geo_pedestrian_x_m = _ped_loc3.x
+                _geo_pedestrian_y_m = _ped_loc3.y
+
+            # Ground-truth position of the stationary "other vehicle" blocker
+            # (if spawned) -- read once per tick since it never moves.
+            # Purely observational (test/telemetry only, same pattern as
+            # pedestrian_x_m/y_m above); does not feed any control decision.
+            _other_vehicle_x_m = None
+            _other_vehicle_y_m = None
+            _other_vehicle_lidar_height_stats = None
+            if other_vehicle is not None:
+                _other_vehicle_loc = other_vehicle.get_location()
+                _other_vehicle_x_m = _other_vehicle_loc.x
+                _other_vehicle_y_m = _other_vehicle_loc.y
+                _other_vehicle_lidar_height_stats = (
+                    lidar_return_height_stats_near_world_target(
+                        lidar,
+                        lidar_frame,
+                        target_x_m=_other_vehicle_x_m,
+                        target_y_m=_other_vehicle_y_m,
+                    )
+                )
+
             # --- Controller step ---
             telemetry = lane_follow_step(
                 world, vehicle,
@@ -688,6 +760,10 @@ def run_scenario(
                 ramp_down_per_s=RAMP_DOWN_PER_S,
                 brake_profile=cfg.brake_profile,
                 lateral_offset_m=requested_lateral_offset_m,
+                pedestrian_x_m=_geo_pedestrian_x_m,
+                pedestrian_y_m=_geo_pedestrian_y_m,
+                use_geometric_clearance_override=use_geometric_clearance_override,
+                use_swept_path_clearance_override=use_swept_path_clearance_override,
             )
 
             # Belt-and-suspenders: once the ego has made a full emergency stop,
@@ -700,6 +776,10 @@ def run_scenario(
                 speed_state["hazard_clear_ticks"] = 0
 
             if telemetry is not None:
+                physical_route_return.update(
+                    requested_offset_m=telemetry.get("lateral_offset_requested_m"),
+                    actual_offset_m=telemetry.get("signed_route_lateral_offset_m"),
+                )
                 telemetry["jerk_mps3"]  = _jerk if triggered else float("nan")
                 telemetry["ttc_s"]      = _ttc_this_tick if _ttc_this_tick != float("inf") else float("nan")
                 # Pedestrian world position -- added for Week 3 Workstream 3
@@ -714,6 +794,34 @@ def run_scenario(
                 else:
                     telemetry["pedestrian_x_m"] = None
                     telemetry["pedestrian_y_m"] = None
+                telemetry["other_vehicle_x_m"] = _other_vehicle_x_m
+                telemetry["other_vehicle_y_m"] = _other_vehicle_y_m
+                telemetry["other_vehicle_lidar_height_stats"] = (
+                    _other_vehicle_lidar_height_stats
+                )
+                telemetry["other_vehicle_lidar_path_projection_stats"] = None
+                telemetry["other_vehicle_center_to_swept_path_m"] = None
+                if (
+                    _other_vehicle_x_m is not None
+                    and _other_vehicle_y_m is not None
+                    and telemetry.get("ego_swept_path_points_xy")
+                ):
+                    telemetry["other_vehicle_lidar_path_projection_stats"] = (
+                        lidar_return_path_projection_stats_near_world_target(
+                            lidar,
+                            lidar_frame,
+                            telemetry["ego_swept_path_points_xy"],
+                            target_x_m=_other_vehicle_x_m,
+                            target_y_m=_other_vehicle_y_m,
+                            tube_half_width_m=(1.082 + 0.25),
+                        )
+                    )
+                    telemetry["other_vehicle_center_to_swept_path_m"] = (
+                        point_to_polyline_distance_m(
+                            (_other_vehicle_x_m, _other_vehicle_y_m),
+                            telemetry["ego_swept_path_points_xy"],
+                        )
+                    )
 
             if tick_observer is not None:
                 tick_observer(sim_time_s, triggered, telemetry)
@@ -917,6 +1025,9 @@ def run_scenario(
             trigger_time_s=result_trigger_time_s,
             time_to_stop_s=result_time_to_stop_s,
             config=cfg,
+            lateral_maneuver_departed_route=physical_route_return.departed_route,
+            physically_returned_to_route=physical_route_return.physically_returned,
+            final_route_lateral_offset_m=physical_route_return.final_actual_offset_m,
         )
         print_run_result(result)
 

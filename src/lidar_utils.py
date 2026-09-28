@@ -893,6 +893,275 @@ def lidar_min_distance_along_transition_corridor(
     return min_d, shifted_points
 
 
+def lidar_min_along_path_distance_in_swept_tube(
+    lidar_actor,
+    lidar_data,
+    path_points_world,
+    *,
+    tube_half_width_m: float,
+    z_min: float,
+    z_max: float,
+    min_along_path_m: float,
+    max_along_path_m: float,
+):
+    """Return nearest along-path LiDAR distance inside one swept-path tube.
+
+    Unlike the older route-corridor functions, the supplied path is already
+    ego-rooted and represents the one trajectory the vehicle intends to
+    execute. Distance is measured as arc length along that path, which is the
+    quantity the braking headway is meant to bound.
+
+    There is intentionally no ``lidar_point.point.x`` gate. A point can lie on
+    a turning ego path without being in the sensor's positive-X half-plane;
+    the projection's positive along-path distance is the authoritative
+    definition of "ahead" here.
+    """
+    if (
+        lidar_data is None
+        or lidar_actor is None
+        or not path_points_world
+        or len(path_points_world) < 2
+    ):
+        return None
+    if tube_half_width_m < 0.0:
+        raise ValueError("tube_half_width_m must be non-negative")
+
+    path_xy = []
+    path_s = [0.0]
+    for point in path_points_world:
+        if hasattr(point, "x") and hasattr(point, "y"):
+            point_xy = (float(point.x), float(point.y))
+        else:
+            point_xy = (float(point[0]), float(point[1]))
+        if path_xy and math.hypot(
+            point_xy[0] - path_xy[-1][0], point_xy[1] - path_xy[-1][1]
+        ) <= 1e-9:
+            continue
+        if path_xy:
+            path_s.append(
+                path_s[-1]
+                + math.hypot(
+                    point_xy[0] - path_xy[-1][0],
+                    point_xy[1] - path_xy[-1][1],
+                )
+            )
+        path_xy.append(point_xy)
+
+    if len(path_xy) < 2:
+        return None
+
+    lidar_transform = lidar_actor.get_transform()
+    tube_half_width_sq = tube_half_width_m * tube_half_width_m
+    minimum_along_path_m = None
+
+    for lidar_point in lidar_data:
+        local_z = lidar_point.point.z
+        if local_z < z_min or local_z > z_max:
+            continue
+        world_location = lidar_transform.transform(
+            carla.Location(
+                x=lidar_point.point.x,
+                y=lidar_point.point.y,
+                z=lidar_point.point.z,
+            )
+        )
+
+        best_lateral_distance_sq = None
+        best_along_path_m = None
+        for index in range(len(path_xy) - 1):
+            projection, _, _, lateral_distance_sq = _project_point_to_segment_2d(
+                world_location.x,
+                world_location.y,
+                path_xy[index][0],
+                path_xy[index][1],
+                path_xy[index + 1][0],
+                path_xy[index + 1][1],
+            )
+            if (
+                best_lateral_distance_sq is None
+                or lateral_distance_sq < best_lateral_distance_sq
+            ):
+                best_lateral_distance_sq = lateral_distance_sq
+                best_along_path_m = path_s[index] + projection * (
+                    path_s[index + 1] - path_s[index]
+                )
+
+        if best_lateral_distance_sq is None or best_along_path_m is None:
+            continue
+        if best_lateral_distance_sq > tube_half_width_sq:
+            continue
+        if not (min_along_path_m < best_along_path_m <= max_along_path_m):
+            continue
+        if (
+            minimum_along_path_m is None
+            or best_along_path_m < minimum_along_path_m
+        ):
+            minimum_along_path_m = best_along_path_m
+
+    return minimum_along_path_m
+
+
+def lidar_return_height_stats_near_world_target(
+    lidar_actor,
+    lidar_data,
+    *,
+    target_x_m: float,
+    target_y_m: float,
+    horizontal_radius_m: float = 3.0,
+):
+    """Diagnostic-only height statistics for returns near a known target.
+
+    This does not classify or gate hazards. It is used by parked-car live
+    validation to determine whether the real point cloud contains returns at
+    the actor and which sensor-local height bands they occupy.
+    """
+    if lidar_data is None or lidar_actor is None:
+        return None
+    lidar_transform = lidar_actor.get_transform()
+    local_z_values = []
+    horizontal_distances = []
+    for lidar_point in lidar_data:
+        world_location = lidar_transform.transform(
+            carla.Location(
+                x=lidar_point.point.x,
+                y=lidar_point.point.y,
+                z=lidar_point.point.z,
+            )
+        )
+        horizontal_distance_m = math.hypot(
+            world_location.x - target_x_m,
+            world_location.y - target_y_m,
+        )
+        if horizontal_distance_m <= horizontal_radius_m:
+            local_z_values.append(float(lidar_point.point.z))
+            horizontal_distances.append(horizontal_distance_m)
+
+    if not local_z_values:
+        return {
+            "count": 0,
+            "min_horizontal_distance_m": None,
+            "min_local_z_m": None,
+            "max_local_z_m": None,
+            "count_above_minus_1_0": 0,
+            "count_between_minus_1_8_and_minus_1_0": 0,
+            "count_below_minus_1_8": 0,
+        }
+    return {
+        "count": len(local_z_values),
+        "min_horizontal_distance_m": min(horizontal_distances),
+        "min_local_z_m": min(local_z_values),
+        "max_local_z_m": max(local_z_values),
+        "count_above_minus_1_0": sum(value >= -1.0 for value in local_z_values),
+        "count_between_minus_1_8_and_minus_1_0": sum(
+            -1.8 <= value < -1.0 for value in local_z_values
+        ),
+        "count_below_minus_1_8": sum(value < -1.8 for value in local_z_values),
+    }
+
+
+def lidar_return_path_projection_stats_near_world_target(
+    lidar_actor,
+    lidar_data,
+    path_points_world,
+    *,
+    target_x_m: float,
+    target_y_m: float,
+    horizontal_radius_m: float = 3.0,
+    z_min: float = -1.0,
+    z_max: float = 2.5,
+    tube_half_width_m: float = 1.4,
+):
+    """Diagnostic projection of target-near returns onto a swept path."""
+    if (
+        lidar_data is None
+        or lidar_actor is None
+        or not path_points_world
+        or len(path_points_world) < 2
+    ):
+        return None
+
+    path_xy = []
+    path_s = [0.0]
+    for point in path_points_world:
+        point_xy = (
+            (float(point.x), float(point.y))
+            if hasattr(point, "x") and hasattr(point, "y")
+            else (float(point[0]), float(point[1]))
+        )
+        if path_xy and math.hypot(
+            point_xy[0] - path_xy[-1][0], point_xy[1] - path_xy[-1][1]
+        ) <= 1e-9:
+            continue
+        if path_xy:
+            path_s.append(
+                path_s[-1]
+                + math.hypot(
+                    point_xy[0] - path_xy[-1][0],
+                    point_xy[1] - path_xy[-1][1],
+                )
+            )
+        path_xy.append(point_xy)
+    if len(path_xy) < 2:
+        return None
+
+    lidar_transform = lidar_actor.get_transform()
+    projections = []
+    for lidar_point in lidar_data:
+        local_z = float(lidar_point.point.z)
+        if local_z < z_min or local_z > z_max:
+            continue
+        world_location = lidar_transform.transform(
+            carla.Location(
+                x=lidar_point.point.x,
+                y=lidar_point.point.y,
+                z=lidar_point.point.z,
+            )
+        )
+        target_distance_m = math.hypot(
+            world_location.x - target_x_m,
+            world_location.y - target_y_m,
+        )
+        if target_distance_m > horizontal_radius_m:
+            continue
+
+        best_lateral_sq = None
+        best_along_m = None
+        for index in range(len(path_xy) - 1):
+            projection, _, _, lateral_sq = _project_point_to_segment_2d(
+                world_location.x,
+                world_location.y,
+                path_xy[index][0],
+                path_xy[index][1],
+                path_xy[index + 1][0],
+                path_xy[index + 1][1],
+            )
+            if best_lateral_sq is None or lateral_sq < best_lateral_sq:
+                best_lateral_sq = lateral_sq
+                best_along_m = path_s[index] + projection * (
+                    path_s[index + 1] - path_s[index]
+                )
+        if best_lateral_sq is not None and best_along_m is not None:
+            projections.append((math.sqrt(best_lateral_sq), best_along_m))
+
+    if not projections:
+        return {
+            "eligible_return_count": 0,
+            "inside_tube_count": 0,
+            "min_lateral_distance_m": None,
+            "min_along_path_m": None,
+            "max_along_path_m": None,
+        }
+    return {
+        "eligible_return_count": len(projections),
+        "inside_tube_count": sum(
+            lateral_m <= tube_half_width_m for lateral_m, _ in projections
+        ),
+        "min_lateral_distance_m": min(value[0] for value in projections),
+        "min_along_path_m": min(value[1] for value in projections),
+        "max_along_path_m": max(value[1] for value in projections),
+    }
+
+
 def draw_lane_noodle_corridor(
     world,
     noodle_points_world,

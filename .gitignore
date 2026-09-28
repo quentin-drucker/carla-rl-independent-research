@@ -22,6 +22,10 @@ src/runs/trajectory_viz/
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 
+# Throwaway diagnostic scripts/dumps for investigating a live finding --
+# not part of the numbered test suite, not a tracked research artifact.
+src/_scratch/
+
 # AI-agent planning prompts/scratch — not part of the tracked research record
 plans/
 

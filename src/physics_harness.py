@@ -398,6 +398,69 @@ def compute_rise_time_s(
     return None
 
 
+def summarize_stationary_hold(ticks, *, early_window_s=(1.0, 3.0), late_window_s=2.0) -> dict:
+    """Descriptive motion summary for a vehicle that is SUPPOSED to stay
+    still (Week 4 Chrono hold diagnostic). ticks: TraceTick rows of the
+    hold window only, in order.
+
+    Reports how far it moved (net and along its path), how much it turned,
+    which way it moved relative to its own heading, and whether the motion
+    is dying out (early-window vs. late-window mean speed) -- no pass/fail
+    label, since "how much creep is acceptable" is a protocol decision.
+
+    motion_direction_rel_heading_deg: angle of the net displacement vector
+    relative to the starting heading, wrapped to [-180, 180]: ~0 = rolled
+    forward, ~+/-180 = rolled backward, ~+/-90 = slid sideways (positive =
+    toward the vehicle's right, matching compute_lateral_displacement_m).
+    None if net displacement is under 1 cm.
+    """
+    rows = list(ticks)
+    if not rows:
+        return {}
+    first, last = rows[0], rows[-1]
+    t0 = first.sim_time_s
+
+    path_m = 0.0
+    turned_deg = 0.0
+    for a, b in zip(rows, rows[1:]):
+        path_m += math.hypot(b.pos_x_m - a.pos_x_m, b.pos_y_m - a.pos_y_m)
+        d = b.yaw_deg - a.yaw_deg
+        while d > 180.0:
+            d -= 360.0
+        while d < -180.0:
+            d += 360.0
+        turned_deg += d
+
+    dx, dy = last.pos_x_m - first.pos_x_m, last.pos_y_m - first.pos_y_m
+    net_m = math.hypot(dx, dy)
+    direction = None
+    if net_m >= 0.01:
+        rel = math.degrees(math.atan2(dy, dx)) - first.yaw_deg
+        while rel > 180.0:
+            rel -= 360.0
+        while rel < -180.0:
+            rel += 360.0
+        direction = rel
+
+    def _mean_speed(lo, hi):
+        vals = [r.speed_mps for r in rows if lo <= r.sim_time_s - t0 < hi]
+        return sum(vals) / len(vals) if vals else None
+
+    duration = last.sim_time_s - t0
+    return {
+        "duration_s": duration,
+        "net_displacement_m": net_m,
+        "path_length_m": path_m,
+        "heading_change_deg": turned_deg,
+        "motion_direction_rel_heading_deg": direction,
+        "early_mean_speed_mps": _mean_speed(*early_window_s),
+        "late_mean_speed_mps": _mean_speed(duration - late_window_s, duration + 1e-9),
+        "final_speed_mps": last.speed_mps,
+        "max_speed_mps": max(r.speed_mps for r in rows),
+        "max_abs_pitch_change_deg": max(abs(r.pitch_deg - first.pitch_deg) for r in rows),
+    }
+
+
 def classify_upright_recovery(*, final_abs_roll_deg: float, upright_threshold_deg: float = 15.0) -> str:
     """"upright" / "not_upright" -- a plain, predeclared threshold check on
     the vehicle's roll angle after a maneuver has ended and it has settled.
@@ -522,6 +585,9 @@ def capture_tick_from_actor(
     prev_yaw_deg: Optional[float],
     dt_s: float,
     start_pose: Optional[Tuple[float, float, float]] = None,
+    sim_frame: Optional[int] = None,
+    wall_tick_s: Optional[float] = None,
+    event_marker: Optional[str] = None,
 ) -> TraceTick:
     """Builds one TraceTick from a live CARLA vehicle actor.
 
@@ -531,6 +597,8 @@ def capture_tick_from_actor(
     start_pose: (x, y, yaw_deg) of the first tick, used to compute
     lateral_displacement_m against the vehicle's own initial heading. None
     skips lateral-displacement computation (leaves it None on the tick).
+    sim_frame / wall_tick_s / event_marker: optional caller-known values
+    passed straight through to the TraceTick (None if not supplied).
     """
     transform = vehicle.get_transform()
     loc = transform.location
@@ -562,6 +630,8 @@ def capture_tick_from_actor(
 
     applied = vehicle.get_control()
     fl_wheel_angle_deg, fr_wheel_angle_deg = get_front_wheel_steer_angles_deg(vehicle)
+    api_accel = vehicle.get_acceleration()
+    angular_vel = vehicle.get_angular_velocity()
 
     return TraceTick(
         tick_index=tick_index,
@@ -587,6 +657,16 @@ def capture_tick_from_actor(
         lateral_displacement_m=lateral_displacement_m,
         front_wheel_steer_angle_deg=fl_wheel_angle_deg,
         front_right_wheel_steer_angle_deg=fr_wheel_angle_deg,
+        event_marker=event_marker,
+        vel_z_mps=velocity.z,
+        api_accel_x_mps2=api_accel.x,
+        api_accel_y_mps2=api_accel.y,
+        api_accel_z_mps2=api_accel.z,
+        angular_vel_x_dps=angular_vel.x,
+        angular_vel_y_dps=angular_vel.y,
+        angular_vel_z_dps=angular_vel.z,
+        sim_frame=sim_frame,
+        wall_tick_s=wall_tick_s,
     )
 
 

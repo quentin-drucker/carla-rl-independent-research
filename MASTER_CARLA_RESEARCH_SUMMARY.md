@@ -548,6 +548,8 @@ No `.git` repository, `requirements.txt`, lockfile, package definition, or autom
 | `src/physics_backend.py` | **CURRENT (diagnostic support)** | Pure, offline-tested backend selection: Chrono template validation and hashing, `--chrono` server-flag check, evidence-based backend label, non-overwriting run directories. |
 | `src/test24___chrono_backend_smoke.py` | **RESEARCH EVIDENCE** | Backend-selectable smoke test (`--backend default\|chrono`). Default completes; Chrono aborts at the initial-state gate (held-brake creep). |
 | `src/test25___chrono_hold_diagnostic.py` | **RESEARCH EVIDENCE** | Eight-case stationary-hold diagnostic behind the Week 4 NO-GO decision. Not part of the main research path. |
+| `src/encounter_metrics.py` | **CURRENT** | Common, controller-independent evaluation protocol: fixed post-onset window, explicit outcome, oriented-footprint contact/clearance, onset-referenced stopping, route recovery, drivability. Use instead of `RunResult` outcomes for controller comparisons. |
+| `src/steer_brake_baseline.py`, `src/test26___steer_brake_baseline.py` | **CURRENT** | Oracle-onset three-mode baseline (no_intervention / brake_only / brake_steer) under default physics, and its live runner (`--rescore` re-scores saved traces). |
 | `docs/MANUAL_CARLA_DRIVING.md` | **CURRENT** | Commands for driving a car by hand in CARLA, with or without Chrono. |
 
 ## Models and retained outputs
@@ -2070,6 +2072,61 @@ decision no longer depended on them.
 
 CarSim is the only other vehicle-dynamics integration worth a brief look, and only if
 Connecticut College already has a license and support. No simulator migration is planned.
+
+## Week 4 baseline: scripted braking+steering beats braking alone in a measurable window (added 2026-10-02)
+
+**What was done** (branch `experiment/chrono-physics-feasibility--steer-brake-baseline`, CARLA
+default physics):
+- `src/test26___steer_brake_baseline.py` runs three matched controllers on one
+  stationary-pedestrian scenario (Town04_Opt, spawn-242 route):
+  - **no_intervention:** hazard braking disabled.
+  - **brake_only:** full brake from onset.
+  - **brake_steer:** the same full brake plus test18's scripted swerve, 1.98 m to the
+    route-right over 0.5 s.
+- All three start reacting at the same scripted moment, the "oracle onset" (opt-in
+  `run_scenario(hazard_command_fn=...)`). That moment is when the ego is a set
+  time-to-collision (TTC) from the pedestrian, using ground truth rather than LiDAR
+  detection timing.
+- Every run is scored by the new `src/encounter_metrics.py` protocol over an identical 8 s
+  window after onset. It uses oriented-footprint contact and clearance in every direction,
+  stopping metrics measured from the shared onset, an explicit outcome reason, and per-tick
+  footprint drivability.
+
+**Measured** (sweep `20261002_004906`; deterministic, as repeat runs reproduced exactly):
+
+| Onset TTC (s) | 35 mph brake_only | 35 mph brake_steer | 45 mph brake_only | 45 mph brake_steer |
+|---|---|---|---|---|
+| 0.6 | hit 12.3 m/s | hit 12.1 m/s | hit 15.9 m/s | hit 15.7 m/s |
+| 0.8 | hit 10.2 m/s | **passed, 0.12 m** | hit 13.6 m/s | **passed, 0.30 m** |
+| 1.0 | hit 8.0 m/s | **stopped, 0.32 m** | hit 10.9 m/s | **passed, 0.45 m** |
+| 1.2 | stopped, 0.23 m | stopped, 0.79 m | hit 8.1 m/s | **stopped, 0.54 m** |
+| 1.4–1.6 | stopped clear | stopped clear | stopped clear | stopped clear |
+
+no_intervention hit the pedestrian at full speed in every case.
+
+**Findings:**
+- **Scripted braking+steering avoids the pedestrian where braking alone hits it: onset TTC
+  0.8–1.0 s at 35 mph, widening to 0.8–1.2 s at 45 mph.** The maneuver is physically
+  achievable and measurable in CARLA, which was the precondition for adding steering to the RL
+  action space.
+- Margins inside the window are small (0.12–0.54 m). Both strategies fail at 0.6 s.
+- At full brake, brake_steer stops beside or before the pedestrian and never returns to the
+  route, so route recovery is not exercised by this baseline.
+- **CARLA's collision sensor reported no collision in any of the 26 contacts** (including a
+  20 m/s straight-through hit). The legacy `RunResult` labelled these `slowed_avoided` or
+  `full_stop`. RunResult outcomes for stationary or far-cross pedestrians therefore undercount
+  collisions. Use `encounter_metrics` for any controller comparison.
+- Caveat, recorded and deliberately not pursued: **steering costs no braking in CARLA's
+  default vehicle model.** brake_steer decelerates exactly like brake_only while also turning,
+  so combined acceleration can exceed ~1 g. Results are reported as CARLA produces them.
+- Map quirk: Town04_Opt has ~2 cm gaps between some adjacent Driving lanes, where
+  `get_waypoint(project_to_road=False)` returns nothing. A seam-tolerant check
+  (`map_drivability.classify_point_drivability_seam_tolerant`) is used for footprint
+  drivability. The swept-path corridor check still uses the strict version.
+
+**Evidence status:** **CONFIRMED** for this scenario: one location, route-right swerve,
+stationary pedestrian, full brake, deterministic reruns. It is not yet tested at other
+locations, with left swerves, at partial brake levels, or with LiDAR detection in the loop.
 
 ---
 

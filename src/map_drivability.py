@@ -109,3 +109,40 @@ def check_corridor_drivability(carla_map, corridor_points_world, lane_type=carla
         "samples": samples,
         "first_non_drivable_index": first_non_drivable_index,
     }
+
+
+# Town04_Opt has hairline gaps (~2 cm) along some boundaries between two
+# adjacent Driving lanes: a point exactly on the painted line returns no
+# waypoint at all with project_to_road=False (found 2026-10-02 by test26: a
+# footprint corner crossing from lane -2 into lane -3 of road 39 was flagged
+# non_drivable for one tick although every neighbouring point was Driving).
+SEAM_TOLERANCE_M = 0.05
+
+
+def classify_point_drivability_seam_tolerant(
+    carla_map, location, *, seam_tolerance_m=SEAM_TOLERANCE_M, lane_type=carla.LaneType.Driving,
+):
+    """classify_point_drivability, but a point with NO waypoint at all is
+    re-checked as a possible lane seam: it counts as drivable only if the
+    points seam_tolerance_m away on BOTH opposite sides (in x, or in y) are
+    drivable -- i.e. it is sandwiched between driving surface. At a real
+    road edge one side is off-road, so the point stays non_drivable.
+
+    Returns (status, waypoint, seam_corrected). A non_drivable result with a
+    waypoint of the wrong lane type (e.g. sidewalk) is never "corrected".
+    """
+    status, waypoint = classify_point_drivability(carla_map, location, lane_type=lane_type)
+    if status != "non_drivable" or waypoint is not None:
+        return status, waypoint, False
+
+    def _probe(dx, dy):
+        probe = carla.Location(x=location.x + dx, y=location.y + dy, z=location.z)
+        return classify_point_drivability(carla_map, probe, lane_type=lane_type)
+
+    t = seam_tolerance_m
+    for (a_dx, a_dy), (b_dx, b_dy) in (((-t, 0.0), (t, 0.0)), ((0.0, -t), (0.0, t))):
+        a_status, a_wp = _probe(a_dx, a_dy)
+        b_status, _ = _probe(b_dx, b_dy)
+        if a_status == "drivable" and b_status == "drivable":
+            return "drivable", a_wp, True
+    return "non_drivable", None, False

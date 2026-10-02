@@ -271,6 +271,7 @@ def run_scenario(
     other_vehicle_offset_m: float = None,
     use_geometric_clearance_override: bool = False,
     use_swept_path_clearance_override: bool = False,
+    hazard_command_fn=None,
 ) -> RunResult:
     """
     Run one full scenario with the given config. Returns a RunResult.
@@ -318,6 +319,13 @@ def run_scenario(
                     is supplied as controlled-scenario ground truth for the
                     positive-clearance gate; defaults False, so existing
                     scenarios retain their prior behavior.
+        hazard_command_fn: Optional scripted ("oracle onset") hazard
+                    decision for the steering-plus-braking baseline, called
+                    each tick as (sim_time_s, triggered, trigger_time_s) and
+                    returning (hazard_active: bool, brake_target: float). It
+                    replaces LiDAR hazard detection in lane_follow_step (see
+                    scripted_hazard_active there). None (default) keeps the
+                    LiDAR decision, matching every existing caller.
     """
     TARGET_SPEED_MPS = cfg.target_mph * 0.44704
     if use_swept_path_clearance_override and not monitor_lateral_corridors:
@@ -743,6 +751,13 @@ def run_scenario(
                     )
                 )
 
+            _scripted_hazard_active = None
+            _scripted_brake_target = 1.0
+            if hazard_command_fn is not None:
+                _scripted_hazard_active, _scripted_brake_target = hazard_command_fn(
+                    sim_time_s, triggered, trigger_time_s
+                )
+
             # --- Controller step ---
             telemetry = lane_follow_step(
                 world, vehicle,
@@ -764,6 +779,8 @@ def run_scenario(
                 pedestrian_y_m=_geo_pedestrian_y_m,
                 use_geometric_clearance_override=use_geometric_clearance_override,
                 use_swept_path_clearance_override=use_swept_path_clearance_override,
+                scripted_hazard_active=_scripted_hazard_active,
+                scripted_brake_target=_scripted_brake_target,
             )
 
             # Belt-and-suspenders: once the ego has made a full emergency stop,

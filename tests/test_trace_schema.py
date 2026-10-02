@@ -138,6 +138,64 @@ class PhysicsRunManifestSerializationTests(unittest.TestCase):
         loaded = PhysicsRunManifest.from_dict(d)
         self.assertEqual(loaded.test_family, "braking")
 
+    def test_legacy_manifest_without_backend_reads_as_unrecorded(self):
+        # Every pre-Week-4 manifest lacks physics_backend; it must load as
+        # None ("not recorded"), never be defaulted to a backend name.
+        d = self._make_manifest().to_dict()
+        del d["physics_backend"]
+        self.assertIsNone(PhysicsRunManifest.from_dict(d).physics_backend)
+
+    def test_backend_and_nested_chrono_provenance_round_trip(self):
+        chrono = {
+            "max_substeps": 5000,
+            "max_substep_delta_time_s": 0.002,
+            "templates": {"vehicle_json": {"relative_path": "sedan/vehicle/Sedan_Vehicle.json",
+                                           "sha256": "ab" * 32}},
+        }
+        manifest = self._make_manifest(
+            physics_backend="chrono",
+            parameters={"requested_backend": "chrono", "chrono": chrono,
+                        "termination_reason": "stopped", "schedule": [{"name": "brake"}]},
+        )
+        path = os.path.join(self._tmpdir.name, "manifest.json")
+        manifest.to_json(path, overwrite=False)
+        loaded = PhysicsRunManifest.from_json(path)
+        self.assertEqual(loaded.physics_backend, "chrono")
+        self.assertEqual(loaded.parameters["chrono"], chrono)
+        self.assertEqual(loaded, manifest)
+
+    def test_refuses_to_overwrite_when_requested(self):
+        path = os.path.join(self._tmpdir.name, "manifest.json")
+        self._make_manifest(physics_backend="default").to_json(path, overwrite=False)
+        with self.assertRaises(FileExistsError):
+            self._make_manifest(physics_backend="chrono").to_json(path, overwrite=False)
+        self.assertEqual(PhysicsRunManifest.from_json(path).physics_backend, "default")
+
+
+class RawGetterTraceFieldTests(unittest.TestCase):
+    def test_raw_getter_and_timing_fields_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "trace.csv")
+            tick = _make_tick(
+                vel_z_mps=-0.01, api_accel_x_mps2=1.5, api_accel_y_mps2=-0.2, api_accel_z_mps2=0.0,
+                angular_vel_x_dps=0.1, angular_vel_y_dps=-0.1, angular_vel_z_dps=12.0,
+                sim_frame=123456, wall_tick_s=0.0041, event_marker="phase:accelerate",
+            )
+            write_trace_csv(path, [tick])
+            loaded = read_trace_csv(path)[0]
+        self.assertEqual(loaded, tick)
+        self.assertIsInstance(loaded.sim_frame, int)
+
+    def test_old_trace_without_new_columns_still_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "old.csv")
+            with open(path, "w", newline="") as f:
+                f.write("tick_index,sim_time_s,pos_x_m,pos_y_m,pos_z_m,yaw_deg,pitch_deg,roll_deg,speed_mps\n")
+                f.write("0,0.02,1,2,0,10,0,0,5\n")
+            loaded = read_trace_csv(path)[0]
+        self.assertIsNone(loaded.angular_vel_z_dps)
+        self.assertIsNone(loaded.sim_frame)
+
 
 if __name__ == "__main__":
     unittest.main()

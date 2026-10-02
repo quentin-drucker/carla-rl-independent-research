@@ -12,6 +12,8 @@ This work began as a research project for COM496 (junior spring, 2026).
   and open questions. Start here.
 - **[WORKFLOW.md](WORKFLOW.md)** — day-to-day working notes.
 - **[notes/](notes)** — earlier research notes from the original semester.
+- **[docs/MANUAL_CARLA_DRIVING.md](docs/MANUAL_CARLA_DRIVING.md)** — start CARLA and
+  manually drive a vehicle with the keyboard, with or without Chrono physics.
 
 ## Environment setup
 

@@ -136,6 +136,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                       pedestrian_y_m=None,
                       use_geometric_clearance_override=False,
                       use_swept_path_clearance_override=False,
+                      scripted_hazard_active=None,  # None = LiDAR decides (default); True/False = a script decides
+                      scripted_brake_target=1.0,    # brake target while scripted_hazard_active is True
                       ):
     """
     Lane-follow "brain" for one simulation step (meaning one tick).
@@ -154,6 +156,11 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     - We now use a target-speed controller instead of a fixed throttle, so "10 mph" is easy to set.
     """
 
+
+    if scripted_hazard_active is not None and (
+        use_geometric_clearance_override or use_swept_path_clearance_override
+    ):
+        raise ValueError("scripted_hazard_active cannot be combined with the clearance overrides")
 
     carla_map = world.get_map() # used below to query waypoints "under" car
 
@@ -717,6 +724,21 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     if geometric_clear_can_release:
         hazard_active = False
 
+    # -------------------------------------------------
+    # Scripted ("oracle onset") hazard decision (2026-10-02, opt-in)
+    # -------------------------------------------------
+    # For the steering-plus-braking baseline: every controller must start
+    # reacting at the SAME predeclared moment, independent of LiDAR detection
+    # timing, so the comparison measures physical achievability rather than
+    # perception. When scripted_hazard_active is not None it replaces the
+    # LiDAR hazard decision (LiDAR distances are still measured and logged);
+    # the brake ramp, mode state machine, and STOP_HOLD logic are unchanged.
+    # None (the default) leaves every existing caller's behavior identical.
+    hazard_source = "lidar"
+    if scripted_hazard_active is not None:
+        hazard_active = bool(scripted_hazard_active)
+        hazard_source = "scripted"
+
     active_path_occupancy_status = (
         transition_path_occupancy.get("status")
         if transition_path_occupancy is not None
@@ -767,6 +789,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
             else:
                 # "proportional_ramp" (default) and any unknown value
                 brake_target = penetration
+    if scripted_hazard_active:
+        brake_target = clamp(float(scripted_brake_target), 0.0, 1.0)
 
     # RL override: agent's chosen brake force replaces profile-computed target.
     # The ramp limiter still applies, so the agent doesn't need to learn smoothing.
@@ -858,6 +882,8 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # while actor occupancy says the committed path remains blocked.
     if active_path_release_blocked:
         hazard_clear = False
+    if scripted_hazard_active is not None:
+        hazard_clear = not scripted_hazard_active
 
     # Count consecutive clear ticks (for stability)
     if hazard_clear:
@@ -1102,6 +1128,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
         "commanded_path_occupancy": commanded_path_occupancy,
         "transition_path_occupancy": transition_path_occupancy,
         "hazard_governing_source": hazard_governing_source,  # "original" | "transition"
+        "hazard_source": hazard_source,  # "lidar" (default) | "scripted"
         "hazard_governing_distance_m": hazard_governing_distance_m,
         "trigger_distance_m": trigger_distance_m,  # computed safety trigger distance for THIS tick (meters)
         "hazard_brake_cmd": 1.0 if hazard_active else 0.0, # 0 or 1 depending on whether hazard is active--no ramp for now.

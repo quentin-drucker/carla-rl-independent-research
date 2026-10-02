@@ -19,6 +19,10 @@ src/runs/physics/
 # raw run data/images.
 src/runs/trajectory_viz/
 
+# Raw per-run traces/manifests from the steering-plus-braking baseline
+# (test26) -- same reasoning; findings go in worklogs/PRs/MASTER summary.
+src/runs/steer_brake_baseline/
+
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 

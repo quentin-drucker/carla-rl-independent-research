@@ -122,6 +122,27 @@ class TraceTick:
     pedestrian_y_m: Optional[float] = None
     event_marker: Optional[str] = None
 
+    # ------------------------------------------------------------------
+    # Raw actor-getter state (added Week 4, Chrono feasibility). Logged
+    # alongside the finite-difference accel_mps2/yaw_rate_dps above, not
+    # instead of them: whether CARLA's own getters stay trustworthy under
+    # a different physics backend is itself part of the Week 4 audit, so
+    # both views are kept for comparison. None when not captured.
+    # ------------------------------------------------------------------
+    vel_z_mps: Optional[float] = None
+    # World-frame acceleration from actor.get_acceleration() (m/s^2).
+    api_accel_x_mps2: Optional[float] = None
+    api_accel_y_mps2: Optional[float] = None
+    api_accel_z_mps2: Optional[float] = None
+    # actor.get_angular_velocity() (deg/s, per the CARLA API docs).
+    angular_vel_x_dps: Optional[float] = None
+    angular_vel_y_dps: Optional[float] = None
+    angular_vel_z_dps: Optional[float] = None
+    # Simulator frame id returned by world.tick(), and wall-clock seconds
+    # that tick took (for the backend runtime-cost comparison).
+    sim_frame: Optional[int] = None
+    wall_tick_s: Optional[float] = None
+
 
 @dataclass
 class PhysicsRunManifest:
@@ -157,14 +178,24 @@ class PhysicsRunManifest:
     # kept as a free-form dict so this manifest doesn't need a new dataclass
     # field for every test family.
 
+    physics_backend: Optional[str] = None
+    # Vehicle-physics backend in effect for the recorded ticks (Week 4):
+    # "default", "chrono", or a failure label from
+    # physics_backend.resolve_recorded_backend(). None = not recorded --
+    # every pre-Week-4 manifest, all of which used CARLA default physics.
+    # Kept top-level (not inside `parameters`) so default and Chrono
+    # evidence can never be mixed silently.
+
     def to_dict(self) -> dict:
         return asdict(self)
 
-    def to_json(self, path: str) -> None:
+    def to_json(self, path: str, *, overwrite: bool = True) -> None:
+        """overwrite=False refuses to replace an existing file (same rule as
+        write_trace_csv); the default keeps the Week 3 callers' behavior."""
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "w" if overwrite else "x") as f:
             json.dump(self.to_dict(), f, indent=2)
 
     @classmethod
@@ -213,7 +244,7 @@ def read_trace_csv(path: str) -> List[TraceTick]:
     for numeric-looking optional fields.
     """
     field_types = {f.name: f.type for f in fields(TraceTick)}
-    int_fields = {"tick_index"}
+    int_fields = {"tick_index", "sim_frame"}
     str_fields = {"event_marker"}
 
     ticks = []

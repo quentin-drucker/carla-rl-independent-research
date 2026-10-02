@@ -71,6 +71,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **What remains incomplete?** | Fair cross-controller outcome/metric computation, repeated seeds, model/source provenance, corrected avoidability labels, comfort tuning, ABS/skid analysis, broader hazards/environments, PPO, and multimodal perception. |
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
+| **Which vehicle physics? (Week 4, 2026-10-01)** | **CARLA's default physics stays primary. Built-in Chrono is a NO-GO for the main experiment and a LIMITED-GO for separate robustness studies only:** it cannot hold a braked car still at low speed in CARLA 0.9.16's bridge. See [the Week 4 decision](#week-4-decision-carlas-built-in-chrono-physics-is-not-the-research-backend-added-2026-10-01). |
 
 ## One-sentence state of the research
 
@@ -503,7 +504,7 @@ No `.git` repository, `requirements.txt`, lockfile, package definition, or autom
 | `src/lidar_sensor.py` | **CURRENT** | LiDAR blueprint and queue setup. |
 | `src/lidar_utils.py` | **CURRENT** | LiDAR parsing and route-corridor hazard filtering. |
 | `src/walker_utils.py` | **CURRENT** | Scripted pedestrian spawn and motion. |
-| `src/carla_session.py` | **CURRENT** | CARLA connection, world loading, and synchronous-mode helpers. |
+| `src/carla_session.py` | **CURRENT** | CARLA connection, world loading, synchronous-mode helpers, and exception-safe `cleanup_session()` (Week 4). |
 | `src/spawning.py` | **CURRENT** | Vehicle/obstacle spawn helpers; current ego blueprint is Tesla Model 3. |
 | `src/spectator.py` | **CURRENT utility** | Spectator follow/glide/free camera behavior. |
 | `src/run_result.py` | **CURRENT** | Per-run result schema and serialization. |
@@ -539,6 +540,15 @@ No `.git` repository, `requirements.txt`, lockfile, package definition, or autom
 | `src/plot_presentation_summary.py` | **CURRENT plotting utility** | Presentation summary figure; has a hard-coded `SAC v2` display prefix that can produce misleading text such as `SAC v2 (v3 1600k)`. |
 | `src/plot_stopping_distance.py` | **CURRENT offline diagnostic** | Stopping-distance reference from calibration CSV. |
 | `src/load_town4.py` | **LOW-VALUE / INEFFECTIVE FOR MAIN FLOW** | Loads non-Opt `Town04`, but main environments reload `Town04_Opt`. |
+
+### Physics-backend diagnostics (Week 4)
+
+| Path | Status | Purpose |
+|---|---|---|
+| `src/physics_backend.py` | **CURRENT (diagnostic support)** | Pure, offline-tested backend selection: Chrono template validation and hashing, `--chrono` server-flag check, evidence-based backend label, non-overwriting run directories. |
+| `src/test24___chrono_backend_smoke.py` | **RESEARCH EVIDENCE** | Backend-selectable smoke test (`--backend default\|chrono`). Default completes; Chrono aborts at the initial-state gate (held-brake creep). |
+| `src/test25___chrono_hold_diagnostic.py` | **RESEARCH EVIDENCE** | Eight-case stationary-hold diagnostic behind the Week 4 NO-GO decision. Not part of the main research path. |
+| `docs/MANUAL_CARLA_DRIVING.md` | **CURRENT** | Commands for driving a car by hand in CARLA, with or without Chrono. |
 
 ## Models and retained outputs
 
@@ -1981,6 +1991,85 @@ persistent, actor-independent tracks. Validation is also still concentrated on o
 The next architectural step is temporal LiDAR clustering/tracking with uncertainty through
 missing frames, followed by investigation of test19's delayed recovery and broader validation
 of occupied-path hold/release behavior with moving vehicles.
+
+## Week 4 decision: CARLA's built-in Chrono physics is not the research backend (added 2026-10-01)
+
+**Keep CARLA's default physics as the primary research backend. Chrono is a NO-GO for the
+main experiment, but a LIMITED-GO for optional robustness testing.**
+
+**What was done** (branch `experiment/chrono-physics-feasibility`; this was a bounded feasibility check):
+- Confirmed that packaged CARLA 0.9.16 ships Project Chrono 6.0.0 and runs it when launched with
+  `CarlaUE4.exe --chrono`. Drove a Tesla Model 3 by hand under both backends
+  (`docs/MANUAL_CARLA_DRIVING.md`). Chrono felt more inertial, with longer acceleration
+  windup; that impression was not measured.
+- Built `src/test24___chrono_backend_smoke.py`, a backend-selectable smoke test, on a new
+  pure module `src/physics_backend.py` (offline-tested):
+  - Template and nested-reference validation with SHA-256 hashes, plus a check that the
+    server was launched with `--chrono`. Both run before anything spawns.
+  - The recorded backend label comes from evidence: a failed enable or a collision can never
+    be recorded as `chrono`. CARLA 0.9.16 has no API call that reports which backend is active.
+  - A predeclared control schedule and an initial-state gate before measurement.
+  - Run directories are exclusive and never overwritten.
+
+  `TraceTick` gained additive raw-getter columns (`get_acceleration`,
+  `get_angular_velocity`, `vel_z`, sim frame, wall time per tick), and `PhysicsRunManifest`
+  gained a top-level `physics_backend` field (`None` = every pre-Week-4 run, all default
+  physics).
+- Chrono never reached the measured sequence. After enabling, the braked, parked car
+  crept at ~0.16 m/s, so the initial-state gate correctly aborted. The result was bit-identical
+  on repeat. `src/test25___chrono_hold_diagnostic.py` then held a parked car for 10 s under
+  8 controlled variations, run twice with bit-identical results.
+
+**Measured (Town04_Opt; single configuration; descriptive):**
+
+| Case (10 s hold) | Net movement |
+|---|---|
+| Default, brake 1.0 or **no brake**, 0.62° slope or flat | 0.00 m (never moves) |
+| Chrono, brake 1.0, 0.62° slope | ~2.0 m downhill, turned ~+28°, still 0.2 m/s at the end |
+| Chrono, no brake, 0.62° slope | ~3.4 m straight downhill, accelerating |
+| Chrono, brake 1.0, flat (0.00°) | ~12 cm, slowing (0.009 m/s at the end), not exactly zero |
+| Chrono, brake 1.0 + hand brake, slope | ~3.7 m, worse than no brake (see cause below) |
+| Chrono enabled on the first tick (no settle), slope | ~1.9 m over ~11 s, so enable timing is not the cause |
+
+Every Chrono enable produced a ~3–3.7° pitch jolt. Chrono cost ~7.5–10 ms of wall time per
+0.02 s tick, against ~1 ms for default physics: roughly 10x slower.
+
+**Diagnosed cause** (from CARLA 0.9.16 and Chrono 6.0.0 source; code and templates were not
+changed):
+- Chrono's `ChBrakeSimple` documents that it cannot model static sticking. Chrono has
+  brake locking, but it is off by default, and CARLA's bridge never enables it.
+- CARLA passes `brake + hand_brake` to Chrono without clamping, so brake 1.0 plus hand brake
+  sends an out-of-range 2.0 instead of a real parking-brake command.
+- CARLA hard-codes terrain friction to 1, so low map friction is not the cause.
+- Part of the enable jolt is a bridge artifact: Chrono initializes the body 0.25 m up, and
+  the mapping back to Unreal adds a fixed 2.5° pitch.
+
+There is no confirmed JSON- or template-only fix. A real fix needs a source-level change to
+CARLA's Chrono bridge and a rebuild, which is out of scope.
+
+**Why this decision:**
+- Chrono's deterministic low-speed creep can contaminate exactly the outcomes this project
+  measures: stopping, collision, and safe stop.
+- Default physics has known artifacts of its own. It is unrealistically sticky at rest (an
+  unbraked car does not roll down a 0.6° grade), and it has the Week 3 low-speed braking snap.
+  But it is stable and reproducible (the regression run after the refactor matched the
+  earlier trace exactly), which is what controller comparisons need.
+- Default physics keeps continuity with last semester's and Week 3's experiments.
+
+**Evidence status:** **CONFIRMED** for the hold behavior: measured directly, bit-identical
+across repeated runs, and explained from source. The planned matched straight-braking and
+constant-turn Chrono comparisons were **not run**: once Chrono failed the at-rest gate, the
+decision no longer depended on them.
+
+**Rules for any future Chrono use (LIMITED-GO):**
+- Report it only as a separate sensitivity/robustness study, using matched default/Chrono
+  reruns through the same script.
+- Never compare Chrono numbers directly with historical default-physics numbers.
+- Prefer verified flat terrain, and keep measured phases away from near-zero-speed behavior.
+- Do not use CARLA's hand brake under Chrono.
+
+CarSim is the only other vehicle-dynamics integration worth a brief look, and only if
+Connecticut College already has a license and support. No simulator migration is planned.
 
 ---
 

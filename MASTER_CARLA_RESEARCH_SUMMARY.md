@@ -2075,7 +2075,7 @@ Connecticut College already has a license and support. No simulator migration is
 
 ## Week 4 baseline: scripted braking+steering beats braking alone in a measurable window (added 2026-10-02)
 
-**What was done** (branch `experiment/chrono-physics-feasibility--steer-brake-baseline`, CARLA
+**What was done** (branch `experiment/steer-brake-baseline`, stacked on the Chrono branch, CARLA
 default physics):
 - `src/test26___steer_brake_baseline.py` runs three matched controllers on one
   stationary-pedestrian scenario (Town04_Opt, spawn-242 route):

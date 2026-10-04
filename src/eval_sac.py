@@ -21,6 +21,14 @@ Physics labels:
 EVAL_SEED fixes the random scenario sequence so every run of this script
 evaluates the exact same 100 scenarios in the same order. Change the seed
 to generate a different fixed set (e.g. for a second validation batch).
+
+!! WARNING (2026-10-04, Phase 1): do not report this script's outcome labels.
+   It infers "full_stop" from any non-collision termination (a far-cross
+   pedestrian clearing the road counts as a stop), relies on CARLA's collision
+   sensor (which missed every pedestrian contact in the Week 4 baseline), uses
+   per-episode windows, and saves no trace or provenance. Kept unchanged only
+   to reproduce last semester's pipeline. For any reported number use
+   eval_policy_encounters.py (common encounter protocol).
 """
 
 import sys
@@ -34,6 +42,9 @@ from carla_aeb_env import CarlaAEBEnv
 from spectator import SpectatorController
 from train_sac import sample_config
 from avoidability import compute_avoidability
+
+print("[WARNING] legacy evaluator: outcome labels are unreliable; "
+      "use eval_policy_encounters.py for reported results (see header).")
 
 EVAL_SEED = 42   # fixed seed → same 100 scenarios every run
 random.seed(EVAL_SEED)

@@ -23,6 +23,10 @@ src/runs/trajectory_viz/
 # (test26) -- same reasoning; findings go in worklogs/PRs/MASTER summary.
 src/runs/steer_brake_baseline/
 
+# Raw per-episode traces/steps/metrics from encounter-protocol RL evaluation
+# (eval_policy_encounters.py) -- same reasoning.
+src/runs/rl_encounter_eval/
+
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 

@@ -2112,8 +2112,10 @@ no_intervention hit the pedestrian at full speed in every case.
 - Margins inside the window are small (0.12–0.54 m). Both strategies fail at 0.6 s.
 - At full brake, brake_steer stops beside or before the pedestrian and never returns to the
   route, so route recovery is not exercised by this baseline.
-- **CARLA's collision sensor reported no collision in any of the 26 contacts** (including a
-  20 m/s straight-through hit). The legacy `RunResult` labelled these `slowed_avoided` or
+- **CARLA's collision sensor reported no collision in any of the 22 contacts** (21 in the
+  sweep plus 1 in the smoke run, out of 39 runs; including a 20 m/s straight-through hit).
+  An earlier version of this section said 26, a miscount corrected on 2026-10-04 from the
+  per-run `metrics.json`/`result.json` files. The legacy `RunResult` labelled these `slowed_avoided` or
   `full_stop`. RunResult outcomes for stationary or far-cross pedestrians therefore undercount
   collisions. Use `encounter_metrics` for any controller comparison.
 - Caveat, recorded and deliberately not pursued: **steering costs no braking in CARLA's
@@ -2563,7 +2565,11 @@ This is a design decision for the eventual expanded `carla_aeb_env.py`, not yet 
 
 ## Design artifact: tightening lateral constraints (Week 3 Workstream 1.3, added 2026-09-27)
 
-**Status: deliberately NOT implemented.** Per the Week 3 plan's own gate for this item
+**Status: RESOLVED by Prof. Izmirli's reply (email, 2026-10-03). See
+[Resolution](#resolution-advisor-answer-2026-10-03) at the end of this section.** The text
+below is the original Week 3 design pass, kept as written.
+
+**Original status (2026-09-27): deliberately NOT implemented.** Per the Week 3 plan's own gate for this item
 ("if the intended behavior remains ambiguous, keep this as a design artifact and do not
 guess in control code"), this section is the required design pass, not a spec for code
 written this week. No `lane_follow.py` changes accompany this entry.
@@ -2674,6 +2680,47 @@ one focused live positive and one focused live negative case, then the full vali
 matrix, inspecting traces rather than trusting aggregate outcome labels alone. This design
 artifact intentionally stops short of writing that specification, since committing to
 concrete boundary values for an ambiguous rule would itself be guessing.
+
+### Resolution: advisor answer (2026-10-03)
+
+Quentin asked Prof. Izmirli which of (a), (b), (c) he meant, and whether he preferred
+per-tick steering or a one-time swerve decision (left/right/none) plus braking. His answers:
+
+- **(a) Shrink the max swerve as TTC drops: "probably not." Rejected; do not build it.**
+- **(b) Grow emergency steering authority: "hopefully going to be an emergent property of
+  learned steering." Do not hard-code it.**
+- **(c) No reversing a committed direction: "would be good, since indecision will reduce
+  the efficacy of the maneuver,"** but he "wouldn't be surprised if the per-tick actions
+  automatically lead to this behavior." So measure it first, not constrain it.
+- **Per-tick vs. one-time swerve: continuous, per-tick steering** ("at least that is the
+  more interesting case").
+- His underlying idea is a **"passage"**: the car continuously observes the allowable range
+  across the road (e.g. from the left road edge to a pedestrian walking left) and adjusts
+  its steering to it. This generalizes to a second obstacle, such as another car after the
+  pedestrian. Aiming at the passage midpoint is too timid: it won't steer hard enough and
+  doesn't anticipate where the pedestrian will be when the car reaches its walking line.
+  He suggests aiming toward the extreme edge on the swerve side (leftmost for a left
+  swerve, rightmost for a right swerve, center when going straight).
+
+**What this means for Phase 2 (steering in RL; design not yet approved):**
+- The action space gets continuous per-tick steering plus braking. Whether the action is a
+  raw steering command or a lateral aim point (through `lane_follow_step`'s route-relative
+  offset) is an open design choice. The aim-point path inherits the lateral controller's
+  smoothing: in test18 it reached 1.65 m of a 1.98 m request. So measure each option's
+  authority before choosing.
+- The observation includes the passage. Compute it for the ego *center* (shrink by the
+  half-width plus a margin), so "aim at the extreme edge" never puts part of the car off the
+  road or into the obstacle. Build it from `map_drivability` and `vehicle_occupancy` so other
+  obstacles can narrow it later. For crossing pedestrians, the edge should use the
+  pedestrian's predicted position when the ego reaches the crossing line (not needed for the
+  stationary-pedestrian baseline).
+- No rule that shrinks the swerve bound. Do not cap the action range tighter than the
+  passage itself.
+- Evaluation adds a steering-commitment metric (e.g. sign reversals of the requested
+  steering or lateral offset after onset). If learned policies waver, a commitment
+  constraint (c) is an advisor-endorsed fallback, not a guess.
+- His "passage-edge aim" rule is also a candidate scripted baseline to compare a learned
+  policy against.
 
 ## Questions revealed by reconstruction
 

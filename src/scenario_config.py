@@ -210,3 +210,25 @@ class ScenarioConfig:
         """Load config from a JSON file saved by to_json()."""
         with open(path) as f:
             return cls.from_dict(json.load(f))
+
+
+def crossing_lateral_offsets_m(*, side: str, cross: str, lane_width_m: float):
+    """(start_lat, end_lat) of the walker, in metres along the encounter
+    waypoint's right vector from lane center. Same rule as test3's
+    _compute_crossing_endpoints_from_waypoint, shared here so CarlaAEBEnv
+    places pedestrians identically (pure, offline-testable)."""
+    start_lat = lane_width_m * 0.85
+    if side.lower() == "left":
+        start_lat = -start_lat
+    elif side.lower() != "right":
+        raise ValueError("side must be 'left' or 'right'")
+
+    if cross.lower() == "near":
+        end_lat = 0.0
+    elif cross.lower() == "far":
+        end_lat = -start_lat
+    elif cross.lower() == "stationary":
+        start_lat = end_lat = 0.0  # stands at lane center, never walks
+    else:
+        raise ValueError("cross must be 'near', 'far', or 'stationary'")
+    return start_lat, end_lat

@@ -14,6 +14,8 @@ from steer_brake_baseline import (  # noqa: E402
     footprint_corners_xy,
     make_hazard_command_fn,
     mode_uses_steering,
+    MODE_BRAKE_PASSAGE_EDGE,
+    PassageEdgeOffset,
     onset_gap_m,
 )
 
@@ -32,8 +34,9 @@ class HazardCommandTests(unittest.TestCase):
             self.assertEqual(fn(1.0, False, None), (False, 0.8))
             self.assertEqual(fn(4.0, True, 4.0), (True, 0.8))
 
-    def test_only_brake_steer_steers(self):
+    def test_only_steering_modes_steer(self):
         self.assertTrue(mode_uses_steering(MODE_BRAKE_STEER))
+        self.assertTrue(mode_uses_steering(MODE_BRAKE_PASSAGE_EDGE))
         self.assertFalse(mode_uses_steering(MODE_BRAKE_ONLY))
         self.assertFalse(mode_uses_steering(MODE_NO_INTERVENTION))
 
@@ -66,6 +69,35 @@ class GeometryTests(unittest.TestCase):
     def test_onset_gap_subtracts_half_length_and_pedestrian_radius(self):
         self.assertAlmostEqual(onset_gap_m(speed_mps=10.0, onset_ttc_s=2.0,
                                            half_length_m=2.4, pedestrian_radius_m=0.3), 17.3)
+
+
+
+class PassageEdgeOffsetTests(unittest.TestCase):
+    def _passage(self):
+        from passage import Obstacle, compute_passage
+        return compute_passage(lambda lat: -5.0 <= lat <= 3.5, [Obstacle(0.0, 0.3)], ego_half_width_m=1.0, margin_m=0.25)
+
+    def test_zero_before_onset_then_right_edge(self):
+        fn = PassageEdgeOffset()
+        fn.set_passage(self._passage())
+        self.assertEqual(fn(1.0, False, None), 0.0)
+        self.assertAlmostEqual(fn(1.02, True, 1.02), 2.25)  # right road edge 3.5 - 1.0 - 0.25
+
+    def test_left_actions_clipped_in_right_only_mode(self):
+        fn = PassageEdgeOffset(u=-1.0)
+        fn.set_passage(self._passage())
+        self.assertEqual(fn(1.0, True, 1.0), 0.0)
+
+    def test_missing_passage_is_counted_not_guessed(self):
+        fn = PassageEdgeOffset()
+        self.assertEqual(fn(1.0, True, 1.0), 0.0)
+        self.assertEqual(fn(1.02, True, 1.0), 0.0)
+        self.assertEqual(fn.missing_passage_ticks, 2)
+
+    def test_brakes_like_the_other_braking_modes(self):
+        cmd = make_hazard_command_fn(MODE_BRAKE_PASSAGE_EDGE, brake_target=1.0)
+        self.assertEqual(cmd(1.0, True, 1.0), (True, 1.0))
+        self.assertEqual(cmd(0.5, False, None), (False, 1.0))
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from encounter_metrics import (  # noqa: E402
+    count_direction_reversals,
+    count_side_reversals,
     OUTCOME_CONTACT,
     OUTCOME_INCOMPLETE,
     OUTCOME_NO_ONSET,
@@ -185,9 +187,46 @@ class SafetyAndDynamicsTests(unittest.TestCase):
         m = compute_encounter_metrics(_trace(N_FULL, speed_fn=_brake_speed),
                                       onset_time_s=ONSET_S, protocol=PROTOCOL)
         self.assertEqual(m.protocol["horizon_s"], 4.0)
-        self.assertEqual(m.to_dict()["protocol"]["protocol_version"], 1)
+        self.assertEqual(m.to_dict()["protocol"]["protocol_version"], 2)
         with self.assertRaises(ValueError):
             EncounterProtocol(horizon_s=0.0)
+
+
+class CommitmentMetricTests(unittest.TestCase):
+    """Protocol v2: steering commitment, measured on the requested target."""
+
+    def _metrics(self, requested_fn):
+        ticks = _trace(N_FULL, speed_fn=lambda t: 10.0, requested_fn=requested_fn, ped=(500.0, 0.0))
+        return compute_encounter_metrics(ticks, onset_time_s=ONSET_S, protocol=PROTOCOL)
+
+    def test_committed_swerve_and_hold_scores_zero(self):
+        m = self._metrics(lambda t: 0.0 if t < ONSET_S else min(2.0, 4.0 * (t - ONSET_S)))
+        self.assertEqual((m.requested_side_reversals, m.requested_offset_reversals), (0, 0))
+
+    def test_swerve_then_return_is_one_direction_change_not_a_side_switch(self):
+        m = self._metrics(lambda t: 2.0 if ONSET_S + 0.5 <= t < ONSET_S + 2.0 else 0.0)
+        self.assertEqual((m.requested_side_reversals, m.requested_offset_reversals), (0, 1))
+
+    def test_indecisive_left_right_switching_is_counted(self):
+        m = self._metrics(lambda t: 1.5 if int((t - ONSET_S) / 0.5) % 2 == 0 else -1.5)
+        self.assertGreaterEqual(m.requested_side_reversals, 6)
+        self.assertGreaterEqual(m.requested_offset_reversals, 6)
+
+    def test_tick_level_jitter_below_thresholds_is_ignored(self):
+        m = self._metrics(lambda t: 1.5 + (0.02 if int(t / DT) % 2 else -0.02))
+        self.assertEqual((m.requested_side_reversals, m.requested_offset_reversals), (0, 0))
+
+    def test_jitter_around_center_inside_deadband_is_not_a_side_switch(self):
+        m = self._metrics(lambda t: 0.2 if int(t / DT) % 2 else -0.2)
+        self.assertEqual(m.requested_side_reversals, 0)
+
+    def test_counter_helpers(self):
+        self.assertEqual(count_side_reversals([0.0, 1.0, 0.1, -1.0, -0.1, 1.0], 0.25), 2)
+        self.assertEqual(count_direction_reversals([0.0, 1.0, 0.98, 1.2, 0.0, 0.03], 0.05), 1)
+        self.assertEqual(count_direction_reversals([], 0.05), 0)
+
+    def test_protocol_version_is_2(self):
+        self.assertEqual(self._metrics(lambda t: 0.0).protocol["protocol_version"], 2)
 
 
 if __name__ == "__main__":

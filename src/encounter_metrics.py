@@ -44,7 +44,9 @@ from pedestrian_contact import (
 from physics_harness import LOW_SPEED_ARTIFACT_THRESHOLD_MPS
 from route_recovery import PhysicalRouteReturnTracker
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+# v2 (2026-10-05): adds the steering-commitment metrics; v1 outcomes and
+# metrics are unchanged.
 
 OUTCOME_NO_ONSET = "no_onset"
 OUTCOME_CONTACT = "contact"
@@ -73,6 +75,12 @@ class EncounterProtocol:
     # Peak deceleration and jerk are reported only over ticks at or above
     # this speed: below it, CARLA's default physics produces a documented
     # ~-27 m/s^2 stopping snap (MASTER summary, Week 3 braking finding).
+    commitment_deadband_m: float = 0.25
+    # Requested lateral targets within this distance of the route center
+    # count as "no side chosen" for the side-reversal count.
+    offset_reversal_threshold_m: float = 0.05
+    # The requested target must move back by at least this much to count as
+    # a change of direction (hysteresis; filters tick-level jitter).
     protocol_version: int = PROTOCOL_VERSION
 
     def __post_init__(self):
@@ -131,6 +139,17 @@ class EncounterMetrics:
     max_abs_jerk_normal_speed_mps3: Optional[float] = None
     max_abs_lateral_accel_mps2: Optional[float] = None
 
+    # Steering commitment (advisor's reading (c): measure, don't constrain).
+    # Counted on the REQUESTED lateral target after onset, not the steering
+    # command, because any aim-point controller counter-steers normally.
+    requested_side_reversals: Optional[int] = None
+    # Switches of the chosen side (right <-> left), ignoring targets inside
+    # the deadband. None = no requested target recorded.
+    requested_offset_reversals: Optional[int] = None
+    # Changes of direction of the requested target (outward <-> inward),
+    # with hysteresis. A committed swerve-and-hold scores 0; a swerve then a
+    # deliberate return to the route scores 1.
+
     protocol: Optional[dict] = None
 
     def to_dict(self) -> dict:
@@ -142,6 +161,45 @@ def _pedestrian_longitudinal_m(tick) -> float:
     (positive = ahead)."""
     fx, fy = yaw_deg_to_forward_xy(tick.yaw_deg)
     return (tick.pedestrian_x_m - tick.pos_x_m) * fx + (tick.pedestrian_y_m - tick.pos_y_m) * fy
+
+
+def count_side_reversals(values: Sequence[float], deadband: float) -> int:
+    """Number of right<->left switches, ignoring values within the deadband."""
+    reversals, side = 0, 0
+    for v in values:
+        s = 1 if v > deadband else (-1 if v < -deadband else 0)
+        if s and side and s != side:
+            reversals += 1
+        if s:
+            side = s
+    return reversals
+
+
+def count_direction_reversals(values: Sequence[float], threshold: float) -> int:
+    """Number of direction changes in a signal, with hysteresis: a reversal
+    counts only once the signal has moved back by more than `threshold`
+    from its latest extreme. The first move away from the start must also
+    exceed `threshold` before any direction is established."""
+    if not values:
+        return 0
+    reversals, direction, extreme = 0, 0, values[0]
+    for v in values[1:]:
+        if direction == 0:
+            if v - extreme > threshold:
+                direction, extreme = 1, v
+            elif extreme - v > threshold:
+                direction, extreme = -1, v
+        elif direction == 1:
+            if v > extreme:
+                extreme = v
+            elif extreme - v > threshold:
+                reversals, direction, extreme = reversals + 1, -1, v
+        else:
+            if v < extreme:
+                extreme = v
+            elif v - extreme > threshold:
+                reversals, direction, extreme = reversals + 1, 1, v
+    return reversals
 
 
 def compute_encounter_metrics(
@@ -186,6 +244,7 @@ def compute_encounter_metrics(
     path_m = 0.0
     prev = None
     lateral_values = []
+    requested_values = []
     decels, jerks, lat_accels = [], [], []
     prev_accel_normal = None
     violation_ticks = 0 if footprint_drivable is not None else None
@@ -221,6 +280,8 @@ def compute_encounter_metrics(
             m.time_to_stop_s = t_rel
             m.stopping_distance_m = path_m
 
+        if r.requested_lateral_offset_m is not None:
+            requested_values.append(r.requested_lateral_offset_m)
         if r.route_lateral_m is not None:
             lateral_values.append(r.route_lateral_m)
             requested = r.requested_lateral_offset_m if r.requested_lateral_offset_m is not None else 0.0
@@ -241,6 +302,9 @@ def compute_encounter_metrics(
         else:
             prev_accel_normal = None  # never difference across a low-speed gap
 
+    if requested_values:
+        m.requested_side_reversals = count_side_reversals(requested_values, protocol.commitment_deadband_m)
+        m.requested_offset_reversals = count_direction_reversals(requested_values, protocol.offset_reversal_threshold_m)
     if lateral_values:
         m.max_abs_route_lateral_m = max(abs(v) for v in lateral_values)
         m.final_route_lateral_m = lateral_values[-1]

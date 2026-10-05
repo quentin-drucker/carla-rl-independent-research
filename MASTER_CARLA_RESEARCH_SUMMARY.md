@@ -2810,6 +2810,120 @@ per-tick steering or a one-time swerve decision (left/right/none) plus braking. 
 - His "passage-edge aim" rule is also a candidate scripted baseline to compare a learned
   policy against.
 
+## Phase 2 design decisions (Quentin, 2026-10-04/05)
+
+These turn the advisor's answer above into concrete choices for steering in the RL
+environment. They were decided before any Phase 2 code was written. Full option analysis:
+`plans/Phase-2_2026-10-04_steering-rl-design-options.md` (local).
+
+### 1. The steering action is a position across the "passage" (option C)
+
+**Plain-language idea.** At the pedestrian's position there is an open gap the car can
+drive through: the passage. Picture a ruler laid across the road over that gap:
+
+```
+ left road edge                         pedestrian                        right road edge
+ |------ safe for the car's center ------|  (blocked)  |------ safe for the car's center ------|
+ u = -1                                u = 0 (the car's normal path, lane center)          u = +1
+```
+
+- Each tick the policy outputs **one number `u` between -1 and +1**: a spot on that ruler.
+- `u = 0` means "keep the normal lane-center path" (no swerve).
+- `u = +1` means "aim at the rightmost spot where the car's *center* can be and still keep
+  its whole body on the road and clear of the obstacle." `u = -1` is the same on the left.
+- Values in between are proportional; for example, `u = +0.5` is halfway from lane center
+  to the right edge.
+- The controller converts `u` to a sideways distance in meters and feeds it to the
+  existing lane-following steering (`lane_follow_step(lateral_offset_m=...)`). That steering
+  already steers smoothly toward a point ahead that is offset from the route.
+
+**Why this design:**
+- It is Prof. Izmirli's idea made learnable: aiming at the extreme edge (`u = +1` or `-1`) is
+  exactly his suggested rule. The policy can learn when to use the extreme and when
+  something gentler is better.
+- The edges are the safe limits by construction, so every action keeps the car on the
+  road and clear of the obstacle, provided the passage is computed correctly. A raw
+  steering-wheel action can easily put the car off the road.
+- It generalizes: a second obstacle (e.g. another car after the pedestrian) just moves an
+  edge of the ruler inward, and `u = +1` still means "as far right as is safe."
+- It reuses steering code that is already validated (test5/test18/test26).
+
+**Things to remember:**
+- If the passage is computed wrong, the action is wrong. The passage module gets its own
+  offline tests first, including the Town04 lane-seam gaps.
+- The edges are for the car's *center*: the gap shrunk by the car's half-width (1.08 m)
+  plus a margin.
+- One sub-choice will be measured in the scripted baseline before training: does the
+  steering aim at a point 6 m ahead (the current lookahead) or at the pedestrian's line?
+
+### 2. The hazard starts with an "oracle onset" (for training and evaluation)
+
+**What it means.** A real car must first *notice* the pedestrian (LiDAR detection) and then
+*react*. With an oracle onset, the simulator itself announces "hazard now" to the
+controller at a scripted moment: when the car is a chosen time-to-collision (TTC, e.g.
+0.6-1.6 s) from the pedestrian, computed from true positions. From that tick on, the
+controller acts.
+
+**Why:**
+- **Fair comparison.** Every controller (the three test26 scripted baselines and the
+  learned policy) gets exactly the same warning time. Any difference in outcome is then due
+  to the maneuver itself, not to when each one happened to detect the pedestrian.
+- **It isolates the research question.** If detection and maneuvering are tested together,
+  a failure could be a late detection or a bad maneuver, and you can't tell which.
+- **It's needed for a stationary pedestrian.** LiDAR sees a pedestrian standing in the lane
+  from far away, so braking alone succeeds trivially. That is why test26 used oracle
+  onset.
+- Warning time becomes an experimental knob: sweeping TTC maps exactly where steering
+  starts to beat braking.
+
+**Limitation (deliberate, recorded):** it assumes perfect, instant perception. LiDAR in the
+loop comes back in Phase 4 (robustness), where the same policy is tested with real
+detection timing.
+
+### 3. Observations and reward: add the proposed terms
+
+Approved. Observation additions: passage left/right edge, distance to the pedestrian's
+line, route-lateral offset, heading error, lateral velocity, previous steering action.
+Reward: geometric collision (Phase 1 signal; the env default flips to `"geometric"` in
+Phase 2), an off-road penalty from footprint drivability, and the existing comfort terms.
+**No steering-reversal penalty at first**: reversals are measured by a new evaluation
+metric, as the advisor suggested.
+
+### 4. Swerve right only at first; open both sides if results are promising
+
+The first policy may only swerve right (`u` limited to [0, +1]). If it learns well, the
+range opens to [-1, +1] so the policy chooses a side.
+
+**Assessment: a good, simple start.**
+- It matches test26, whose brake_steer baseline swerves right, so the first comparison is
+  like-for-like.
+- It halves what the policy must learn.
+- This location has more room on the right (Week 3).
+- The cost is that it can't yet show *choosing* a side. That is the planned second step.
+- The code will support [-1, +1] from the start with a configurable limit, so opening up
+  later is a setting change, not a rewrite.
+
+### 5. Pedestrian contact radius: 0.3 m primary, 0.188 m reported alongside
+
+**What "contact" means in the protocol.** The pedestrian is modeled as a circle of radius
+0.3 m around its center. "Contact" means the car's rectangular footprint overlaps that
+circle. CARLA's own walker collision box is smaller (half-width 0.188 m, measured
+2026-10-04). So under the 0.3 m rule, a car whose body passes within about 11 cm of
+CARLA's walker box *without touching it* is still counted as contact.
+
+**Decision: keep 0.3 m as the primary radius, and always report the 0.188 m count next
+to it.** Reasons:
+- **It's safety-conservative.** A pass within ~11 cm of a person is a failure in any
+  safety sense. CARLA's box is a simplified body without arms, swing or bags.
+- **It can only over-count, never miss.** That matters given this project's main lesson:
+  every earlier check undercounted.
+- **It's consistent.** Every Week 4/5 number (test26, the v3 re-audit) used 0.3 m, so
+  results stay comparable.
+- **It barely changes conclusions so far.** v3: 73 contacts at 0.3 m vs. 68 at 0.188 m. No
+  test26 outcome changes.
+- Reports should say "contact (including passes within ~0.1 m)" where the distinction
+  matters.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

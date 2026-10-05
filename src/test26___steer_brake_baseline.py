@@ -1,10 +1,12 @@
 """test26___steer_brake_baseline.py
 
 Deterministic steering-plus-braking baseline under CARLA DEFAULT physics
-(Week 4 decision). For each (speed, onset TTC) case it runs three matched
+(Week 4 decision). For each (speed, onset TTC) case it runs matched
 controller modes on the same scenario -- see steer_brake_baseline.py:
 
-    no_intervention | brake_only | brake_steer
+    no_intervention | brake_only | brake_steer | brake_passage_edge (Phase 2: Izmirli's
+    passage-edge rule, passage.py; the passage is computed once from the stationary
+    pedestrian's position and recorded in each manifest)
 
 Scenario: Town04_Opt route from spawn 242 (test3), stationary pedestrian at
 route center ("stationary" walker), ClearSunset with the sun at the horizon.
@@ -48,8 +50,11 @@ from map_drivability import classify_point_drivability_seam_tolerant
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from reactive_avoidance import compute_required_clearance_offset_m
 from scenario_config import ScenarioConfig
+from passage_carla import passage_at_location
 from steer_brake_baseline import (
+    MODE_BRAKE_PASSAGE_EDGE,
     MODES,
+    PassageEdgeOffset,
     footprint_corners_xy,
     make_hazard_command_fn,
     mode_uses_steering,
@@ -119,7 +124,14 @@ def _run_one(*, mph, ttc, mode, swerve_offset_m, case_dir, client):
     )
     recorder = TrajectoryRecorder(dt_s=FIXED_DT)
     drivable_flags = []
-    state = {"tick": 0, "map": None, "onset_marked": False, "seam_corrections": 0}
+    state = {"tick": 0, "map": None, "onset_marked": False, "seam_corrections": 0, "passage_frame": None}
+
+    if mode == MODE_BRAKE_PASSAGE_EDGE:
+        steering_fn = PassageEdgeOffset(u=1.0, u_min=0.0, u_max=1.0)  # right-swerve-only, extreme edge
+    elif mode_uses_steering(mode):
+        steering_fn = build_evasive_offset_fn(peak_offset_m=swerve_offset_m, shift_duration_s=SWERVE_SHIFT_DURATION_S)
+    else:
+        steering_fn = None
 
     def observer(sim_time_s, triggered, telemetry):
         index = state["tick"]
@@ -136,9 +148,15 @@ def _run_one(*, mph, ttc, mode, swerve_offset_m, case_dir, client):
                                                 telemetry["yaw_deg"], telemetry.get("pos_z_m") or 0.0)
         drivable_flags.append(flag)
         state["seam_corrections"] += corrections
-
-    steering_fn = (build_evasive_offset_fn(peak_offset_m=swerve_offset_m, shift_duration_s=SWERVE_SHIFT_DURATION_S)
-                   if mode_uses_steering(mode) else None)
+        # Stationary pedestrian: the passage at its position never changes, so
+        # computing it once from the first tick's position is exact and lets
+        # the swerve start on the onset tick, like brake_steer's.
+        if (isinstance(steering_fn, PassageEdgeOffset) and steering_fn.passage is None
+                and telemetry.get("pedestrian_x_m") is not None):
+            ped = (telemetry["pedestrian_x_m"], telemetry["pedestrian_y_m"])
+            passage, frame = passage_at_location(state["map"], carla.Location(x=ped[0], y=ped[1], z=telemetry.get("pos_z_m") or 0.0), [ped])
+            steering_fn.set_passage(passage)
+            state["passage_frame"] = frame
     result = run_scenario(
         cfg, plot_after=False, lateral_offset_fn=steering_fn, tick_observer=observer,
         post_crossing_settle_s=PROTOCOL.horizon_s + 1.0,
@@ -161,17 +179,32 @@ def _run_one(*, mph, ttc, mode, swerve_offset_m, case_dir, client):
             "mode": mode, "target_mph": mph, "onset_ttc_s": ttc,
             "onset_gap_m_at_target_speed": onset_gap_m(speed_mps=mph * 0.44704, onset_ttc_s=ttc),
             "brake_target": BRAKE_TARGET, "brake_ramp_up_per_s": BRAKE_RAMP_UP_PER_S,
-            "steering": ({"peak_offset_m": swerve_offset_m, "side_sign": SWERVE_SIDE_SIGN,
-                          "margin_m": SWERVE_MARGIN_M, "shift_duration_s": SWERVE_SHIFT_DURATION_S,
-                          "recovered": steering_fn.recovered,
-                          "used_fallback_timeout": steering_fn.used_fallback_timeout}
-                         if steering_fn else None),
+            "steering": _steering_manifest(steering_fn, swerve_offset_m, state["passage_frame"]),
             "config": cfg.to_dict(),
             "drivability_check": "seam_tolerant",
             "drivability_seam_corrections": state["seam_corrections"],
             "physics_backend": BACKEND_DEFAULT,
         }, f, indent=2)
     return result, metrics
+
+
+def _steering_manifest(steering_fn, swerve_offset_m, passage_frame):
+    if steering_fn is None:
+        return None
+    if isinstance(steering_fn, PassageEdgeOffset):
+        p = steering_fn.passage
+        return {"rule": "passage_edge (Izmirli): aim at the passage's right edge", "u": steering_fn.u,
+                "u_bounds": [steering_fn.u_min, steering_fn.u_max],
+                "target_offset_m": steering_fn.last_target_m,
+                "missing_passage_ticks": steering_fn.missing_passage_ticks,
+                "passage": None if p is None else {
+                    "road_left_m": p.road_left_m, "road_right_m": p.road_right_m,
+                    "intervals": [list(i) for i in p.intervals],
+                    "left_edge_m": p.left_edge_m, "right_edge_m": p.right_edge_m},
+                "passage_frame": passage_frame}
+    return {"peak_offset_m": swerve_offset_m, "side_sign": SWERVE_SIDE_SIGN,
+            "margin_m": SWERVE_MARGIN_M, "shift_duration_s": SWERVE_SHIFT_DURATION_S,
+            "recovered": steering_fn.recovered, "used_fallback_timeout": steering_fn.used_fallback_timeout}
 
 
 def main(argv=None):

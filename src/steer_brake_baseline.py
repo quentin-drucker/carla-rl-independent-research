@@ -14,13 +14,18 @@ is a braking-plus-steering maneuver achievable, and in which conditions does
 it succeed where braking alone fails? Perception timing is a separate,
 later question (LiDAR-in-the-loop follow-up).
 
-Three matched controller modes:
+Four matched controller modes:
   no_intervention -- hazard braking disabled for the whole run; the ego keeps
                      cruising (establishes that the encounter is dangerous).
   brake_only      -- from onset: scripted brake target, wheel on the route.
   brake_steer     -- from onset: the same scripted brake target PLUS the
                      existing scripted swerve (test5's
                      HazardClearRecoveryController).
+  brake_passage_edge -- (Phase 2, 2026-10-05) from onset: the same brake PLUS
+                     Prof. Izmirli's rule: aim the steering at the extreme
+                     right edge of the "passage" (passage.py), i.e. passage
+                     coordinate u = +1. A scripted reference for the learned
+                     steering policy, which outputs u itself.
 LiDAR hazard detection is disabled in all three (the scripted decision is
 False before onset), so pre-onset driving is identical across modes.
 """
@@ -31,7 +36,8 @@ from typing import List, Tuple
 MODE_NO_INTERVENTION = "no_intervention"
 MODE_BRAKE_ONLY = "brake_only"
 MODE_BRAKE_STEER = "brake_steer"
-MODES = (MODE_NO_INTERVENTION, MODE_BRAKE_ONLY, MODE_BRAKE_STEER)
+MODE_BRAKE_PASSAGE_EDGE = "brake_passage_edge"
+MODES = (MODE_NO_INTERVENTION, MODE_BRAKE_ONLY, MODE_BRAKE_STEER, MODE_BRAKE_PASSAGE_EDGE)
 
 # Tesla Model 3 footprint, same constants as pedestrian_contact.py.
 from pedestrian_contact import EGO_HALF_LENGTH_M, EGO_HALF_WIDTH_M  # noqa: E402
@@ -54,7 +60,42 @@ def make_hazard_command_fn(mode: str, *, brake_target: float = 1.0):
 
 
 def mode_uses_steering(mode: str) -> bool:
-    return mode == MODE_BRAKE_STEER
+    return mode in (MODE_BRAKE_STEER, MODE_BRAKE_PASSAGE_EDGE)
+
+
+class PassageEdgeOffset:
+    """run_scenario lateral_offset_fn for brake_passage_edge: 0 before onset,
+    then the lateral target for passage coordinate `u` (default +1, the
+    passage's right edge), re-evaluated every tick from the latest passage.
+
+    The caller supplies the passage via set_passage() (computed from the CARLA
+    map and the pedestrian's position; for a stationary pedestrian it is the
+    same every tick, so computing it once before onset is exact). Until a
+    passage is set, the target is 0 and `missing_passage_ticks` counts the
+    post-onset ticks affected, so a run can never silently swerve on nothing.
+    """
+
+    def __init__(self, *, u: float = 1.0, u_min: float = 0.0, u_max: float = 1.0):
+        self.u, self.u_min, self.u_max = u, u_min, u_max
+        self.passage = None
+        self.missing_passage_ticks = 0
+        self.last_target_m = 0.0
+
+    def set_passage(self, passage) -> None:
+        self.passage = passage
+
+    def __call__(self, sim_time_s, triggered, trigger_time_s, hazard_clear_info=None):
+        from passage import passage_coordinate_to_offset_m
+
+        if not triggered:
+            self.last_target_m = 0.0
+        elif self.passage is None:
+            self.missing_passage_ticks += 1
+            self.last_target_m = 0.0
+        else:
+            self.last_target_m = passage_coordinate_to_offset_m(self.u, self.passage, u_min=self.u_min,
+                                                                u_max=self.u_max)
+        return self.last_target_m
 
 
 def footprint_corners_xy(

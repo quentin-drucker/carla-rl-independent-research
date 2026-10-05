@@ -66,7 +66,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **What is the current implementation?** | The top-level `src/` tree, with `test3___ped_intrusion_scenario.py` for classical runs, `carla_aeb_env.py` for RL, `train_sac.py` for current v3 training, and `sac_v3_1600k.zip` as the intended final model. |
 | **What does SAC actually control?** | One continuous brake target in `[0,1]`. Steering and cruising remain classical. More importantly, classical LiDAR hazard logic gates the `HAZARD_BRAKE` mode; SAC is a learned post-detection brake shaper, not an end-to-end or independently perceiving driving policy. |
 | **What works?** | The retained artifacts show that single scenarios, 800-run profile sweeps, SAC training, randomized evaluation, matched-grid evaluation, data serialization, and plotting all ran during the semester. Current operation has not yet been smoke-tested after the break. |
-| **What is the strongest result?** | On the final 200-configuration grid, fixed controllers recorded 19–23% collision rates, while the archived final SAC results recorded 20%. This supports descriptive overall collision-rate proximity on that grid, not statistical equivalence or SAC superiority. **Superseded 2026-10-04:** under the common protocol v3 makes contact in 36.5% of the grid; fixed profiles still need the same re-scoring (see Phase 1 re-audit). |
+| **What is the strongest result?** | On the final 200-configuration grid, fixed controllers recorded 19–23% collision rates, while the archived final SAC results recorded 20%. This supports descriptive overall collision-rate proximity on that grid, not statistical equivalence or SAC superiority. **Superseded 2026-10-04:** under the common protocol v3 makes contact in 36.5% of the grid; under the same protocol the fixed profiles score 30-38%; **SAC ranks second-worst of five** (Week 5 comparison). |
 | **What major result is not trustworthy?** | The presentation's claimed SAC high-speed/full-stop advantage, and the archived 20% SAC collision rate. **The Phase 1 re-audit (2026-10-04) found v3 makes contact in 73/200 (36.5%) matched scenarios, not 40/200;** the old evaluator and collision checks hid far-cross hits and slow frontal hits. Fixed-profile rates must be re-scored the same way before any SAC-vs-fixed claim. |
 | **What remains incomplete?** | Fair cross-controller outcome/metric computation, repeated seeds, model/source provenance, corrected avoidability labels, comfort tuning, ABS/skid analysis, broader hazards/environments, PPO, and multimodal perception. |
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
@@ -517,6 +517,8 @@ No `.git` repository, `requirements.txt`, lockfile, package definition, or autom
 | `src/carla_aeb_env.py` | **CURRENT** | Six-observation Gymnasium environment around the CARLA scenario. Since Phase 1 (2026-10-04): `collision_signal="legacy"` (default, last semester's semantics, verified unchanged live) or `"geometric"` (adds oriented-footprint pedestrian contact); every collision component is reported in `info`; supports a `"stationary"` pedestrian. |
 | `src/rl_collision_signal.py` | **CURRENT** | Pure per-tick collision signal behind `collision_signal`; verified against all 39 test26 runs (`tests/fixtures/test26_contact_cases.json`, built by `src/extract_contact_fixture.py`). |
 | `src/eval_policy_encounters.py`, `src/rl_eval_protocol.py` | **CURRENT — use for every reported RL number** | Encounter-protocol evaluation of a learned policy: same onset and 8 s window as test26, `encounter_metrics` scoring, runs past env termination, full provenance (model SHA-256, git state, versions), never overwrites. Keeps the legacy label for auditing only. |
+| `src/test27___fixed_profile_rescore.py`, `src/fixed_rescore_protocol.py` | **CURRENT** | Re-runs the archived 4-profile x 200-config matched sweep with traces, scored by the common protocol; per-run reproduction check; `--resume`, `--relaunch-carla`. |
+| `src/analyze_controller_comparison.py` | **CURRENT** | SAC vs. fixed profiles on matched scenarios under one protocol: contacts by crossing/speed/avoidability, 0.188 m sensitivity, exact paired McNemar. |
 | `src/analyze_rl_reaudit.py` | **CURRENT** | Offline comparison of archived vs. reproduced-legacy vs. protocol outcomes for an evaluation run, plus pedestrian-radius sensitivity. |
 | `src/rl_reward_design.py` | **CURRENT implementation/reference** | State construction, reward calculation, current constants, and extensive design comments. |
 | `src/train_sac.py` | **CURRENT** | Fresh v3 training: 1.6M steps, targeted/random TTC, randomized headway. Header comments still contain older v2/fixed settings. |
@@ -1483,7 +1485,7 @@ These are the strongest defensible conclusions after reconciling documents, code
 
 **Conclusion:** The retained matched v3 CSV records 40 collisions over the 200 configuration grid, or 20%.
 
-**Superseded as a performance claim (2026-10-04):** the Phase 1 re-audit reproduced these 40 labels exactly, but the common protocol finds **73 contacts (36.5%)** on the same grid. See [Phase 1 re-audit](#phase-1-week-5-trustworthy-rl-environment-and-the-v3-re-audit-added-2026-10-04). 40/200 remains correct as a description of the archived CSV only.
+**Superseded as a performance claim (2026-10-04):** the Phase 1 re-audit reproduced these 40 labels exactly, but the common protocol finds **73 contacts (36.5%)** on the same grid. See [Phase 1 re-audit](#phase-1-week-5-trustworthy-rl-environment-and-the-v3-re-audit-added-2026-10-04). 40/200 remains correct as a description of the archived CSV only. **Under the same protocol the fixed profiles score 30-38%, and SAC ranks second-worst** ([Week 5 comparison](#week-5-sac-v3-versus-the-fixed-profiles-under-one-protocol-added-2026-10-05)).
 
 **Evidence:** Direct archived-row count.
 
@@ -1493,7 +1495,7 @@ These are the strongest defensible conclusions after reconciling documents, code
 
 **Conclusion:** On the retained grid, recorded collision rates were 19–23% for fixed rules and 20% for SAC.
 
-**Status (2026-10-04): no longer supportable as a comparison.** The Phase 1 re-audit found v3 makes contact in 36.5% of the grid under the common protocol; the fixed-profile rates came from the same flawed collision checks and have not yet been re-scored. Both sides must be measured under the same protocol before any comparison.
+**Status (2026-10-04): no longer supportable as a comparison.** The Phase 1 re-audit found v3 makes contact in 36.5% of the grid under the common protocol; the fixed-profile rates came from the same flawed collision checks and have not yet been re-scored. **Done 2026-10-05:** under one protocol, fixed profiles 30-38%, SAC v3 36.5%, second-worst; SAC is significantly worse than step_constant and proportional_ramp on paired scenarios (see the Week 5 comparison).
 
 **Evidence:** Both final CSVs.
 
@@ -2211,6 +2213,74 @@ nominal target speed (known problem #5).
 **Evidence status:** **CONFIRMED** for v3 on this grid: deterministic policy, one pass,
 labels reproduced 200/200, trace-level checks of contact geometry. It is a single model and
 a single seed.
+
+---
+
+## Week 5: SAC v3 versus the fixed profiles under one protocol (added 2026-10-05)
+
+**What was done** (branch `experiment/fixed-profile-rescore`, CARLA 0.9.16 default physics,
+server renderless with `-RenderOffScreen`, no `--chrono`):
+- `src/test27___fixed_profile_rescore.py` re-ran last semester's final matched sweep
+  (`src/runs/20260417_202355`: 4 fixed profiles x 200 configs). Each run used its archived
+  `config.json` unchanged and `run_scenario` exactly as `sweep.py` did. The only change is
+  a longer post-crossing settle (9 s instead of 3 s) so the protocol's 8 s window is
+  covered. Every run was recorded as a trace and scored with `encounter_metrics`, the
+  same protocol as test26 and the v3 re-audit.
+- `src/analyze_controller_comparison.py` matched the 200 scenarios across the four
+  profiles and SAC v3 (from the Phase 1 re-audit) and compared contacts per scenario.
+- Evidence: `src/runs/fixed_profile_rescore/20261004_203248_fixed_profile_rescore_default`
+  (git `10ec7a0`, crash-recovery resume at `ec50109`; the scenario code path is identical).
+
+**Reproduction:** **800/800 runs match the archive exactly on everything fixed at onset**
+(trigger time, speed and distance at trigger, hazard engagement). Time-to-stop differs in
+24 runs. 17 are because the longer tail lets the car stop after the archive had ended. In
+the other 7, the car stops after hitting the pedestrian, and CARLA's car-pedestrian
+contact physics is not bit-repeatable. Neither affects the contact outcome. CARLA crashed
+once at run 619 (server process gone); the run resumed from there with no lost results.
+
+**Results on the 200-scenario matched grid** (contact = oriented footprint within the
+0.3 m pedestrian circle; the 0.188 m column uses CARLA's measured walker box):
+
+| Controller | Archived collisions | **Protocol contacts** | at 0.188 m | Near / far | 22 / 28 / 35 / 40 / 45 mph | "Avoidable" scenarios |
+|---|---|---|---|---|---|---|
+| step_constant | 38 (19%) | **60 (30.0%)** | 58 | 36 / 24 | 0 / 8 / 12 / 16 / 24 | 10 / 120 |
+| proportional_ramp | 40 (20%) | **62 (31.0%)** | 58 | 36 / 26 | 0 / 8 / 14 / 16 / 24 | 12 / 120 |
+| exponential | 42 (21%) | **67 (33.5%)** | 60 | 38 / 29 | 2 / 8 / 16 / 16 / 25 | 15 / 120 |
+| SAC v3 | 40 (20%) | **73 (36.5%)** | 68 | 40 / 33 | 8 / 8 / 16 / 16 / 25 | 15 / 120 |
+| cautious_ramp | 46 (23%) | **76 (38.0%)** | 76 | 44 / 32 | 8 / 8 / 16 / 18 / 26 | 16 / 120 |
+
+Paired, same scenarios (exact McNemar on one deterministic pass per controller):
+
+| SAC v3 vs. | SAC hit, profile clear | Profile hit, SAC clear | Both hit | p |
+|---|---|---|---|---|
+| step_constant | 13 | 0 | 60 | 0.0002 |
+| proportional_ramp | 11 | 0 | 62 | 0.001 |
+| exponential | 7 | 1 | 66 | 0.07 |
+| cautious_ramp | 1 | 4 | 72 | 0.38 |
+
+**Findings:**
+- **The collision undercount affected every controller, not just SAC: fixed-profile
+  contact rates are 30-38%, not the archived 19-23%.**
+- **Last semester's headline ("SAC's collision rate was in the same range as the fixed
+  rules") does not survive.** Under one protocol, SAC v3 ranks second-worst of five.
+  **It hits the pedestrian in 13 scenarios where step_constant does not, and never the
+  reverse; against proportional_ramp it is 11 to 0.** Against exponential the difference
+  is not clear (p = 0.07), and SAC is not distinguishable from cautious_ramp.
+- Most contacts are shared: 60 scenarios are hit by every controller, mostly TTC 1.8 s
+  and the higher speeds. These are close to physically unavoidable for braking alone,
+  which is exactly where Phase 2's steering is meant to help.
+- SAC's extra contacts are concentrated at low speed: 8 contacts at 22 mph vs. 0 for
+  step_constant and proportional_ramp.
+- SAC "passes clear" far more often (67, vs. 12-37 for the profiles): it tends to drive
+  on after a far-cross pedestrian has cleared rather than stopping. Its median
+  normal-speed jerk is the lowest (640 vs. 776-1088 m/s^3), but comfort was not the
+  question here and has its own known measurement caveats.
+
+**Evidence status:** **CONFIRMED** as a descriptive comparison on this grid: deterministic
+scripted scenarios, onset-fixed values reproduced 800/800, one deterministic pass per
+controller, single SAC model and seed. The McNemar p-values describe these 200 scenarios,
+not a population of policies or seeds. The avoidability labels still use nominal target
+speed (known problem #5).
 
 ---
 

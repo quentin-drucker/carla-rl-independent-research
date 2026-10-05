@@ -11,9 +11,9 @@ proximity fallback that compares 3D distance with a 2D threshold -- the same
 checks that hid 33 of SAC v3's 73 contacts. The sweep saved no traces, so it
 cannot be re-scored offline; it has to be re-run.
 
-Reproduction check: values RunResult records BEFORE a run ends (trigger time,
-speed/distance at trigger, hazard engagement, time to stop) must match the
-archive exactly if the re-run is the same simulation. The outcome label may
+Reproduction check: values RunResult fixes at onset (trigger time,
+speed/distance at trigger, hazard engagement) must match the archive exactly
+if the re-run is the same simulation; time to stop is reported alongside. The outcome label may
 legitimately differ, because the re-run keeps simulating long enough to cover
 the protocol's 8 s window (the archive stopped 3 s after the pedestrian
 finished).
@@ -27,10 +27,13 @@ from typing import List, Optional
 
 RUN_FAMILY = "fixed_profile_rescore"
 
-# RunResult fields fixed before the run's end, compared for exact reproduction.
-REPRODUCTION_FIELDS = (
-    "hazard_triggered", "trigger_time_s", "ego_speed_at_trigger_mps", "ego_dist_at_trigger_m", "time_to_stop_s",
-)
+# RunResult fields fixed at onset, compared for exact reproduction. time_to_stop_s
+# is NOT one of them (fixed 2026-10-05 after the first overnight run): the
+# re-run's longer tail lets a car stop after the archive had already ended, and
+# after a car-pedestrian impact CARLA's contact physics is not bit-repeatable.
+# It is still compared and reported, just not counted as a reproduction failure.
+REPRODUCTION_FIELDS = ("hazard_triggered", "trigger_time_s", "ego_speed_at_trigger_mps", "ego_dist_at_trigger_m")
+INFORMATIONAL_FIELDS = ("time_to_stop_s",)
 REPRODUCTION_TOLERANCE = 1e-6
 
 
@@ -55,17 +58,18 @@ def load_archived_runs(sweep_dir: str, profiles: Optional[List[str]] = None) -> 
 
 
 def compare_to_archived(new_result: dict, archived: dict) -> dict:
-    """{field: {archived, new, match}} for REPRODUCTION_FIELDS, plus
-    all_match. Floats match within REPRODUCTION_TOLERANCE; None only matches None."""
+    """{field: {archived, new, match}} for REPRODUCTION_FIELDS and
+    INFORMATIONAL_FIELDS, plus all_match (REPRODUCTION_FIELDS only). Floats match within REPRODUCTION_TOLERANCE; None only matches None."""
     out, all_match = {}, True
-    for field in REPRODUCTION_FIELDS:
+    for field in REPRODUCTION_FIELDS + INFORMATIONAL_FIELDS:
         a, b = archived.get(field), new_result.get(field)
         if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
             match = abs(a - b) <= REPRODUCTION_TOLERANCE
         else:
             match = a == b
         out[field] = {"archived": a, "new": b, "match": match}
-        all_match &= match
+        if field in REPRODUCTION_FIELDS:
+            all_match &= match
     out["all_match"] = all_match
     return out
 

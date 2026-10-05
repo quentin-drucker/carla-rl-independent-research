@@ -27,6 +27,10 @@ src/runs/steer_brake_baseline/
 # (eval_policy_encounters.py) -- same reasoning.
 src/runs/rl_encounter_eval/
 
+# Raw per-run traces/metrics from the fixed-profile matched-sweep re-score
+# (test27) -- same reasoning.
+src/runs/fixed_profile_rescore/
+
 # Raw camera frame captures
 previous_src_tests/test0_ego_camera/out/
 

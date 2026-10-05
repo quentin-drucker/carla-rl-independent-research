@@ -37,7 +37,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 from pedestrian_contact import DEFAULT_PEDESTRIAN_RADIUS_M, EGO_HALF_WIDTH_M
 
 DEFAULT_SIDE_MARGIN_M = 0.3       # clearance kept from road edges and obstacles
-DEFAULT_SCAN_MAX_M = 8.0          # how far either side of the route to look for road
+DEFAULT_SCAN_MAX_M = 12.0         # how far either side of the route to look for road (Town04: 8.75 m to the right edge of a 3-lane side)
 DEFAULT_SCAN_STEP_M = 0.05
 DEFAULT_MAX_GAP_M = 0.10          # non-drivable runs this short are treated as lane seams
 

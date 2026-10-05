@@ -66,8 +66,8 @@ Do not read an archived numerical value as automatically comparable across contr
 | **What is the current implementation?** | The top-level `src/` tree, with `test3___ped_intrusion_scenario.py` for classical runs, `carla_aeb_env.py` for RL, `train_sac.py` for current v3 training, and `sac_v3_1600k.zip` as the intended final model. |
 | **What does SAC actually control?** | One continuous brake target in `[0,1]`. Steering and cruising remain classical. More importantly, classical LiDAR hazard logic gates the `HAZARD_BRAKE` mode; SAC is a learned post-detection brake shaper, not an end-to-end or independently perceiving driving policy. |
 | **What works?** | The retained artifacts show that single scenarios, 800-run profile sweeps, SAC training, randomized evaluation, matched-grid evaluation, data serialization, and plotting all ran during the semester. Current operation has not yet been smoke-tested after the break. |
-| **What is the strongest result?** | On the final 200-configuration grid, fixed controllers recorded 19–23% collision rates, while the archived final SAC results recorded 20%. This supports descriptive overall collision-rate proximity on that grid, not statistical equivalence or SAC superiority. |
-| **What major result is not trustworthy?** | The presentation's claimed SAC high-speed/full-stop advantage. The RL evaluator misclassified far-cross pedestrian clearance as a full stop, and SAC/fixed runs used different termination horizons. A corrected rate cannot be recovered from the CSV. |
+| **What is the strongest result?** | On the final 200-configuration grid, fixed controllers recorded 19–23% collision rates, while the archived final SAC results recorded 20%. This supports descriptive overall collision-rate proximity on that grid, not statistical equivalence or SAC superiority. **Superseded 2026-10-04:** under the common protocol v3 makes contact in 36.5% of the grid; fixed profiles still need the same re-scoring (see Phase 1 re-audit). |
+| **What major result is not trustworthy?** | The presentation's claimed SAC high-speed/full-stop advantage, and the archived 20% SAC collision rate. **The Phase 1 re-audit (2026-10-04) found v3 makes contact in 73/200 (36.5%) matched scenarios, not 40/200;** the old evaluator and collision checks hid far-cross hits and slow frontal hits. Fixed-profile rates must be re-scored the same way before any SAC-vs-fixed claim. |
 | **What remains incomplete?** | Fair cross-controller outcome/metric computation, repeated seeds, model/source provenance, corrected avoidability labels, comfort tuning, ABS/skid analysis, broader hazards/environments, PPO, and multimodal perception. |
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
@@ -514,12 +514,15 @@ No `.git` repository, `requirements.txt`, lockfile, package definition, or autom
 
 | Path | Status | Purpose |
 |---|---|---|
-| `src/carla_aeb_env.py` | **CURRENT** | Six-observation Gymnasium environment around the CARLA scenario. |
+| `src/carla_aeb_env.py` | **CURRENT** | Six-observation Gymnasium environment around the CARLA scenario. Since Phase 1 (2026-10-04): `collision_signal="legacy"` (default, last semester's semantics, verified unchanged live) or `"geometric"` (adds oriented-footprint pedestrian contact); every collision component is reported in `info`; supports a `"stationary"` pedestrian. |
+| `src/rl_collision_signal.py` | **CURRENT** | Pure per-tick collision signal behind `collision_signal`; verified against all 39 test26 runs (`tests/fixtures/test26_contact_cases.json`, built by `src/extract_contact_fixture.py`). |
+| `src/eval_policy_encounters.py`, `src/rl_eval_protocol.py` | **CURRENT — use for every reported RL number** | Encounter-protocol evaluation of a learned policy: same onset and 8 s window as test26, `encounter_metrics` scoring, runs past env termination, full provenance (model SHA-256, git state, versions), never overwrites. Keeps the legacy label for auditing only. |
+| `src/analyze_rl_reaudit.py` | **CURRENT** | Offline comparison of archived vs. reproduced-legacy vs. protocol outcomes for an evaluation run, plus pedestrian-radius sensitivity. |
 | `src/rl_reward_design.py` | **CURRENT implementation/reference** | State construction, reward calculation, current constants, and extensive design comments. |
 | `src/train_sac.py` | **CURRENT** | Fresh v3 training: 1.6M steps, targeted/random TTC, randomized headway. Header comments still contain older v2/fixed settings. |
 | `src/continue_sac.py` | **CURRENT 6-D utility with broken default** | Can continue a compatible six-observation v2/v3 ZIP when passed explicitly, but its default five-observation `sac_aeb_rand_800k` is incompatible with the current six-observation environment. It resets entropy and does not restore the old replay buffer, so it is not a faithful resume. |
-| `src/eval_sac.py` | **CURRENT script with stale default and outcome bug** | Seeded 100-episode randomized evaluation. Default model remains `sac_aeb_rand_800k`. |
-| `src/eval_sac_on_sweep.py` | **CURRENT script with outcome/protocol bug** | Runs SAC deterministically on unique configurations from a profile sweep. Defaults to old `sac_aeb_rand_1600k`; explicitly pass v3. |
+| `src/eval_sac.py` | **LEGACY — labels unreliable (warning header since 2026-10-04)** | Seeded 100-episode randomized evaluation. Default model remains `sac_aeb_rand_800k`. |
+| `src/eval_sac_on_sweep.py` | **LEGACY — labels unreliable (warning header since 2026-10-04)** | Runs SAC deterministically on unique configurations from a profile sweep. Defaults to old `sac_aeb_rand_1600k`; explicitly pass v3. |
 | `src/inspect_brake_curves.py` | **CURRENT diagnostic, partly broken** | Records SAC and analytical profile commands. Its output `ego_speed` field is populated with TTC in current code. |
 
 ### Sweeps, calibration, and analysis
@@ -1480,6 +1483,8 @@ These are the strongest defensible conclusions after reconciling documents, code
 
 **Conclusion:** The retained matched v3 CSV records 40 collisions over the 200 configuration grid, or 20%.
 
+**Superseded as a performance claim (2026-10-04):** the Phase 1 re-audit reproduced these 40 labels exactly, but the common protocol finds **73 contacts (36.5%)** on the same grid. See [Phase 1 re-audit](#phase-1-week-5-trustworthy-rl-environment-and-the-v3-re-audit-added-2026-10-04). 40/200 remains correct as a description of the archived CSV only.
+
 **Evidence:** Direct archived-row count.
 
 **Limitation:** This is one deterministic-policy pass with no replicated policy seeds. The SAC runner differs from the fixed runner in episode horizon, termination, and metric collection behavior, so “exactly equal protocol” is too strong.
@@ -1487,6 +1492,8 @@ These are the strongest defensible conclusions after reconciling documents, code
 ## 8. Final fixed collision rates and archived SAC collision rate are numerically close
 
 **Conclusion:** On the retained grid, recorded collision rates were 19–23% for fixed rules and 20% for SAC.
+
+**Status (2026-10-04): no longer supportable as a comparison.** The Phase 1 re-audit found v3 makes contact in 36.5% of the grid under the common protocol; the fixed-profile rates came from the same flawed collision checks and have not yet been re-scored. Both sides must be measured under the same protocol before any comparison.
 
 **Evidence:** Both final CSVs.
 
@@ -2112,8 +2119,10 @@ no_intervention hit the pedestrian at full speed in every case.
 - Margins inside the window are small (0.12–0.54 m). Both strategies fail at 0.6 s.
 - At full brake, brake_steer stops beside or before the pedestrian and never returns to the
   route, so route recovery is not exercised by this baseline.
-- **CARLA's collision sensor reported no collision in any of the 26 contacts** (including a
-  20 m/s straight-through hit). The legacy `RunResult` labelled these `slowed_avoided` or
+- **CARLA's collision sensor reported no collision in any of the 22 contacts** (21 in the
+  sweep plus 1 in the smoke run, out of 39 runs; including a 20 m/s straight-through hit).
+  An earlier version of this section said 26, a miscount corrected on 2026-10-04 from the
+  per-run `metrics.json`/`result.json` files. The legacy `RunResult` labelled these `slowed_avoided` or
   `full_stop`. RunResult outcomes for stationary or far-cross pedestrians therefore undercount
   collisions. Use `encounter_metrics` for any controller comparison.
 - Caveat, recorded and deliberately not pursued: **steering costs no braking in CARLA's
@@ -2127,6 +2136,81 @@ no_intervention hit the pedestrian at full speed in every case.
 **Evidence status:** **CONFIRMED** for this scenario: one location, route-right swerve,
 stationary pedestrian, full brake, deterministic reruns. It is not yet tested at other
 locations, with left swerves, at partial brake levels, or with LiDAR detection in the loop.
+
+---
+
+## Phase 1 (Week 5): trustworthy RL environment and the v3 re-audit (added 2026-10-04)
+
+**What was done** (branch `experiment/rl-env-trustworthy`, CARLA 0.9.16 default physics; the
+server was confirmed launched without `--chrono`):
+- `CarlaAEBEnv(collision_signal="legacy" | "geometric")`. `"legacy"` (default) keeps last
+  semester's semantics: CARLA's sensor OR the near-cross proximity fallback. `"geometric"`
+  adds oriented-footprint pedestrian contact in every direction (`src/rl_collision_signal.py`).
+  Every component is reported in `info` each tick. The env also places a `"stationary"`
+  pedestrian correctly; it used to silently treat it as `"far"`.
+- Offline verification against all 39 Week 4 test26 runs (committed fixture): the
+  geometric signal catches **all 22 recorded contacts on exactly the recorded first-contact
+  tick, with zero false contacts in the 17 clear runs**. The legacy signal would have caught 0.
+- **Live before/after check:** v3 through the default (legacy) env on 4 matched-grid
+  configs, including two archived collisions; old code twice, new code once. **Identical on
+  every tick** (pose, control, action, reward, termination, observation). The old code also
+  reproduced itself exactly.
+- `src/eval_policy_encounters.py`: scores a learned policy with the test26 protocol (same
+  onset, same 8 s window, `encounter_metrics`), runs past the env's own termination, and
+  records full provenance. `src/analyze_rl_reaudit.py` compares archived, reproduced-legacy
+  and protocol labels.
+
+**Re-audit of v3 on last semester's 200-configuration matched grid**
+(`src/runs/rl_encounter_eval/20261004_192904_rl_encounter_eval_default`, git `0bcc0e6`
+clean, model `sac_v3_1600k.zip` SHA-256 `ef04f2fd04aa...`):
+
+| | Archived (`eval_sac_on_sweep.py`) | Protocol (`encounter_metrics`) |
+|---|---|---|
+| Collision / contact | 40 (20%) | **73 (36.5%)**; 68 (34%) at the 0.188 m walker radius |
+| "Full stop" | 148 | 60 actual stops clear (all near-cross) |
+| Passed the pedestrian clear | (no label) | 67 (all far-cross) |
+| "Slowed, avoided" | 12 | 0 (all 12 were contacts) |
+| Far-cross contacts | 2 | **33** |
+| Near-cross contacts | 38 | 40 |
+| Contacts in "avoidable" scenarios | 2 / 120 | **15 / 120** |
+
+**Findings:**
+- **The old evaluation pipeline reproduces exactly from current code: the reconstructed
+  legacy label matches the archived label in all 200 episodes.** The difference is entirely
+  in how outcomes are scored, not in the model or the simulation.
+- **v3's corrected contact rate on the matched grid is 36.5% (73/200), not 20%.** The
+  archived "full stop" count also falls from 148 to 60 actual stops. 67 were the car
+  passing a far-cross pedestrian who had cleared the lane, and 21 were contacts.
+- **Every one of the 73 contacts is a frontal hit at real speed (median 10.0 m/s, minimum
+  3.7 m/s, none below 3 m/s).** CARLA's collision sensor missed 51 of them. The result is
+  not driven by the radius choice: using CARLA's measured walker box (half-extent
+  0.188 m) instead of the conservative 0.3 m removes only 5 contacts, all far-cross.
+- **Why far-cross hits were hidden:** the scripted walker keeps moving along its line after
+  being hit, reaches its endpoint, and the env ends the episode as "pedestrian crossed".
+  The old evaluator then calls that a full stop (19 cases) or, after truncation,
+  "slowed_avoided" (12 cases).
+- **Why some near-cross hits were hidden: the legacy proximity fallback (env and test3)
+  compares a 3D center distance with a 2D-calibrated 2.7 m threshold.** The walker's origin
+  is 1.09 m above the vehicle's (measured live), so the fallback fires only once the
+  pedestrian's center is about 7 cm inside the front bumper. In the evaluator smoke run it
+  never fired, even though the 2D distance, lateral offset and speed all met its
+  thresholds.
+- v3 contacts cluster by scenario rather than by crossing type. Every TTC 1.8 s cell and
+  the 35-45 mph TTC 2.2 s cells contain contacts, with nearly the same pattern for near and
+  far crossings. By speed: 8/40 at 22 and 28 mph, 16/40 at 35 and 40 mph, 25/40 at 45 mph.
+- After its first stop, v3 can release the brake and creep forward into a pedestrian
+  standing in the lane (smoke run: second touch at 2.2 m/s). The old evaluator ended the
+  episode at the first stop and never observed this.
+
+**What this does NOT yet establish:** a SAC-versus-fixed-profile comparison. The archived
+fixed-profile numbers (19-23%) came from `RunResult`, which shares the sensor and
+3D-fallback problems and saved no traces. **They must be re-run with trace recording and
+re-scored under the same protocol before any comparison.** The avoidability labels also use
+nominal target speed (known problem #5).
+
+**Evidence status:** **CONFIRMED** for v3 on this grid: deterministic policy, one pass,
+labels reproduced 200/200, trace-level checks of contact geometry. It is a single model and
+a single seed.
 
 ---
 
@@ -2234,6 +2318,8 @@ This history prevents repeating old dead ends without understanding why they cha
 
 ### 1. Far-cross clearance is mislabeled as full stop
 
+**Status (2026-10-04): fixed for RL evaluation** by `eval_policy_encounters.py` (explicit `passed_clear`/`stopped_clear`/`contact` outcomes). Re-audit: 67 of v3's 148 archived "full stops" were passes and 21 were contacts.
+
 **Severity:** Critical to reported results.
 
 `carla_aeb_env.py` terminates an episode when the far pedestrian reaches its endpoint. `eval_sac.py` and `eval_sac_on_sweep.py` infer full stop from noncollision termination. This converts pedestrian clearance into a vehicle stop.
@@ -2245,6 +2331,8 @@ This history prevents repeating old dead ends without understanding why they cha
 **Historical sibling bug already recognized in the code:** The comment immediately above `ped_crossed` documents an earlier near-cross failure: reaching the lane-center endpoint used to terminate the episode before a collision could register, producing an `impossible + full_stop` misclassification. The current code fixed that case by allowing `ped_crossed` termination only for far crossings. The remaining defect is the same underlying semantic mistake one layer later: evaluators assume every noncollision `terminated` episode means the ego stopped. Far-cross clearance may reasonably remain a terminal event, but it must be reported as `pedestrian_cleared`, not `actual_stop`. If eventual-stop rate is a comparison metric, all controllers must additionally receive the same post-clearance observation horizon.
 
 ### 2. SAC and fixed-profile episode horizons differ
+
+**Status (2026-10-04): fixed for RL evaluation** (same onset + 8 s window as test26, ignoring env termination). Fixed profiles still need a re-run under the same protocol.
 
 **Severity:** Critical to full-stop/time comparisons.
 
@@ -2293,6 +2381,8 @@ At 35 mph, five-second headway plus base distance is approximately 83.2 m; at 45
 The output column named `ego_speed` is assigned TTC. Existing `brake_curves_data.csv` should not be used as a speed trace.
 
 ### 8. Possible far-cross collision undercount
+
+**Status (2026-10-04): CONFIRMED and larger than suspected.** v3: 33 far-cross contacts vs. 2 archived. Near-cross too: the proximity fallback uses 3D distance against a 2D threshold (the walker origin is 1.09 m above the vehicle's), so it misses slow frontal contact. Fixed for RL by `collision_signal="geometric"` and the encounter evaluator; `RunResult`/test3 are unchanged.
 
 **Severity:** Uncertain but potentially important.
 
@@ -2563,7 +2653,11 @@ This is a design decision for the eventual expanded `carla_aeb_env.py`, not yet 
 
 ## Design artifact: tightening lateral constraints (Week 3 Workstream 1.3, added 2026-09-27)
 
-**Status: deliberately NOT implemented.** Per the Week 3 plan's own gate for this item
+**Status: RESOLVED by Prof. Izmirli's reply (email, 2026-10-03). See
+[Resolution](#resolution-advisor-answer-2026-10-03) at the end of this section.** The text
+below is the original Week 3 design pass, kept as written.
+
+**Original status (2026-09-27): deliberately NOT implemented.** Per the Week 3 plan's own gate for this item
 ("if the intended behavior remains ambiguous, keep this as a design artifact and do not
 guess in control code"), this section is the required design pass, not a spec for code
 written this week. No `lane_follow.py` changes accompany this entry.
@@ -2674,6 +2768,47 @@ one focused live positive and one focused live negative case, then the full vali
 matrix, inspecting traces rather than trusting aggregate outcome labels alone. This design
 artifact intentionally stops short of writing that specification, since committing to
 concrete boundary values for an ambiguous rule would itself be guessing.
+
+### Resolution: advisor answer (2026-10-03)
+
+Quentin asked Prof. Izmirli which of (a), (b), (c) he meant, and whether he preferred
+per-tick steering or a one-time swerve decision (left/right/none) plus braking. His answers:
+
+- **(a) Shrink the max swerve as TTC drops: "probably not." Rejected; do not build it.**
+- **(b) Grow emergency steering authority: "hopefully going to be an emergent property of
+  learned steering." Do not hard-code it.**
+- **(c) No reversing a committed direction: "would be good, since indecision will reduce
+  the efficacy of the maneuver,"** but he "wouldn't be surprised if the per-tick actions
+  automatically lead to this behavior." So measure it first, not constrain it.
+- **Per-tick vs. one-time swerve: continuous, per-tick steering** ("at least that is the
+  more interesting case").
+- His underlying idea is a **"passage"**: the car continuously observes the allowable range
+  across the road (e.g. from the left road edge to a pedestrian walking left) and adjusts
+  its steering to it. This generalizes to a second obstacle, such as another car after the
+  pedestrian. Aiming at the passage midpoint is too timid: it won't steer hard enough and
+  doesn't anticipate where the pedestrian will be when the car reaches its walking line.
+  He suggests aiming toward the extreme edge on the swerve side (leftmost for a left
+  swerve, rightmost for a right swerve, center when going straight).
+
+**What this means for Phase 2 (steering in RL; design not yet approved):**
+- The action space gets continuous per-tick steering plus braking. Whether the action is a
+  raw steering command or a lateral aim point (through `lane_follow_step`'s route-relative
+  offset) is an open design choice. The aim-point path inherits the lateral controller's
+  smoothing: in test18 it reached 1.65 m of a 1.98 m request. So measure each option's
+  authority before choosing.
+- The observation includes the passage. Compute it for the ego *center* (shrink by the
+  half-width plus a margin), so "aim at the extreme edge" never puts part of the car off the
+  road or into the obstacle. Build it from `map_drivability` and `vehicle_occupancy` so other
+  obstacles can narrow it later. For crossing pedestrians, the edge should use the
+  pedestrian's predicted position when the ego reaches the crossing line (not needed for the
+  stationary-pedestrian baseline).
+- No rule that shrinks the swerve bound. Do not cap the action range tighter than the
+  passage itself.
+- Evaluation adds a steering-commitment metric (e.g. sign reversals of the requested
+  steering or lateral offset after onset). If learned policies waver, a commitment
+  constraint (c) is an advisor-endorsed fallback, not a guess.
+- His "passage-edge aim" rule is also a candidate scripted baseline to compare a learned
+  policy against.
 
 ## Questions revealed by reconstruction
 

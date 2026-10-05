@@ -73,7 +73,14 @@ from lidar_sensor import attach_lidar_sensor
 from loop_utils import get_latest_lidar_frame
 from lane_follow import lane_follow_step
 from carla_session import connect_and_load_world, enable_sync_mode, restore_async_mode
-from scenario_config import ScenarioConfig
+from scenario_config import ScenarioConfig, crossing_lateral_offsets_m
+from rl_collision_signal import (
+    COLLISION_SIGNAL_LEGACY,
+    combine_collision_signals,
+    geometric_clearance_m,
+    legacy_proximity_contact,
+    validate_collision_signal_mode,
+)
 from walker_utils import (
     spawn_scripted_walker,
     init_scripted_crossing_state,
@@ -149,7 +156,8 @@ class CarlaAEBEnv(gymnasium.Env):
     metadata = {"render_modes": []}
 
     # -----------------------------------------------------------------------
-    def __init__(self, cfg: ScenarioConfig = None, config_fn=None):
+    def __init__(self, cfg: ScenarioConfig = None, config_fn=None,
+                 collision_signal: str = COLLISION_SIGNAL_LEGACY):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -160,9 +168,17 @@ class CarlaAEBEnv(gymnasium.Env):
                  This enables episode-to-episode randomization for generalization
                  training. When set, the cfg argument is only used as a fallback
                  for the first episode before config_fn is first called.
+            collision_signal: what counts as a collision for reward and
+                 termination (rl_collision_signal.py). "legacy" (default) =
+                 CARLA's sensor OR the near-cross proximity fallback, exactly
+                 the semantics v3 was trained and evaluated with. "geometric"
+                 adds oriented-footprint pedestrian contact in every direction
+                 (catches the stationary/far-cross hits the sensor misses).
+                 Every component is reported in info either way.
         """
         super().__init__()
 
+        self._collision_signal = validate_collision_signal_mode(collision_signal)
         self._config_fn = config_fn
         self.cfg = cfg or ScenarioConfig()
         self._target_speed_mps = self.cfg.target_mph * 0.44704
@@ -389,29 +405,45 @@ class CarlaAEBEnv(gymnasium.Env):
             self._full_stop_achieved = True
             full_stop_this_tick      = True
 
-        # --- Collision check -----------------------------------------------
-        # Primary: CARLA physics sensor (fires on high-impulse contacts)
-        collision_this_tick = self._collision_flag["hit"]
+        # --- Collision check (rl_collision_signal.py) -----------------------
+        # Sensor: CARLA physics sensor. Missed all 22 pedestrian contacts in the
+        # Week 4 test26 baseline, so it cannot be the only detector.
+        sensor_hit = self._collision_flag["hit"]
         self._collision_flag["hit"] = False
 
-        # Fallback: proximity check for slow-speed contacts CARLA sensor misses.
-        # Only applies after trigger fires, ped is ahead, and in near-cross mode
-        # (far-cross ped walks through the corridor mid-crossing — false positive risk).
-        if (not collision_this_tick
-                and self._triggered
-                and self._walker is not None
-                and self.cfg.walker_cross == "near"):
+        # Legacy fallback (near-cross only, pedestrian ahead) and oriented-
+        # footprint clearance, both from the same ground-truth poses. Which of
+        # them counts toward collision_this_tick depends on collision_signal.
+        legacy_proximity = False
+        ped_clearance_m  = None
+        ped_xy           = (None, None)
+        if self._walker is not None:
             _ego_tf   = self._vehicle.get_transform()
             _ego_fwd  = _ego_tf.get_forward_vector()
             _ped_loc  = self._walker.get_location()
-            _to_ped_x = _ped_loc.x - _ego_tf.location.x
-            _to_ped_y = _ped_loc.y - _ego_tf.location.y
-            _fwd_dot  = _to_ped_x * _ego_fwd.x + _to_ped_y * _ego_fwd.y
-            if _fwd_dot > 0:
-                _ped_dist  = _ego_tf.location.distance(_ped_loc)
-                _lateral_m = abs(_ego_fwd.x * _to_ped_y - _ego_fwd.y * _to_ped_x)
-                if _ped_dist < 2.7 and ego_speed_mps > 0.5 and _lateral_m < 1.2:
-                    collision_this_tick = True
+            ped_xy    = (_ped_loc.x, _ped_loc.y)
+            legacy_proximity = legacy_proximity_contact(
+                triggered=self._triggered,
+                walker_cross=self.cfg.walker_cross,
+                to_ped_x=_ped_loc.x - _ego_tf.location.x,
+                to_ped_y=_ped_loc.y - _ego_tf.location.y,
+                ego_forward_x=_ego_fwd.x,
+                ego_forward_y=_ego_fwd.y,
+                ped_dist_m=_ego_tf.location.distance(_ped_loc),
+                ego_speed_mps=ego_speed_mps,
+            )
+            ped_clearance_m = geometric_clearance_m(
+                ego_x_m=_ego_tf.location.x, ego_y_m=_ego_tf.location.y,
+                ego_yaw_deg=_ego_tf.rotation.yaw,
+                pedestrian_x_m=_ped_loc.x, pedestrian_y_m=_ped_loc.y,
+            )
+        collision_signals = combine_collision_signals(
+            self._collision_signal,
+            sensor=sensor_hit,
+            legacy_proximity=legacy_proximity,
+            clearance_m=ped_clearance_m,
+        )
+        collision_this_tick = collision_signals.collision
 
         # --- Reward --------------------------------------------------------
         reward, breakdown = compute_reward(
@@ -474,6 +506,17 @@ class CarlaAEBEnv(gymnasium.Env):
             "drive_mode":   drive_mode,
             "tick":         self._tick,
             "sim_time_s":   sim_time_s,
+            # Phase 1 additions (read-only; never fed back into control):
+            # every collision component, plus ground truth for trace recording.
+            **collision_signals.to_info(),
+            "ego_speed_mps":   ego_speed_mps,
+            "pedestrian_x_m":  ped_xy[0],
+            "pedestrian_y_m":  ped_xy[1],
+            "triggered":       self._triggered,
+            "trigger_time_s":  self._trigger_time_s,
+            "full_stop_achieved": self._full_stop_achieved,
+            "ped_crossed":     ped_crossed,
+            "post_trigger_timeout": post_trigger_timeout,
         }
 
         return obs, float(reward), terminated, truncated, info
@@ -700,10 +743,10 @@ class CarlaAEBEnv(gymnasium.Env):
         """Build walker start/end locations relative to an encounter waypoint."""
         lane_center = encounter_wp.transform.location
         right       = encounter_wp.transform.get_right_vector()
-        start_lat   = LANE_WIDTH_M * 0.85
-        if side.lower() == "left":
-            start_lat = -start_lat
-        end_lat = 0.0 if cross.lower() == "near" else -start_lat
+        # Same rule as test3, including "stationary" (stands at lane center).
+        # Unknown side/cross values now raise instead of silently meaning
+        # "right"/"far"; near/far placement is unchanged.
+        start_lat, end_lat = crossing_lateral_offsets_m(side=side, cross=cross, lane_width_m=LANE_WIDTH_M)
 
         start_loc = carla.Location(
             x=lane_center.x + right.x * start_lat,

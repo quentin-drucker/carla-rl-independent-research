@@ -26,6 +26,14 @@ Usage:
     python eval_sac_on_sweep.py sac_aeb_rand_800k runs/20260405_025448/sweep_summary.csv
 
 Prerequisite: CARLA must be running (CarlaUE4.exe).
+
+!! WARNING (2026-10-04, Phase 1): do not report this script's outcome labels.
+   It infers "full_stop" from any non-collision termination (a far-cross
+   pedestrian clearing the road counts as a stop), relies on CARLA's collision
+   sensor (which missed every pedestrian contact in the Week 4 baseline), uses
+   per-episode windows, and saves no trace or provenance. Kept unchanged only
+   to reproduce last semester's pipeline. For any reported number use
+   eval_policy_encounters.py (common encounter protocol).
 """
 
 import os
@@ -46,6 +54,9 @@ from math_utils import get_speed_mps
 # ---------------------------------------------------------------------------
 # Args
 # ---------------------------------------------------------------------------
+
+print("[WARNING] legacy evaluator: outcome labels are unreliable; "
+      "use eval_policy_encounters.py for reported results (see header).")
 
 MODEL_PATH  = sys.argv[1] if len(sys.argv) > 1 else "sac_aeb_rand_1600k"
 SWEEP_PATH  = sys.argv[2] if len(sys.argv) > 2 else None

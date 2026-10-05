@@ -27,9 +27,14 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(r["ego_speed_at_trigger_mps"]["match"])
 
     def test_none_only_matches_none(self):
-        self.assertTrue(compare_to_archived(dict(ARCHIVED, time_to_stop_s=None),
-                                            dict(ARCHIVED, time_to_stop_s=None))["all_match"])
-        self.assertFalse(compare_to_archived(dict(ARCHIVED, time_to_stop_s=None), ARCHIVED)["all_match"])
+        self.assertTrue(compare_to_archived(dict(ARCHIVED, trigger_time_s=None),
+                                            dict(ARCHIVED, trigger_time_s=None))["all_match"])
+        self.assertFalse(compare_to_archived(dict(ARCHIVED, trigger_time_s=None), ARCHIVED)["all_match"])
+
+    def test_time_to_stop_is_reported_but_not_a_reproduction_failure(self):
+        r = compare_to_archived(dict(ARCHIVED, time_to_stop_s=8.1), dict(ARCHIVED, time_to_stop_s=None))
+        self.assertTrue(r["all_match"])
+        self.assertFalse(r["time_to_stop_s"]["match"])
 
 
 class LoadTests(unittest.TestCase):

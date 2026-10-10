@@ -174,9 +174,9 @@ def format_best_route_table(rows) -> str:
 
     aimed = [r for r in rows if r.get("passage_u") is not None]
     if aimed:
-        edges = sorted({(r["passage_left_edge_m"], r["passage_right_edge_m"]) for r in aimed}, key=str)
+        edges = sorted({f"({r['passage_left_edge_m']:.2f}, {r['passage_right_edge_m']:.2f})" for r in aimed})
         out += ["### Passage gate", "",
-                "Live passage edges (left, right) in m: " + "; ".join(str(e) for e in edges),
+                "Live passage edges (left, right) in m: " + "; ".join(edges),
                 f"Missing-passage ticks, all runs: {sum(r['missing_passage_ticks'] for r in aimed)}", "",
                 "| u | aim offset (m) | max lateral reached (m) | max heading change (deg) | runs off-road |",
                 "|---|---|---|---|---|"]

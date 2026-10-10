@@ -94,8 +94,14 @@ def render_overlay_figure(
     save_path: str,
     route_reference: Optional[dict] = None,
     title: str = "Fixed-condition trajectory overlay",
+    corridor: Optional[list] = None,
+    invert_y: bool = False,
 ) -> None:
     """World-frame spatial overlay of one or more prepared runs.
+
+    corridor: optional passage.corridor_segments() output, drawn under the
+    runs. invert_y: flip the Y axis so the image is a true top-down view
+    (CARLA is left-handed; without it left and right appear mirrored).
 
     Raises ValueError if save_path already exists (see module docstring).
     """
@@ -111,6 +117,19 @@ def render_overlay_figure(
             route_reference["x_m"], route_reference["y_m"],
             color="black", linestyle="--", linewidth=1.2, label="route centerline", zorder=1,
         )
+
+    corridor_style = {  # kind -> (color, linewidth, legend label)
+        "road": ("0.6", 1.0, "road width at the pedestrian"),
+        "open": ("limegreen", 5.0, "passage: open to the car's center"),
+        "blocked": ("red", 5.0, "blocked by the pedestrian"),
+        "aim": ("gold", 1.5, "aim line"),
+    }
+    labelled = set()
+    for kind, (x1, y1), (x2, y2) in corridor or []:
+        color, width, text = corridor_style[kind]
+        ax.plot([x1, x2], [y1, y2], color=color, linewidth=width, solid_capstyle="butt", zorder=2,
+                label=None if kind in labelled else text)
+        labelled.add(kind)
 
     # Fixed vertical stagger per event name so labels for events that land
     # close together in space (common -- trigger/hazard_activation/closest_
@@ -140,6 +159,8 @@ def render_overlay_figure(
     ax.set_ylabel("world Y (m)")
     ax.set_title(title)
     ax.axis("equal")
+    if invert_y:
+        ax.invert_yaxis()
     ax.grid(True)
     ax.legend(loc="best", fontsize=8)
 

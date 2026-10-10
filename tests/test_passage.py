@@ -10,6 +10,7 @@ from passage import (  # noqa: E402
     Obstacle,
     admissible_center_intervals,
     compute_passage,
+    corridor_segments,
     drivable_extent_m,
     passage_coordinate_to_offset_m,
 )
@@ -107,6 +108,23 @@ class PassageAndActionTests(unittest.TestCase):
     def test_bad_bounds_rejected(self):
         with self.assertRaises(ValueError):
             passage_coordinate_to_offset_m(0.0, self.p, u_min=0.5, u_max=0.0)
+
+    def test_corridor_segments_in_the_town04_frame(self):
+        # Ego heading -x (Town04 spawn 242): right vector (0, -1), so +lateral is -y.
+        segs = corridor_segments(self.p, (100.0, 50.0), (0.0, -1.0), ego_xy=(120.0, 50.0), target_offset_m=1.75)
+        self.assertEqual([kind for kind, _, _ in segs], ["road", "open", "open", "blocked", "aim"])
+        by_kind = {kind: (a, b) for kind, a, b in segs}
+        self.assertEqual(by_kind["road"], ((100.0, 55.25), (100.0, 47.0)))
+        self.assertEqual(by_kind["blocked"], ((100.0, 51.55), (100.0, 48.45)))  # around the pedestrian
+        self.assertEqual(by_kind["aim"], ((120.0, 50.0), (100.0, 48.25)))
+
+    def test_corridor_aim_line_stops_once_the_ego_has_passed(self):
+        segs = corridor_segments(self.p, (100.0, 50.0), (0.0, -1.0), ego_xy=(95.0, 48.0), target_offset_m=1.75)
+        self.assertNotIn("aim", [kind for kind, _, _ in segs])
+
+    def test_corridor_is_empty_when_the_road_is_unknown(self):
+        p = compute_passage(lambda lat: None)
+        self.assertEqual(corridor_segments(p, (0.0, 0.0), (0.0, -1.0)), [])
 
 
 if __name__ == "__main__":

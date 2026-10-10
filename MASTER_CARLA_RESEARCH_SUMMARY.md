@@ -3085,6 +3085,32 @@ to it.** Reasons:
 - Reports should say "contact (including passes within ~0.1 m)" where the distinction
   matters.
 
+### 6. A locked steering choice freezes the whole route (Quentin, 2026-10-10)
+
+Two steering-commitment versions are built and compared (Oct 6 advisor meeting):
+
+- **`steer_commit="lock_at_onset"`: the route is decided once, at the moment the hazard
+  starts, and never changes.** At that tick the passage is computed (using the predicted
+  pedestrian position), the policy picks `u`, and that choice becomes a sideways target in
+  meters. **Both the passage and the target are then frozen for the rest of the episode.**
+  Even if the pedestrian's predicted position changes later, the route does not move.
+- **Only the route is locked.** Braking is still decided every tick (and throttle, if it
+  is added later), so the policy keeps learning how hard to slow down along its fixed
+  route.
+- `steer_commit="per_tick"`: the passage and `u` are both re-decided every tick.
+
+Why freeze the passage too, and not only `u`: if only `u` were held, a moving prediction
+would move the passage edges and the target in meters would still drift, so the "locked"
+car would not really be committed to one route. For a stationary pedestrian the two
+readings are identical; the difference only appears with a walking pedestrian.
+
+### 7. Training warning times: onset TTC 0.3-1.5 s (Quentin, 2026-10-10)
+
+Training samples the hazard's warning time from 0.3 to 1.5 s (the Week 5 plan said
+0.6-2.0 s). The scripted baseline showed that below 0.5 s nothing avoids the pedestrian
+and above about 1.2 s every option does, so this range covers the cases where the choice
+matters, plus some unavoidable and some easy cases on each side.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

@@ -3104,12 +3104,29 @@ would move the passage edges and the target in meters would still drift, so the 
 car would not really be committed to one route. For a stationary pedestrian the two
 readings are identical; the difference only appears with a walking pedestrian.
 
+For now the locked route is "swerve out and hold". The return to the lane after the
+pedestrian is not built or tested yet (see decision 8).
+
 ### 7. Training warning times: onset TTC 0.3-1.5 s (Quentin, 2026-10-10)
 
 Training samples the hazard's warning time from 0.3 to 1.5 s (the Week 5 plan said
 0.6-2.0 s). The scripted baseline showed that below 0.5 s nothing avoids the pedestrian
 and above about 1.2 s every option does, so this range covers the cases where the choice
 matters, plus some unavoidable and some easy cases on each side.
+
+### 8. Deferred on purpose, and must come back (Quentin, 2026-10-10)
+
+- **LiDAR along the bent route.** While the hazard starts by script (decision 2), LiDAR
+  decides nothing: distances are measured and logged only. **When LiDAR detection returns
+  (Phase 4), it must look along the bent corridor the car is actually taking, not the
+  original straight lane corridor.** The Week 3 swept-path code
+  (`use_swept_path_clearance_override`) already does this and is the starting point.
+- **Merging back to the lane.** After the hazard is passed and judged safe, the car
+  should curve back to its original lane, and the debug corridor should show that curve
+  the same way it shows the swerve out. Not needed while the work is on the hazard
+  itself. The single-corridor view (`run_scenario(planned_route_view=True)`, test26
+  `--draw`) already bends toward whatever sideways target is commanded, so it will draw
+  the return once a controller commands one; that has not been checked live in this view.
 
 ## Questions revealed by reconstruction
 

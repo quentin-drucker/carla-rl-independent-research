@@ -122,7 +122,6 @@ def render_overlay_figure(
         "road": ("0.6", 1.0, "road width at the pedestrian"),
         "open": ("limegreen", 5.0, "passage: open to the car's center"),
         "blocked": ("red", 5.0, "blocked by the pedestrian"),
-        "aim": ("gold", 1.5, "aim line"),
     }
     labelled = set()
     for kind, (x1, y1), (x2, y2) in corridor or []:

@@ -31,9 +31,8 @@ def passage_frame(carla_map, location):
 
 _CORRIDOR_STYLE = {  # kind -> (thickness m, color); same colors as trajectory_plot's corridor
     "road": (0.03, carla.Color(150, 150, 150)),
-    "open": (0.12, carla.Color(0, 255, 0)),
-    "blocked": (0.12, carla.Color(255, 0, 0)),
-    "aim": (0.06, carla.Color(255, 255, 0)),
+    "open": (0.08, carla.Color(0, 200, 0)),   # 0.12 at full brightness glared in the dusk lighting
+    "blocked": (0.08, carla.Color(200, 0, 0)),
 }
 
 
@@ -42,7 +41,8 @@ def draw_corridor(debug, segments, *, z, life_time):
     lines are render-only: they do not touch physics or control."""
     for kind, (x1, y1), (x2, y2) in segments:
         thickness, color = _CORRIDOR_STYLE[kind]
-        debug.draw_line(carla.Location(x=x1, y=y1, z=z), carla.Location(x=x2, y=y2, z=z),
+        line_z = z - 0.15 if kind == "road" else z  # road under the bar, or its grey washes the colors out
+        debug.draw_line(carla.Location(x=x1, y=y1, z=line_z), carla.Location(x=x2, y=y2, z=line_z),
                         thickness=thickness, color=color, life_time=life_time)
 
 

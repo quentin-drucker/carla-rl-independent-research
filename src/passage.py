@@ -178,17 +178,15 @@ def predicted_lateral_at_arrival(
     return lateral_m + lateral_speed_mps * time_s
 
 
-def corridor_segments(passage: Passage, origin_xy, right_xy, *, ego_xy=None, target_offset_m=None) -> list:
+def corridor_segments(passage: Passage, origin_xy, right_xy) -> list:
     """World-frame line segments [(kind, (x1, y1), (x2, y2))] picturing the
     passage on its line across the road (for CARLA debug lines and plots):
       "road"    -- the whole drivable width
       "open"    -- each admissible ego-center interval
       "blocked" -- the gap between two intervals (an obstacle's exclusion zone)
-      "aim"     -- from the ego to its lateral target on that line; only when
-                   ego_xy and target_offset_m are given and the line is still
-                   ahead of the ego.
     origin_xy / right_xy are the passage frame (passage_carla.passage_frame).
-    Returns [] when the road extent is unknown."""
+    Returns [] when the road extent is unknown. The route the ego takes to
+    the passage is drawn by run_scenario(planned_route_view=True)."""
     if passage.road_left_m is None:
         return []
     (ox, oy), (rx, ry) = origin_xy, right_xy
@@ -199,11 +197,6 @@ def corridor_segments(passage: Passage, origin_xy, right_xy, *, ego_xy=None, tar
     segments = [("road", at(passage.road_left_m), at(passage.road_right_m))]
     segments += [("open", at(lo), at(hi)) for lo, hi in passage.intervals]
     segments += [("blocked", at(a[1]), at(b[0])) for a, b in zip(passage.intervals, passage.intervals[1:])]
-    if ego_xy is not None and target_offset_m is not None:
-        # CARLA is left-handed: right = forward rotated +90 deg, so forward = (ry, -rx).
-        ahead_m = (ox - ego_xy[0]) * ry + (oy - ego_xy[1]) * -rx
-        if ahead_m > 0.0:
-            segments.append(("aim", (ego_xy[0], ego_xy[1]), at(target_offset_m)))
     return segments
 
 

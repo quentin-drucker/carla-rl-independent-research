@@ -128,8 +128,9 @@ def _parse_args(argv=None):
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and retry")
     p.add_argument("--table", metavar="SWEEP_DIR", help="print the best-route table from a sweep's finished runs")
     p.add_argument("--draw", action="store_true",
-                   help="brake_passage_edge: draw the corridor in CARLA every tick (green = passage open to the "
-                        "car's center, red = blocked by the pedestrian, yellow = line from the car to its aim)")
+                   help="draw one corridor in CARLA: the route the car intends to follow (straight along the lane, "
+                        "bending to the aim at onset; orange while braking), plus for brake_passage_edge the "
+                        "passage at the pedestrian (green = open to the car's center, red = blocked)")
     p.add_argument("--corridor-plot", metavar="CASE_DIR",
                    help="save corridor.png for one scenario folder (<sweep>/<case>): every option's path over the passage")
     args = p.parse_args(argv)
@@ -249,15 +250,14 @@ def _run_one(*, mph, ttc, mode, passage_u, label, swerve_offset_m, case_dir, cli
             if state.get("debug") is None:
                 state["debug"] = client.get_world().debug
             draw_corridor(
-                state["debug"],
-                corridor_segments(steering_fn.passage, frame["origin_xyz"][:2], frame["right_xy"],
-                                  ego_xy=(telemetry["pos_x_m"], telemetry["pos_y_m"]),
-                                  target_offset_m=steering_fn.last_target_m),
+                state["debug"], corridor_segments(steering_fn.passage, frame["origin_xyz"][:2], frame["right_xy"]),
                 z=frame["origin_xyz"][2] + 0.5, life_time=FIXED_DT * 1.05)  # refreshed every tick, like lane_follow's dots
     result = run_scenario(
         cfg, plot_after=False, lateral_offset_fn=steering_fn, tick_observer=observer,
         post_crossing_settle_s=PROTOCOL.horizon_s + 1.0,
         hazard_command_fn=make_hazard_command_fn(mode, brake_target=BRAKE_TARGET),
+        # --draw: show one corridor, the route the car intends to follow now.
+        monitor_lateral_corridors=draw, planned_route_view=draw,
     )
     recorder.tag_closest_approach()
     metrics = compute_encounter_metrics(recorder.ticks, onset_time_s=result.trigger_time_s,

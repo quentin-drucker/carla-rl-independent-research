@@ -72,6 +72,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
 | **Which vehicle physics? (Week 4, 2026-10-01)** | **CARLA's default physics stays primary. Built-in Chrono is a NO-GO for the main experiment and a LIMITED-GO for separate robustness studies only:** it cannot hold a braked car still at low speed in CARLA 0.9.16's bridge. See [the Week 4 decision](#week-4-decision-carlas-built-in-chrono-physics-is-not-the-research-backend-added-2026-10-01). |
+| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". |
 
 ## One-sentence state of the research
 
@@ -2281,6 +2282,96 @@ scripted scenarios, onset-fixed values reproduced 800/800, one deterministic pas
 controller, single SAC model and seed. The McNemar p-values describe these 200 scenarios,
 not a population of policies or seeds. The avoidability labels still use nominal target
 speed (known problem #5).
+
+---
+
+## Week 5 (Phase 2, step 1): the passage checked live, and the best aim position per scenario (added 2026-10-10)
+
+**What was done** (branch `experiment/steering-rl-env`, CARLA default physics, renderless):
+- `test26` gained `--passage-u`: the `brake_passage_edge` mode (full brake plus steering
+  aimed at passage coordinate `u`, held from onset) runs once per aim position. It also
+  gained `progress.log`, `--resume`, `--relaunch-carla` and `--table`.
+- Two sweeps on the stationary-pedestrian scenario, 35 and 45 mph, 126 runs in total:
+  `20261010_104704` (onset TTC 0.6-1.6 s) and `20261010_112344` (0.3-0.5 s, added to find
+  where no option works). Each scenario ran no_intervention, brake_only, brake_steer
+  (last week's fixed 1.98 m swerve) and `u` = 0.25, 0.5, 0.75, 1.0.
+- `u` = 1.0 aims 7.42 m to the right (two lanes over); 0.25 aims 1.85 m.
+
+**Measured.** "passed" and "stopped" give the smallest gap between the car's body and
+the pedestrian (0.3 m radius); "hit" gives the impact speed. no_intervention hit at full
+speed in every scenario.
+
+35 mph:
+
+| Onset TTC (s) | brake_only | brake_steer | u=0.25 | u=0.5 | u=0.75 | u=1.0 | Best |
+|---|---|---|---|---|---|---|---|
+| 0.3 | hit 14.9 | hit 14.9 | hit 14.6 | hit 14.6 | hit 14.6 | hit 14.6 | all hit; least bad u=0.5, 14.6 m/s |
+| 0.4 | hit 14.2 | hit 14.1 | hit 13.9 | hit 13.5 | hit 13.5 | hit 13.5 | all hit; least bad u=0.75, 13.5 m/s |
+| 0.5 | hit 13.3 | hit 13.1 | hit 12.9 | passed 0.44 m | passed 0.49 m | passed 0.48 m | u=0.75 |
+| 0.6 | hit 12.3 | hit 12.1 | hit 10.6 | passed 0.98 m | passed 1.34 m | passed 1.35 m | u=1.0 |
+| 0.8 | hit 10.2 | passed 0.12 m | passed 0.20 m | stopped 1.64 m | stopped 2.83 m | stopped 3.61 m | u=1.0 |
+| 1.0 | hit 8.0 | stopped 0.32 m | stopped 0.31 m | stopped 1.98 m | stopped 3.60 m | stopped 4.96 m | u=1.0 |
+| 1.2 | stopped 0.23 m | stopped 0.79 m | stopped 1.29 m | stopped 3.44 m | stopped 5.03 m | stopped 6.28 m | u=1.0 |
+| 1.4 | stopped 3.37 m | stopped 3.87 m | stopped 4.29 m | stopped 6.13 m | stopped 7.94 m | stopped 9.50 m | u=1.0 |
+| 1.6 | stopped 6.48 m | stopped 6.93 m | stopped 7.31 m | stopped 9.39 m | stopped 10.99 m | stopped 12.50 m | u=1.0 |
+
+45 mph:
+
+| Onset TTC (s) | brake_only | brake_steer | u=0.25 | u=0.5 | u=0.75 | u=1.0 | Best |
+|---|---|---|---|---|---|---|---|
+| 0.3 | hit 19.0 | hit 18.9 | hit 18.6 | hit 18.4 | hit 18.4 | hit 18.4 | all hit; least bad u=0.75, 18.4 m/s |
+| 0.4 | hit 18.1 | hit 18.0 | hit 17.7 | hit 17.2 | hit 17.1 | hit 17.1 | all hit; least bad u=0.75, 17.1 m/s |
+| 0.5 | hit 17.0 | hit 16.8 | hit 16.1 | passed 0.45 m | passed 0.44 m | passed 0.32 m | u=0.5 |
+| 0.6 | hit 15.9 | hit 15.7 | passed 0.16 m | passed 1.25 m | passed 1.64 m | passed 1.68 m | u=1.0 |
+| 0.8 | hit 13.6 | passed 0.30 m | passed 0.36 m | passed 1.97 m | passed 3.26 m | passed 4.19 m | u=1.0 |
+| 1.0 | hit 10.9 | passed 0.45 m | passed 0.45 m | stopped 2.16 m | stopped 3.77 m | stopped 5.29 m | u=1.0 |
+| 1.2 | hit 8.1 | stopped 0.54 m | stopped 0.47 m | stopped 2.40 m | stopped 4.78 m | stopped 6.73 m | u=1.0 |
+| 1.4 | stopped 0.95 m | stopped 1.84 m | stopped 2.41 m | stopped 5.05 m | stopped 7.62 m | stopped 9.65 m | u=1.0 |
+| 1.6 | stopped 4.93 m | stopped 5.71 m | stopped 6.18 m | stopped 8.65 m | stopped 11.10 m | stopped 13.21 m | u=1.0 |
+
+"Best" is the safe option with the most clearance or, where every option hits, the one
+with the lowest impact speed. Full tables: `best_route_table.md` in each sweep folder, or
+`test26 --table <sweep>`.
+
+**Findings:**
+- **The passage is right on the live server.** Its edges were -3.87 m and +7.42 m in all
+  72 aimed runs, identical to the offline check, with no tick missing a passage.
+- **The results are repeatable.** All 36 runs shared with last week's sweep reproduced it
+  exactly.
+- **Aiming into the passage avoids the pedestrian with as little as 0.5 s of warning.**
+  Braking alone needs 1.2 s at 35 mph and 1.4 s at 45 mph; last week's fixed swerve needs
+  0.8 s.
+- **At 0.4 s or less there is no safe route: every option hits, at both speeds.** The
+  larger swerves hit slowest, but only 0.3-1.0 m/s slower than braking alone.
+- **A bigger swerve almost always gives more clearance, and `u` = 1.0 is usable.** It
+  never left the road or spun the car in 18 runs, so the action range needs no cap. The
+  car does not reach the 7.42 m aim under full braking: it gets 4.6-5.1 m over at 35 mph
+  and 6.2-6.5 m at 45 mph, and stops angled 37-50 degrees to the road.
+- **At the limit, more is not better.** At 0.5 s the best aim is `u` = 0.75 (35 mph) and
+  0.5 (45 mph); at 45 mph `u` = 1.0 leaves 0.32 m against 0.45 m, because the sharper
+  turn swings the car's side closer.
+- The smallest aim that is safe is `u` = 0.5 at TTC 0.5 s and at 35 mph / 0.6 s, and
+  `u` = 0.25 in every other scenario from 0.6 s up.
+- Pedestrian radius: 58 contacts at 0.3 m, 57 at 0.188 m. The one difference is 35 mph /
+  0.6 s / `u` = 0.25, which overlaps the 0.3 m circle by 3 cm and misses CARLA's walker
+  box by 8 cm.
+- Steering commitment: 0 side switches and 0 direction changes in every aimed run, as
+  expected for a held aim.
+- CARLA's collision sensor reported 4 of the 58 contacts.
+
+**Caveat (known, not pursued):** steering costs no braking in CARLA's default vehicle
+model. Lateral acceleration (speed x yaw rate) reached 19 m/s^2 at 35 mph and 26 m/s^2
+at 45 mph in the aimed runs, about 2-2.6 g, which real tires cannot give. These
+clearances are CARLA's, not real-world predictions.
+
+**What this means for the RL environment (open, for Quentin and Prof. Izmirli):**
+- In this scene a bigger swerve costs nothing, so "safest by clearance" is nearly always
+  `u` = 1.0. If the policy should prefer the smallest swerve that clears, the reward has
+  to say so.
+- The informative warning times are about 0.3-1.2 s. Above that every option succeeds.
+
+**Evidence status:** **CONFIRMED** for this scenario: one location, stationary pedestrian,
+right swerves, full brake, held aim, one deterministic run per case.
 
 ---
 

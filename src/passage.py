@@ -40,6 +40,7 @@ DEFAULT_SIDE_MARGIN_M = 0.3       # clearance kept from road edges and obstacles
 DEFAULT_SCAN_MAX_M = 12.0         # how far either side of the route to look for road (Town04: 8.75 m to the right edge of a 3-lane side)
 DEFAULT_SCAN_STEP_M = 0.05
 DEFAULT_MAX_GAP_M = 0.10          # non-drivable runs this short are treated as lane seams
+DEFAULT_MAX_ARRIVAL_TIME_S = 8.0  # prediction time cap; the encounter protocol's scoring window
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,28 @@ def compute_passage(
         left_edge_m=intervals[0][0] if intervals else None,
         right_edge_m=intervals[-1][1] if intervals else None,
     )
+
+
+def predicted_lateral_at_arrival(
+    lateral_m: float, lateral_speed_mps: float, distance_m: float, ego_speed_mps: float,
+    *, max_time_s: float = DEFAULT_MAX_ARRIVAL_TIME_S,
+) -> float:
+    """Where an obstacle will be across the road when the ego reaches its line:
+    lateral_m + lateral_speed_mps * time to arrival, with
+    time to arrival = distance_m / ego_speed_mps.
+
+    Both the ego's speed and the obstacle's lateral speed are taken as constant
+    (the ego is usually braking, so it really arrives later; the caller
+    recomputes every tick, which corrects for that as the ego slows). The time
+    is capped at max_time_s so a nearly stopped ego does not push the
+    prediction far off the road. At or past the line (distance_m <= 0) the
+    answer is the current position.
+    """
+    if distance_m <= 0.0:
+        return lateral_m
+    # Compared by multiplying, so ego_speed_mps = 0 needs no special case.
+    time_s = max_time_s if ego_speed_mps * max_time_s <= distance_m else distance_m / ego_speed_mps
+    return lateral_m + lateral_speed_mps * time_s
 
 
 def corridor_segments(passage: Passage, origin_xy, right_xy, *, ego_xy=None, target_offset_m=None) -> list:

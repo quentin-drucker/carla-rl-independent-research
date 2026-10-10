@@ -272,6 +272,7 @@ def run_scenario(
     use_geometric_clearance_override: bool = False,
     use_swept_path_clearance_override: bool = False,
     hazard_command_fn=None,
+    planned_route_view: bool = False,
 ) -> RunResult:
     """
     Run one full scenario with the given config. Returns a RunResult.
@@ -326,8 +327,17 @@ def run_scenario(
                     replaces LiDAR hazard detection in lane_follow_step (see
                     scripted_hazard_active there). None (default) keeps the
                     LiDAR decision, matching every existing caller.
+        planned_route_view: Drawing only. If True, the debug view shows ONE
+                    corridor: the route the ego intends to follow right now
+                    (the transition corridor, eased from the ego's actual
+                    lateral offset to the commanded one), instead of the
+                    route line, the LiDAR dots, and the original-lane and
+                    commanded corridors. Requires
+                    monitor_lateral_corridors=True. No control change.
     """
     TARGET_SPEED_MPS = cfg.target_mph * 0.44704
+    if planned_route_view and not monitor_lateral_corridors:
+        raise ValueError("planned_route_view requires monitor_lateral_corridors=True")
     if use_swept_path_clearance_override and not monitor_lateral_corridors:
         raise ValueError(
             "use_swept_path_clearance_override requires "
@@ -445,7 +455,8 @@ def run_scenario(
             world, ego_tf.location, end_route_loc, sampling_resolution=2.0
         )
         route_points_world = [wp.transform.location for wp in route_wps]
-        _draw_route_debug(world, route_wps, life_time=30.0)
+        if not planned_route_view:
+            _draw_route_debug(world, route_wps, life_time=30.0)
 
         encounter_wp = _get_route_waypoint_at_distance(route_wps, cfg.encounter_distance_m)
         enc_loc = encounter_wp.transform.location
@@ -937,8 +948,20 @@ def run_scenario(
                     break
 
             # --- Visualization ---
-            draw_lidar_points(world, lidar_frame, lidar, sample_step=60, life_time=0.10)
-            if telemetry is not None:
+            if planned_route_view:
+                # One corridor only: straight along the lane until a swerve is
+                # commanded, then bending to the commanded offset (and back to
+                # the lane if the command returns to 0). Orange while braking.
+                draw_lane_noodle_corridor(
+                    world, speed_state.get("transition_corridor_points_world", None),
+                    half_width_m=speed_state.get("noodle_half_width_m", NOODLE_HALF_WIDTH_M),
+                    life_time=FIXED_DT * 1.05,
+                    z_offset=0.26,
+                    hazard_active=speed_state.get("drive_mode", "CRUISE") in ("HAZARD_BRAKE", "STOP_HOLD"),
+                )
+            else:
+                draw_lidar_points(world, lidar_frame, lidar, sample_step=60, life_time=0.10)
+            if telemetry is not None and not planned_route_view:
                 noodle_pts = speed_state.get("noodle_points_world", None)
                 _noodle_hazard = speed_state.get("drive_mode", "CRUISE") in ("HAZARD_BRAKE", "STOP_HOLD")
                 draw_lane_noodle_corridor(

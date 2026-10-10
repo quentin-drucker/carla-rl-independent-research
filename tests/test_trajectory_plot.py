@@ -134,6 +134,15 @@ class RenderFiguresSmokeTests(unittest.TestCase):
             render_overlay_figure(series, ["run_a"], save_path=path, route_reference=route_ref)
             self.assertTrue(os.path.exists(path))
 
+    def test_render_overlay_figure_with_corridor(self):
+        series = [prepare_overlay_series(_straight_trajectory(n=5))]
+        corridor = [("road", (4.0, -5.0), (4.0, 8.0)), ("open", (4.0, 1.7), (4.0, 7.4)),
+                    ("open", (4.0, -3.9), (4.0, -1.7)), ("blocked", (4.0, -1.7), (4.0, 1.7))]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "overlay.png")
+            render_overlay_figure(series, ["run_a"], save_path=path, corridor=corridor, invert_y=True)
+            self.assertGreater(os.path.getsize(path), 0)
+
     def test_render_overlay_figure_refuses_overwrite(self):
         series = [prepare_overlay_series(_straight_trajectory(n=3))]
         with tempfile.TemporaryDirectory() as d:

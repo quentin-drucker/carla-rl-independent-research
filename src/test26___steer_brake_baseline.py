@@ -25,6 +25,9 @@ Usage (CARLA running with default physics; from src/ in the venv):
     python -X utf8 test26___steer_brake_baseline.py --passage-u 0.25 0.5 0.75 1.0   # brake_passage_edge once per aim position
     python -u -X utf8 test26___steer_brake_baseline.py --resume <sweep_dir>  # continue after a crash
     python -X utf8 test26___steer_brake_baseline.py --table <sweep_dir>     # print the best-route table (no CARLA needed)
+    python -X utf8 test26___steer_brake_baseline.py --corridor-plot <sweep_dir>/<case>   # still image (no CARLA needed)
+    python -X utf8 test26___steer_brake_baseline.py --mph 45 --ttc 0.8 --modes brake_passage_edge --passage-u 0.75 --draw
+        # live corridor; run CARLA WITH a window to see it
     add --relaunch-carla to restart a crashed CARLA server automatically (renderless)
 
 Drivability uses map_drivability.classify_point_drivability_seam_tolerant
@@ -60,7 +63,8 @@ from map_drivability import classify_point_drivability_seam_tolerant
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from reactive_avoidance import compute_required_clearance_offset_m
 from scenario_config import ScenarioConfig
-from passage_carla import passage_at_location
+from passage import Passage, corridor_segments
+from passage_carla import draw_corridor, passage_at_location
 from steer_brake_baseline import (
     MODE_BRAKE_PASSAGE_EDGE,
     MODES,
@@ -123,6 +127,11 @@ def _parse_args(argv=None):
     p.add_argument("--relaunch-carla", action="store_true",
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and retry")
     p.add_argument("--table", metavar="SWEEP_DIR", help="print the best-route table from a sweep's finished runs")
+    p.add_argument("--draw", action="store_true",
+                   help="brake_passage_edge: draw the corridor in CARLA every tick (green = passage open to the "
+                        "car's center, red = blocked by the pedestrian, yellow = line from the car to its aim)")
+    p.add_argument("--corridor-plot", metavar="CASE_DIR",
+                   help="save corridor.png for one scenario folder (<sweep>/<case>): every option's path over the passage")
     args = p.parse_args(argv)
     if any(not 0.0 <= u <= 1.0 for u in args.passage_u):  # right swerves only for now
         p.error("--passage-u values must be in [0, 1]")
@@ -157,7 +166,41 @@ def _footprint_drivable(carla_map, x, y, yaw_deg, z):
     return (None if "unknown" in statuses else True), corrections
 
 
-def _run_one(*, mph, ttc, mode, passage_u, label, swerve_offset_m, case_dir, client):
+def _corridor_plot(case_dir):
+    """Still image for one scenario: each option's path from just before onset,
+    drawn over the passage. Reads saved traces only (no CARLA)."""
+    from trajectory_plot import prepare_overlay_series, render_overlay_figure
+
+    series, labels, corridor = [], [], None
+    for label in sorted(os.listdir(case_dir)):
+        run_dir = os.path.join(case_dir, label)
+        if not os.path.isfile(os.path.join(run_dir, "manifest.json")):
+            continue
+        with open(os.path.join(run_dir, "manifest.json")) as f:
+            manifest = json.load(f)
+        if manifest["mode"] == "no_intervention":  # drives straight on for 8 s and would squash the picture
+            continue
+        with open(os.path.join(run_dir, "result.json")) as f:
+            onset = json.load(f)["trigger_time_s"]
+        ticks = [t for t in read_trace_csv(os.path.join(run_dir, "trace.csv"))
+                 if onset - 0.5 <= t.sim_time_s <= onset + PROTOCOL.horizon_s]
+        s = prepare_overlay_series(ticks)
+        s["event_ticks"] = {} if series else {"onset": s["event_ticks"].get("onset", [])}  # one onset marker, no clutter
+        series.append(s)
+        labels.append(label)
+        steering = manifest["steering"] or {}
+        if corridor is None and steering.get("passage"):
+            p, frame = steering["passage"], steering["passage_frame"]
+            corridor = corridor_segments(Passage(**{**p, "intervals": tuple(map(tuple, p["intervals"]))}),
+                                         frame["origin_xyz"][:2], frame["right_xy"])
+    save_path = os.path.join(case_dir, "corridor.png")
+    render_overlay_figure(series, labels, save_path=save_path, corridor=corridor, invert_y=True,
+                          title=f"{os.path.basename(os.path.normpath(case_dir))}: paths after onset (top view)")
+    print(f"[test26] wrote {save_path}")
+    return 0
+
+
+def _run_one(*, mph, ttc, mode, passage_u, label, swerve_offset_m, case_dir, client, draw=False):
     cfg = ScenarioConfig(
         walker_cross="stationary", walker_side="left", trigger_ttc_s=ttc,
         target_mph=mph, encounter_distance_m=ENCOUNTER_DISTANCE_M,
@@ -201,6 +244,16 @@ def _run_one(*, mph, ttc, mode, passage_u, label, swerve_offset_m, case_dir, cli
             passage, frame = passage_at_location(state["map"], carla.Location(x=ped[0], y=ped[1], z=telemetry.get("pos_z_m") or 0.0), [ped])
             steering_fn.set_passage(passage)
             state["passage_frame"] = frame
+        if draw and state["passage_frame"] is not None:
+            frame = state["passage_frame"]
+            if state.get("debug") is None:
+                state["debug"] = client.get_world().debug
+            draw_corridor(
+                state["debug"],
+                corridor_segments(steering_fn.passage, frame["origin_xyz"][:2], frame["right_xy"],
+                                  ego_xy=(telemetry["pos_x_m"], telemetry["pos_y_m"]),
+                                  target_offset_m=steering_fn.last_target_m),
+                z=frame["origin_xyz"][2] + 0.5, life_time=FIXED_DT * 1.05)  # refreshed every tick, like lane_follow's dots
     result = run_scenario(
         cfg, plot_after=False, lateral_offset_fn=steering_fn, tick_observer=observer,
         post_crossing_settle_s=PROTOCOL.horizon_s + 1.0,
@@ -271,6 +324,8 @@ def main(argv=None):
     if args.table:
         print(format_best_route_table(_load_rows(args.table)))
         return 0
+    if args.corridor_plot:
+        return _corridor_plot(args.corridor_plot)
     cases = SMOKE_CASES if args.smoke else [(m, t) for m in args.mph for t in args.ttc]
     modes, passage_u = args.modes, args.passage_u
 
@@ -317,7 +372,8 @@ def main(argv=None):
             try:
                 print(f"\n[test26] ===== {tag.strip()} =====")
                 row, m = _run_one(mph=mph, ttc=ttc, mode=mode, passage_u=u, label=label,
-                                  swerve_offset_m=swerve_offset_m, case_dir=case_dir, client=_connect())
+                                  swerve_offset_m=swerve_offset_m, case_dir=case_dir, client=_connect(),
+                                  draw=args.draw)
                 break
             except Exception as exc:  # one failed run must not lose the rest
                 log(f"{tag} FAILED (attempt {attempt}): {type(exc).__name__}: {exc}")

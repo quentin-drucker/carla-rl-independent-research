@@ -29,6 +29,23 @@ def passage_frame(carla_map, location):
     return wp.transform.location, (right.x / norm, right.y / norm)
 
 
+_CORRIDOR_STYLE = {  # kind -> (thickness m, color); same colors as trajectory_plot's corridor
+    "road": (0.03, carla.Color(150, 150, 150)),
+    "open": (0.12, carla.Color(0, 255, 0)),
+    "blocked": (0.12, carla.Color(255, 0, 0)),
+    "aim": (0.06, carla.Color(255, 255, 0)),
+}
+
+
+def draw_corridor(debug, segments, *, z, life_time):
+    """Draw passage.corridor_segments as CARLA debug lines at height z. Debug
+    lines are render-only: they do not touch physics or control."""
+    for kind, (x1, y1), (x2, y2) in segments:
+        thickness, color = _CORRIDOR_STYLE[kind]
+        debug.draw_line(carla.Location(x=x1, y=y1, z=z), carla.Location(x=x2, y=y2, z=z),
+                        thickness=thickness, color=color, life_time=life_time)
+
+
 def passage_at_location(carla_map, location, obstacles_xy=(), *, obstacle_radius_m=None, **passage_kwargs):
     """Passage across the road at `location`. obstacles_xy: world (x, y)
     points (e.g. the pedestrian); they are converted to lateral offsets in

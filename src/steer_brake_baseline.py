@@ -98,6 +98,100 @@ class PassageEdgeOffset:
         return self.last_target_m
 
 
+def expand_runs(modes, passage_u=(1.0,)) -> List[Tuple[str, object, str]]:
+    """[(mode, u, label)]: brake_passage_edge once per aim position u, every
+    other mode once (u = None). The label names the run's folder."""
+    runs = []
+    for mode in modes:
+        if mode == MODE_BRAKE_PASSAGE_EDGE:
+            runs += [(mode, u, f"{mode}_u{u:g}") for u in passage_u]
+        else:
+            runs.append((mode, None, mode))
+    return runs
+
+
+def max_abs_yaw_change_deg(yaws_deg):
+    """Largest heading change from the first sample, wrapped to [-180, 180]
+    (spin check). None for no samples."""
+    if not yaws_deg:
+        return None
+    return max(abs((y - yaws_deg[0] + 180.0) % 360.0 - 180.0) for y in yaws_deg)
+
+
+def best_option(rows):
+    """(kind, row) for one scenario's runs. "safe": the safe run with the most
+    clearance. Else "no_contact_unsafe": a run that missed the pedestrian but
+    is not safe (left the road, or unresolved), most clearance. Else
+    "all_contact": the run with the lowest impact speed. Ties keep the first."""
+    safe = [r for r in rows if r["safe_success"]]
+    if safe:
+        return "safe", max(safe, key=lambda r: r["min_clearance_m"])
+    missed = [r for r in rows if r["outcome"] != "contact"]
+    if missed:
+        return "no_contact_unsafe", max(missed, key=lambda r: r["min_clearance_m"])
+    return "all_contact", min(rows, key=lambda r: r["contact_speed_mps"])
+
+
+def _option_name(r) -> str:
+    return r["mode"] if r.get("passage_u") is None else f"u={r['passage_u']:g}"
+
+
+def _result_cell(r) -> str:
+    if r["outcome"] == "contact":
+        return f"hit {r['contact_speed_mps']:.1f} m/s"
+    what = {"passed_clear": "passed", "stopped_clear": "stopped"}.get(r["outcome"], r["outcome"])
+    off_road = " OFF-ROAD" if r.get("drivable_violation_ticks") else ""
+    return f"{what} {r['min_clearance_m']:.2f} m{off_road}"
+
+
+def _best_cell(rows) -> str:
+    kind, r = best_option(rows)
+    if kind == "safe":
+        return f"{_option_name(r)} ({r['min_clearance_m']:.2f} m)"
+    if kind == "no_contact_unsafe":
+        return f"none safe; {_option_name(r)} misses ({_result_cell(r)})"
+    return f"all hit; least bad {_option_name(r)} at {r['contact_speed_mps']:.1f} m/s"
+
+
+def format_best_route_table(rows) -> str:
+    """Markdown report from test26 summary rows: per speed, every option's
+    result per onset TTC with the best option and the best aim position u;
+    then the gate facts (live passage edges, missing-passage ticks, and per u
+    whether the car left the road or swung its heading)."""
+    out = []
+    options = list(dict.fromkeys(_option_name(r) for r in rows))
+    for mph in sorted({r["mph"] for r in rows}):
+        out += [f"### {mph:g} mph", "",
+                "| Onset TTC (s) | " + " | ".join(options) + " | Best option | Best u |",
+                "|---" * (len(options) + 3) + "|"]
+        for ttc in sorted({r["onset_ttc_s"] for r in rows if r["mph"] == mph}):
+            case = [r for r in rows if r["mph"] == mph and r["onset_ttc_s"] == ttc]
+            by_name = {_option_name(r): r for r in case}
+            aimed = [r for r in case if r.get("passage_u") is not None]
+            out.append(f"| {ttc:g} | " + " | ".join(_result_cell(by_name[o]) if o in by_name else "-" for o in options)
+                       + f" | {_best_cell(case)} | {_best_cell(aimed) if aimed else '-'} |")
+        out.append("")
+
+    aimed = [r for r in rows if r.get("passage_u") is not None]
+    if aimed:
+        edges = sorted({(r["passage_left_edge_m"], r["passage_right_edge_m"]) for r in aimed}, key=str)
+        out += ["### Passage gate", "",
+                "Live passage edges (left, right) in m: " + "; ".join(str(e) for e in edges),
+                f"Missing-passage ticks, all runs: {sum(r['missing_passage_ticks'] for r in aimed)}", "",
+                "| u | aim offset (m) | max lateral reached (m) | max heading change (deg) | runs off-road |",
+                "|---|---|---|---|---|"]
+        for u in sorted({r["passage_u"] for r in aimed}):
+            at_u = [r for r in aimed if r["passage_u"] == u]
+            out.append(f"| {u:g} | {max(r['target_offset_m'] for r in at_u):.2f} "
+                       f"| {max(r['max_abs_route_lateral_m'] for r in at_u):.2f} "
+                       f"| {max(r['max_abs_yaw_change_deg'] for r in at_u):.1f} "
+                       f"| {sum(bool(r['drivable_violation_ticks']) for r in at_u)} of {len(at_u)} |")
+        out.append("")
+    out.append(f"Contacts: {sum(r['outcome'] == 'contact' for r in rows)} of {len(rows)} runs at the 0.3 m "
+               f"pedestrian radius; {sum(bool(r.get('contact_r0188')) for r in rows)} at 0.188 m.")
+    return "\n".join(out)
+
+
 def footprint_corners_xy(
     x_m: float, y_m: float, yaw_deg: float,
     *, half_length_m: float = EGO_HALF_LENGTH_M, half_width_m: float = EGO_HALF_WIDTH_M,

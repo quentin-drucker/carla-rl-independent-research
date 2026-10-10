@@ -13,6 +13,7 @@ from passage import (  # noqa: E402
     corridor_segments,
     drivable_extent_m,
     passage_coordinate_to_offset_m,
+    predicted_lateral_at_arrival,
 )
 
 HW = 1.0   # ego half-width used in these tests
@@ -125,6 +126,37 @@ class PassageAndActionTests(unittest.TestCase):
     def test_corridor_is_empty_when_the_road_is_unknown(self):
         p = compute_passage(lambda lat: None)
         self.assertEqual(corridor_segments(p, (0.0, 0.0), (0.0, -1.0)), [])
+
+
+class PredictionTests(unittest.TestCase):
+    def test_stationary_pedestrian_stays_put(self):
+        self.assertEqual(predicted_lateral_at_arrival(-1.5, 0.0, 20.0, 20.0), -1.5)
+
+    def test_walking_toward_the_lane(self):
+        # 20 m at 20 m/s = 1.0 s; 1.5 m left of center walking right at 1.8 m/s.
+        self.assertAlmostEqual(predicted_lateral_at_arrival(-1.5, 1.8, 20.0, 20.0), 0.3)
+
+    def test_walking_away_from_the_lane(self):
+        self.assertAlmostEqual(predicted_lateral_at_arrival(-1.5, -1.8, 20.0, 20.0), -3.3)
+
+    def test_car_nearly_stopped_is_capped_not_divided(self):
+        self.assertAlmostEqual(predicted_lateral_at_arrival(0.0, 1.0, 20.0, 0.0), 8.0)
+        self.assertAlmostEqual(predicted_lateral_at_arrival(0.0, 1.0, 20.0, 0.01), 8.0)
+        self.assertAlmostEqual(predicted_lateral_at_arrival(0.0, 1.0, 20.0, 0.0, max_time_s=2.0), 2.0)
+
+    def test_at_or_past_the_line_uses_the_current_position(self):
+        self.assertEqual(predicted_lateral_at_arrival(0.4, 1.8, 0.0, 20.0), 0.4)
+        self.assertEqual(predicted_lateral_at_arrival(0.4, 1.8, -3.0, 20.0), 0.4)
+
+    def test_passage_opens_behind_a_crossing_pedestrian(self):
+        # Now: 2.5 m left of center, walking right. On arrival: 0.2 m right of center.
+        now = compute_passage(road(-5.25, 8.8), [Obstacle(-2.5, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        predicted = predicted_lateral_at_arrival(-2.5, 1.8, 30.0, 20.0)
+        at_arrival = compute_passage(road(-5.25, 8.8), [Obstacle(predicted, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        self.assertTrue(now.admits(0.0))          # the lane looks free right now ...
+        self.assertFalse(at_arrival.admits(0.0))  # ... but is blocked when the car gets there
+        self.assertFalse(now.admits(-2.5))
+        self.assertTrue(at_arrival.admits(-2.5))  # where the pedestrian was (behind them) is open
 
 
 if __name__ == "__main__":

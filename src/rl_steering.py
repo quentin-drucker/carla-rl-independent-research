@@ -249,12 +249,29 @@ def compute_steering_reward(
     if window_ended and not contact_this_tick and not went_off_road and min_clearance_m is not None:
         r_clearance = config.w_clearance * min(max(min_clearance_m, 0.0) / config.enough_clearance_m, 1.0)
 
-    r_comfort = -config.w_smooth_brake * abs(brake_cmd_this_tick - brake_cmd_prev_tick) * fixed_dt
-    if hazard_active:  # comfort before the hazard is not the policy's doing
-        r_comfort -= (config.w_jerk * abs(jerk_mps3) + config.w_lateral_accel * abs(lateral_accel_mps2)) * fixed_dt
+    r_comfort = 0.0
+    if hazard_active:  # before onset the cruise controller drives, not the policy
+        r_comfort = -(config.w_jerk * abs(jerk_mps3)
+                      + config.w_smooth_brake * abs(brake_cmd_this_tick - brake_cmd_prev_tick)
+                      + config.w_lateral_accel * abs(lateral_accel_mps2)) * fixed_dt
 
     r_safety = r_contact + r_off_road + r_clearance
     return r_safety + r_comfort, {
         "r_total": r_safety + r_comfort, "r_safety": r_safety, "r_comfort": r_comfort,
         "r_contact": r_contact, "r_off_road": r_off_road, "r_clearance": r_clearance,
     }
+
+
+# =============================================================================
+# Training helper
+# =============================================================================
+
+def policy_should_act(*, dist_travelled_m: float, encounter_distance_m: float, trigger_ttc_s: float,
+                      speed_mps: float, lead_s: float = 1.0) -> bool:
+    """False while the hazard is still more than lead_s seconds from starting.
+    The steering environment ignores the policy before onset, so training
+    fast-forwards those ticks instead of filling the replay buffer with
+    decisions that change nothing. Mirrors the env's trigger rule:
+    onset when dist_travelled >= encounter_distance - speed * trigger_ttc."""
+    trigger_at_m = encounter_distance_m - speed_mps * trigger_ttc_s
+    return dist_travelled_m >= trigger_at_m - speed_mps * lead_s

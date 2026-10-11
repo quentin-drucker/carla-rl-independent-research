@@ -19,6 +19,7 @@ from rl_steering import (  # noqa: E402
     compute_steering_reward,
     frame_coordinates_m,
     heading_error_rad,
+    policy_should_act,
     split_action,
 )
 
@@ -210,9 +211,11 @@ class RewardOrderingTests(unittest.TestCase):
         self.assertGreater(harsh_two_seconds, -SteeringRewardConfig().w_contact)
         self.assertLess(harsh_two_seconds, 0.0)
 
-    def test_ride_comfort_is_not_charged_before_the_hazard(self):
-        self.assertEqual(reward(jerk_mps3=300.0, lateral_accel_mps2=20.0, hazard_active=False)[0], 0.0)
-        self.assertLess(reward(brake_cmd_this_tick=1.0, hazard_active=False)[0], 0.0)  # its own brake changes are
+    def test_comfort_is_not_charged_before_the_hazard(self):
+        # Before onset the cruise controller drives, so nothing it does is the policy's fault.
+        self.assertEqual(reward(jerk_mps3=300.0, lateral_accel_mps2=20.0, brake_cmd_this_tick=1.0,
+                                hazard_active=False)[0], 0.0)
+        self.assertLess(reward(brake_cmd_this_tick=1.0)[0], 0.0)
 
     def test_config_refuses_weights_that_break_the_ordering(self):
         with self.assertRaises(ValueError):
@@ -222,6 +225,20 @@ class RewardOrderingTests(unittest.TestCase):
         self.assertAlmostEqual(
             reward(window_ended=True, min_clearance_m=0.5,
                    config=SteeringRewardConfig(enough_clearance_m=1.0))[1]["r_clearance"], 25.0)
+
+
+class TrainingHelperTests(unittest.TestCase):
+    def test_policy_takes_over_one_second_before_onset(self):
+        # 20 m/s, onset 0.8 s out: trigger at 160 - 16 = 144 m, hand-over 20 m earlier.
+        kw = dict(encounter_distance_m=160.0, trigger_ttc_s=0.8, speed_mps=20.0)
+        self.assertFalse(policy_should_act(dist_travelled_m=100.0, **kw))
+        self.assertFalse(policy_should_act(dist_travelled_m=123.9, **kw))
+        self.assertTrue(policy_should_act(dist_travelled_m=124.0, **kw))
+        self.assertTrue(policy_should_act(dist_travelled_m=150.0, **kw))  # already past onset
+
+    def test_a_stopped_car_is_handed_over_only_at_the_trigger_point(self):
+        self.assertFalse(policy_should_act(dist_travelled_m=159.0, encounter_distance_m=160.0,
+                                           trigger_ttc_s=1.0, speed_mps=0.0))
 
 
 if __name__ == "__main__":

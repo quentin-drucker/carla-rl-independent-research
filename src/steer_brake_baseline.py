@@ -43,6 +43,27 @@ MODES = (MODE_NO_INTERVENTION, MODE_BRAKE_ONLY, MODE_BRAKE_STEER, MODE_BRAKE_PAS
 from pedestrian_contact import EGO_HALF_LENGTH_M, EGO_HALF_WIDTH_M  # noqa: E402
 
 
+ENCOUNTER_DISTANCE_M = 160.0      # long enough to reach 45 mph before onset
+BRAKE_RAMP_UP_PER_S = 20.0        # "slam" end of ScenarioConfig's range: each
+                                  # strategy's physical best case, not comfort
+
+
+def baseline_scenario_config(mph: float, ttc: float, *, run_id: str = ""):
+    """The stationary-pedestrian scenario every Phase 2 controller is scored
+    on: test26's scripted baselines, the steering environment's parity gate,
+    and learned-policy evaluation (eval_policy_encounters --suite test26)."""
+    from scenario_config import ScenarioConfig
+
+    return ScenarioConfig(
+        walker_cross="stationary", walker_side="left", trigger_ttc_s=ttc,
+        target_mph=mph, encounter_distance_m=ENCOUNTER_DISTANCE_M,
+        braking_ramp_up_per_s=BRAKE_RAMP_UP_PER_S, brake_profile="step_constant",
+        weather_preset="ClearSunset", sun_altitude_deg=0,
+        sim_seconds=ENCOUNTER_DISTANCE_M / (mph * 0.44704) + 30.0,
+        run_id=run_id,
+    )
+
+
 def make_hazard_command_fn(mode: str, *, brake_target: float = 1.0):
     """Returns a run_scenario hazard_command_fn for a mode:
     (sim_time_s, triggered, trigger_time_s) -> (hazard_active, brake_target)."""

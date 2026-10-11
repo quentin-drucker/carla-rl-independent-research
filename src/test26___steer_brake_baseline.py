@@ -62,13 +62,15 @@ from fixed_rescore_protocol import eta_text
 from map_drivability import footprint_drivable
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from reactive_avoidance import compute_required_clearance_offset_m
-from scenario_config import ScenarioConfig
 from passage import Passage, corridor_segments
 from passage_carla import draw_corridor, passage_at_location
 from steer_brake_baseline import (
+    BRAKE_RAMP_UP_PER_S,
+    ENCOUNTER_DISTANCE_M,
     MODE_BRAKE_PASSAGE_EDGE,
     MODES,
     PassageEdgeOffset,
+    baseline_scenario_config,
     expand_runs,
     format_best_route_table,
     make_hazard_command_fn,
@@ -91,10 +93,7 @@ RUN_FAMILY = "steer_brake_baseline"
 RUNS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", RUN_FAMILY)
 
 # Predeclared scenario/controller parameters (recorded in every manifest).
-ENCOUNTER_DISTANCE_M = 160.0      # long enough to reach 45 mph before onset
 BRAKE_TARGET = 1.0                # both braking modes: the same full brake
-BRAKE_RAMP_UP_PER_S = 20.0        # "slam" end of ScenarioConfig's range: each
-                                  # strategy's physical best case, not comfort
 SWERVE_SIDE_SIGN = +1             # route-right (more room at this location, Week 3)
 SWERVE_MARGIN_M = 0.6             # test18's buffered clearance margin
 SWERVE_SHIFT_DURATION_S = 0.5     # test18's live-validated shift duration
@@ -187,14 +186,7 @@ def _corridor_plot(case_dir):
 
 
 def _run_one(*, mph, ttc, mode, passage_u, label, swerve_offset_m, case_dir, client, draw=False):
-    cfg = ScenarioConfig(
-        walker_cross="stationary", walker_side="left", trigger_ttc_s=ttc,
-        target_mph=mph, encounter_distance_m=ENCOUNTER_DISTANCE_M,
-        braking_ramp_up_per_s=BRAKE_RAMP_UP_PER_S, brake_profile="step_constant",
-        weather_preset="ClearSunset", sun_altitude_deg=0,
-        sim_seconds=ENCOUNTER_DISTANCE_M / (mph * 0.44704) + 30.0,
-        run_id=f"{mph:g}mph_ttc{ttc:g}_{label}",
-    )
+    cfg = baseline_scenario_config(mph, ttc, run_id=f"{mph:g}mph_ttc{ttc:g}_{label}")
     recorder = TrajectoryRecorder(dt_s=FIXED_DT)
     drivable_flags = []
     state = {"tick": 0, "map": None, "onset_marked": False, "seam_corrections": 0, "passage_frame": None}

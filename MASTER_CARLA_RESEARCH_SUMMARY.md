@@ -72,7 +72,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
 | **Which vehicle physics? (Week 4, 2026-10-01)** | **CARLA's default physics stays primary. Built-in Chrono is a NO-GO for the main experiment and a LIMITED-GO for separate robustness studies only:** it cannot hold a braked car still at low speed in CARLA 0.9.16's bridge. See [the Week 4 decision](#week-4-decision-carlas-built-in-chrono-physics-is-not-the-research-backend-added-2026-10-01). |
-| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". |
+| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". **2026-10-11: first learned steering policies (50k steps, preliminary) are safe in 10 of 12 grid cases, hitting only at 0.4 s; lock_at_onset matches the best scripted route** ("Week 5 (Phase 2, step 5)"). |
 
 ## One-sentence state of the research
 
@@ -2415,6 +2415,42 @@ difference between the two commitment versions), the off-road penalty, and left 
 **Evidence status:** **CONFIRMED** for the stationary-pedestrian scenario. Evidence:
 `src/runs/rl_encounter_eval/20261010_202653...` and `20261010_202918...` (each with
 `parity.json`), and `src/_scratch/regression_4b/` for gate 2.
+
+## Week 5 (Phase 2, step 5): first steering policies trained (added 2026-10-11)
+
+**What ran:** `src/train_steering.py` (SAC with train_sac v3's settings), 50k steps of each
+commitment version (about 128 episodes each, 23 min each), stationary pedestrian, 30-50
+mph, onset TTC 0.3-1.5 s, seed 0 for both. Each final policy was scored with
+`eval_policy_encounters.py --suite test26` on the 35/45 mph x TTC 0.4-1.4 s grid
+(encounter_metrics, 0.3 m contact radius, one episode per case). Default physics.
+
+**Learning:** in scenarios that can be avoided (TTC >= 0.5 s) the per-episode reward rose
+from about -10 (lock) / -26 (per_tick) in the first quarter to +45 in the last, and
+**neither version made contact in an avoidable scenario during the second half of
+training**. Every TTC < 0.5 s episode hit, as step 1 predicts. The raw rolling mean
+fell, because by chance the last quarter drew more of those unavoidable cases; it is not
+a usable learning signal on its own.
+
+**Evaluation against step 1's scripted table:**
+- **Both versions: 10 of 12 safe. The only contacts are the two TTC 0.4 s cases, where
+  every scripted option also hits. brake_only hits in 7 of these 12 cases.** The plan
+  gate (match brake_only where braking alone works) passes for both, with more clearance
+  than brake_only. No off-road ticks; every swerve went right.
+- **lock_at_onset reproduces the best scripted route at short warning** (locked u =
+  0.99-1.00; clearances 1.35/3.60/1.68/4.16 m vs. scripted 1.35/3.61/1.68/4.19 m; at
+  0.4 s the same least-bad impact speed, 13.5/17.1 m/s). With more warning it picks a
+  smaller u (0.48-0.86) and keeps 2-6 m of clearance, since the reward stops paying
+  above 0.5 m.
+- **per_tick is safe in the same cases but with 1.1-2.3 m clearance and a twitchy aim:**
+  its requested offset reverses 10-31 times per episode (up to 345). It has lower peak
+  lateral acceleration.
+
+**Evidence status:** **PRELIMINARY.** One seed, 50k steps, one evaluation episode per
+case, stationary pedestrian only. The lock vs. per-tick gap may close with more
+training. Evidence: `src/runs/steering_train/20261011_185208...` and `20261011_191733...`,
+`src/runs/rl_encounter_eval/20261011_191544...` (lock) and `20261011_194106...`
+(per_tick). Lock's peak lateral acceleration (18-26 m/s^2) exceeds real-tire limits,
+which is the CARLA default physics caveat.
 
 ---
 

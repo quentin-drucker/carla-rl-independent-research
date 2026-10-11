@@ -3128,6 +3128,105 @@ matters, plus some unavoidable and some easy cases on each side.
   `--draw`) already bends toward whatever sideways target is commanded, so it will draw
   the return once a controller commands one; that has not been checked live in this view.
 
+### 9. How the steering policy learns: the reward, and why it is built this way (2026-10-10)
+
+**Status: a first version to try out.** The structure below was proposed on 2026-10-10 and
+accepted by Quentin as a starting point. **Every number in it, including the 0.5 m
+"enough clearance" distance, is a first guess to test, not a measured or justified
+value.** Nothing here has been confirmed by Prof. Izmirli yet. All of it lives in one
+place, `SteeringRewardConfig` in `src/rl_steering.py`, so a number can be changed without
+rewriting anything.
+
+**What the policy does.** It is a Soft Actor-Critic (SAC) policy, the same learning
+algorithm as last semester. Fifty times a second it reads 14 numbers describing the
+situation and outputs two: how hard to brake (0 to 1) and where across the passage to aim
+(`u`, 0 = stay in lane, 1 = the far right edge of the safe gap). It learns by driving the
+same kind of encounter thousands of times and being scored after every tick; over time it
+keeps the choices that led to higher scores. The score is the **reward**, so the reward
+is the definition of "good driving" that the policy ends up with.
+
+**What the policy sees (14 numbers).**
+- Last semester's 6: speed, how close the obstacle is, how urgent the time-to-collision
+  is, its own last brake command, whether the hazard is active, and whether it can still
+  stop in time.
+- 8 new ones for steering: the left and right edges of the passage, where the pedestrian
+  will be when the car arrives (computed by hand, section "Week 5 ... step 3"), the
+  pedestrian's sideways speed, the distance to the pedestrian's line, the car's own
+  sideways position, how far its heading is off the road's direction, and the `u` it
+  last chose.
+- The prediction and the passage are computed for the policy rather than learned by it.
+  This follows Prof. Izmirli's concern (Oct 6) that the task might be too hard to learn:
+  the policy only has to learn *where to aim and how hard to brake*.
+
+**What "safe" means, as an ordered list.** Quentin's working definition is that safety
+has two parts: whether there was a collision (and driving safety generally), and how
+rough the ride was for the passenger. The reward turns that into five ranked goals. A
+lower goal only matters when the ones above it are equal:
+
+1. **Do not touch the pedestrian.**
+2. **If a hit cannot be avoided, hit as slowly as possible.**
+3. **Keep the whole car on the road.**
+4. **Leave enough clearance**, counted only up to a set "enough" distance.
+5. **Ride comfort:** less jerk, fewer sudden brake changes, less sideways acceleration.
+
+Goals 1-4 are reported as "safety" and goal 5 as "comfort", in separate columns, so
+comfort can never hide a collision.
+
+**How the ranking becomes numbers.** The policy only understands a score, so each goal
+gets a penalty or bonus whose *size* reflects its rank:
+
+| Goal | Score | Why this size |
+|---|---|---|
+| 1. Contact | -300, once | Same as last semester's collision penalty. It must dwarf everything else. |
+| 2. Impact speed | a further -15 per m/s at the moment of contact | A 20 m/s hit costs 600, a 5 m/s hit 375. This is how "least bad" is taught in cases with no safe route (below 0.5 s of warning, measured in step 1). |
+| 3. Off the road | -25 per second while any corner of the car is off the driving lanes | A full 8 s off the road costs 200, deliberately less than the lightest contact: leaving the road is bad, but better than hitting a person. |
+| 4. Clearance | up to +50, once, at the end of an 8 s window with no contact | Paid in proportion to the smallest gap reached, **capped at the "enough" distance**, and only if the car never left the road. |
+| 5. Comfort | small penalties every tick after the hazard starts | Jerk and brake-change terms keep last semester's weights; a sideways-acceleration term is new. A harsh 2-second maneuver costs a few points in total. |
+
+**Why clearance is capped at "enough" (the 0.5 m).**
+- Step 1 measured that in this scene a bigger swerve costs nothing: more swerve almost
+  always means more clearance, and CARLA lets the car do it without leaving the road or
+  spinning. A reward that pays for *more* clearance would therefore teach "always swerve
+  as far as possible", which is not safe driving in any realistic sense.
+- With a cap, clearance beyond "enough" earns nothing extra, so the comfort terms decide
+  between maneuvers that are all safe, and the gentlest swerve that clears wins.
+- **0.5 m is an arbitrary starting value chosen to try the idea out.** The only evidence
+  behind it is that the narrow escapes in step 1 were 0.1-0.5 m, so 0.5 m separates
+  "barely made it" from "clearly made it". It is not taken from a standard or a paper.
+  It should be revisited after the first training runs and raised with Prof. Izmirli.
+- What changing it would do: a larger value (say 1.0 m) pushes the policy toward wider
+  swerves; a smaller value accepts closer passes.
+
+**What was removed from last semester's reward, and why.**
+- The bonus for stopping farther from the pedestrian: it rewarded ever more distance,
+  the same "more is always better" problem.
+- The penalty for a low time-to-collision and the bonus for braking hard when it is low:
+  both assume braking is the only answer. With steering, a close pass at speed can be
+  correct.
+- The bonus for a full stop and the cruise bonus: episodes no longer end at a stop.
+
+**Other choices in the learning setup.**
+- **Every episode runs the full 8 s after the hazard starts unless there is contact.**
+  Last semester's episodes ended at the first full stop, which hid cars that stopped and
+  then crept forward into the pedestrian.
+- **Contact is judged by geometry** (the car's outline against the pedestrian), not by
+  CARLA's collision sensor, which missed 54 of 58 contacts in step 1.
+- **The hazard starts by script**, at the same moment for every controller (decision 2).
+- **Warning times in training: 0.3-1.5 s** (decision 7), which includes cases with no
+  safe route, so goal 2 is exercised.
+- **No penalty for changing the steering choice.** Whether the policy wavers is measured
+  instead (the commitment metric), and the two versions `lock_at_onset` and `per_tick`
+  (decision 6) are compared on it.
+
+**Known weaknesses of this first version.**
+- The ranking is by size of number, not absolute. A very harsh maneuver's comfort cost
+  can outweigh a few centimeters of clearance.
+- The reward is sparse: it speaks loudly only at contact and at the end of the window.
+  If the first short training runs do not learn, adding a guiding term back is the first
+  thing to try.
+- The comfort numbers inherit known problems: jerk is measured imperfectly, and CARLA
+  permits 2-2.6 g of sideways acceleration that real tires cannot give.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

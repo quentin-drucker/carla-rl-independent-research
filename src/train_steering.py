@@ -179,7 +179,7 @@ def _latest_checkpoint(run_dir):
     found = []
     for path in glob.glob(os.path.join(glob.escape(run_dir), "checkpoints", "steering_*_steps.zip")):
         m = re.search(r"steering_(\d+)_steps\.zip$", path)
-        buffer = os.path.join(run_dir, "checkpoints", f"replay_buffer_{m.group(1)}_steps.pkl")
+        buffer = os.path.join(run_dir, "checkpoints", f"steering_replay_buffer_{m.group(1)}_steps.pkl")
         if m and os.path.isfile(buffer):
             found.append((int(m.group(1)), path, buffer))
     if not found:
@@ -217,6 +217,10 @@ def main(argv=None):
         with open(os.path.join(run_dir, "manifest.json"), "x") as f:
             json.dump(manifest, f, indent=2)
     commit, total, seed = manifest["steer_commit"], manifest["total_steps"], manifest["seed"]
+    if args.resume and _latest_checkpoint(run_dir) is None:
+        raise SystemExit(f"--resume: no checkpoint with a replay buffer in {run_dir}; refusing to start over there")
+    if os.path.isfile(os.path.join(run_dir, "final_model.zip")):
+        raise SystemExit(f"{run_dir} already has final_model.zip; nothing to do")
     log_path = os.path.join(run_dir, "progress.log")
     start_time = time.time()
 

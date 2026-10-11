@@ -145,12 +145,26 @@ def compute_passage(
     max_gap_m: float = DEFAULT_MAX_GAP_M,
 ) -> Passage:
     road_left, road_right = drivable_extent_m(is_drivable, scan_max_m=scan_max_m, step_m=step_m, max_gap_m=max_gap_m)
-    if road_left is None:
+    return passage_from_extent(road_left, road_right, obstacles, ego_half_width_m=ego_half_width_m, margin_m=margin_m)
+
+
+def passage_from_extent(
+    road_left_m: Optional[float],
+    road_right_m: Optional[float],
+    obstacles: Sequence[Obstacle] = (),
+    *,
+    ego_half_width_m: float = EGO_HALF_WIDTH_M,
+    margin_m: float = DEFAULT_SIDE_MARGIN_M,
+) -> Passage:
+    """The passage for an already-known road extent. The road at a given line
+    does not change during a run, so a caller can scan it once
+    (drivable_extent_m) and rebuild the passage every tick as obstacles move."""
+    if road_left_m is None or road_right_m is None:
         return Passage(None, None, (), None, None)
-    intervals = admissible_center_intervals(road_left, road_right, obstacles,
+    intervals = admissible_center_intervals(road_left_m, road_right_m, obstacles,
                                             ego_half_width_m=ego_half_width_m, margin_m=margin_m)
     return Passage(
-        road_left_m=road_left, road_right_m=road_right, intervals=tuple(intervals),
+        road_left_m=road_left_m, road_right_m=road_right_m, intervals=tuple(intervals),
         left_edge_m=intervals[0][0] if intervals else None,
         right_edge_m=intervals[-1][1] if intervals else None,
     )

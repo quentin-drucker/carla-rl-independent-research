@@ -13,6 +13,7 @@ from passage import (  # noqa: E402
     corridor_segments,
     drivable_extent_m,
     passage_coordinate_to_offset_m,
+    passage_from_extent,
     predicted_lateral_at_arrival,
 )
 
@@ -105,6 +106,13 @@ class PassageAndActionTests(unittest.TestCase):
         p = compute_passage(road(-1.0, 1.0), ego_half_width_m=HW, margin_m=MG)
         self.assertTrue(p.empty)
         self.assertEqual(passage_coordinate_to_offset_m(1.0, p), 0.0)
+
+    def test_passage_from_a_known_extent_matches_a_fresh_scan(self):
+        scanned = compute_passage(road(-5.25, 3.0), [Obstacle(0.4, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        rebuilt = passage_from_extent(scanned.road_left_m, scanned.road_right_m, [Obstacle(0.4, 0.3)],
+                                      ego_half_width_m=HW, margin_m=MG)
+        self.assertEqual(rebuilt, scanned)
+        self.assertTrue(passage_from_extent(None, None).empty)
 
     def test_bad_bounds_rejected(self):
         with self.assertRaises(ValueError):

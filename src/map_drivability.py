@@ -23,6 +23,8 @@ drivable -- exactly the failure mode this check exists to catch.
 
 import carla  # pyright: reportMissingImports=false
 
+from steer_brake_baseline import footprint_corners_xy
+
 
 def classify_point_drivability(carla_map, location, lane_type=carla.LaneType.Driving):
     """Classify one world point against the map's drivable-lane geometry.
@@ -146,3 +148,18 @@ def classify_point_drivability_seam_tolerant(
         if a_status == "drivable" and b_status == "drivable":
             return "drivable", a_wp, True
     return "non_drivable", None, False
+
+
+def footprint_drivable(carla_map, x, y, yaw_deg, z):
+    """(flag, seam_corrections) for the ego's footprint at a pose: flag is True
+    if all four corners are on a Driving lane, False if any is not, None if
+    any query failed. Used for scoring (test26) and the steering reward."""
+    statuses, corrections = [], 0
+    for cx, cy in footprint_corners_xy(x, y, yaw_deg):
+        status, _, corrected = classify_point_drivability_seam_tolerant(
+            carla_map, carla.Location(x=cx, y=cy, z=z))
+        statuses.append(status)
+        corrections += int(corrected)
+    if "non_drivable" in statuses:
+        return False, corrections
+    return (None if "unknown" in statuses else True), corrections

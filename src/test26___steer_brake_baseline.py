@@ -59,7 +59,7 @@ import carla
 
 from encounter_metrics import EncounterProtocol, compute_encounter_metrics, summarize_for_console
 from fixed_rescore_protocol import eta_text
-from map_drivability import classify_point_drivability_seam_tolerant
+from map_drivability import footprint_drivable
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from reactive_avoidance import compute_required_clearance_offset_m
 from scenario_config import ScenarioConfig
@@ -70,7 +70,6 @@ from steer_brake_baseline import (
     MODES,
     PassageEdgeOffset,
     expand_runs,
-    footprint_corners_xy,
     format_best_route_table,
     make_hazard_command_fn,
     max_abs_yaw_change_deg,
@@ -153,20 +152,6 @@ def _load_rows(sweep_dir):
     return sorted(rows, key=lambda r: (r["mph"], r["onset_ttc_s"], MODES.index(r["mode"]), r["passage_u"] or 0.0))
 
 
-def _footprint_drivable(carla_map, x, y, yaw_deg, z):
-    """(flag, seam_corrections): flag is True if all four footprint corners
-    are on a Driving lane, False if any is not, None if any query failed."""
-    statuses, corrections = [], 0
-    for cx, cy in footprint_corners_xy(x, y, yaw_deg):
-        status, _, corrected = classify_point_drivability_seam_tolerant(
-            carla_map, carla.Location(x=cx, y=cy, z=z))
-        statuses.append(status)
-        corrections += int(corrected)
-    if "non_drivable" in statuses:
-        return False, corrections
-    return (None if "unknown" in statuses else True), corrections
-
-
 def _corridor_plot(case_dir):
     """Still image for one scenario: each option's path from just before onset,
     drawn over the passage. Reads saved traces only (no CARLA)."""
@@ -232,7 +217,7 @@ def _run_one(*, mph, ttc, mode, passage_u, label, swerve_offset_m, case_dir, cli
         recorder.record(tick_index=index, sim_time_s=sim_time_s, telemetry=telemetry, event_marker=marker)
         if state["map"] is None:
             state["map"] = client.get_world().get_map()
-        flag, corrections = _footprint_drivable(state["map"], telemetry["pos_x_m"], telemetry["pos_y_m"],
+        flag, corrections = footprint_drivable(state["map"], telemetry["pos_x_m"], telemetry["pos_y_m"],
                                                 telemetry["yaw_deg"], telemetry.get("pos_z_m") or 0.0)
         drivable_flags.append(flag)
         state["seam_corrections"] += corrections
@@ -472,7 +457,7 @@ def _rescore(sweep_dir, client):
             mode = manifest["mode"]
             flags, corrections = [], 0
             for t in ticks:
-                flag, c = _footprint_drivable(carla_map, t.pos_x_m, t.pos_y_m, t.yaw_deg, t.pos_z_m)
+                flag, c = footprint_drivable(carla_map, t.pos_x_m, t.pos_y_m, t.yaw_deg, t.pos_z_m)
                 flags.append(flag)
                 corrections += c
             m = compute_encounter_metrics(ticks, onset_time_s=result["trigger_time_s"],

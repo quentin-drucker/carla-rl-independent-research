@@ -2375,6 +2375,49 @@ right swerves, full brake, held aim, one deterministic run per case.
 
 ---
 
+## Week 5 (Phase 2, step 4): the steering RL environment, verified before any training (added 2026-10-10)
+
+**What was built** (branch `experiment/steering-rl-env`):
+- `src/rl_steering.py` (pure, tested): the action split, the route lock, the 14-value
+  observation and the ordered reward. The design and its reasons are in "Phase 2 design
+  decisions" 6 and 9.
+- `CarlaAEBEnv(steer_commit="per_tick" | "lock_at_onset")`: an opt-in steering mode.
+  Leaving `steer_commit` out gives last semester's braking-only environment.
+- `eval_policy_encounters.py` gained the test26 scenario grid (`--suite test26`), the
+  steering mode (`--steer-commit`), a constant action in place of a model (`--fixed-u`)
+  and a comparison with the scripted runs (`--parity-with`). The same tool will score
+  the learned policies.
+
+**The three gates, all passed:**
+
+| Gate | Check | Result |
+|---|---|---|
+| 1 | Every pure piece tested offline | 24 tests in `tests/test_rl_steering.py`; suite 436/436 |
+| 2 | The old braking-only mode is unchanged | sac_v3_1600k through the default environment, two episodes of 374 ticks: **identical tick for tick** before and after on pose, control, action, reward, termination and observation |
+| 3 | Parity: a fixed "full brake, constant `u`" action through the new environment reproduces the scripted test26 run | **32 of 32 cases match** (below) |
+
+**Gate 3 in detail.** 16 cases (35 and 45 mph; onset TTC 0.6 and 1.0 s; `u` = 0, 0.25,
+0.75, 1.0), each run through both commitment versions and scored with
+`encounter_metrics`, against sweep `20261010_104704`. `u` = 0 is compared with
+`brake_only`.
+- Every outcome is the same: 5 hits, 6 passes and 5 stops per version.
+- Hits: the same impact speed within 0.001 m/s and the same impact time to the tick.
+- Passes and stops: the same minimum clearance within 5 mm (most to the millimeter).
+- `lock_at_onset` and `per_tick` give identical results, as they must for a constant aim
+  and a standing pedestrian.
+
+**What this does and does not show.** The environment drives the car exactly as the
+scripted baseline does when given the same commands, so a learned policy's results can be
+compared with the step 1 table. It does not test anything about learning, and three
+things have not run live at all: a walking pedestrian (so the prediction, and any real
+difference between the two commitment versions), the off-road penalty, and left swerves.
+
+**Evidence status:** **CONFIRMED** for the stationary-pedestrian scenario. Evidence:
+`src/runs/rl_encounter_eval/20261010_202653...` and `20261010_202918...` (each with
+`parity.json`), and `src/_scratch/regression_4b/` for gate 2.
+
+---
+
 # Tentative and Inconclusive Findings
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established

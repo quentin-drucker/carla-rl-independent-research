@@ -16,6 +16,7 @@ from steer_brake_baseline import (  # noqa: E402
     mode_uses_steering,
     MODE_BRAKE_PASSAGE_EDGE,
     PassageEdgeOffset,
+    baseline_scenario_config,
     best_option,
     expand_runs,
     format_best_route_table,
@@ -119,6 +120,13 @@ class PassageSweepTests(unittest.TestCase):
             (MODE_BRAKE_ONLY, None, "brake_only"),
             (MODE_BRAKE_PASSAGE_EDGE, 0.25, "brake_passage_edge_u0.25"),
             (MODE_BRAKE_PASSAGE_EDGE, 1.0, "brake_passage_edge_u1")])
+
+    def test_baseline_scenario_is_the_test26_stationary_pedestrian(self):
+        cfg = baseline_scenario_config(45.0, 0.8, run_id="x")
+        self.assertEqual((cfg.walker_cross, cfg.trigger_ttc_s, cfg.target_mph, cfg.run_id), ("stationary", 0.8, 45.0, "x"))
+        self.assertEqual((cfg.encounter_distance_m, cfg.braking_ramp_up_per_s, cfg.brake_profile),
+                         (160.0, 20.0, "step_constant"))
+        self.assertAlmostEqual(cfg.sim_seconds, 160.0 / (45.0 * 0.44704) + 30.0)
 
     def test_yaw_change_wraps_across_180(self):
         self.assertAlmostEqual(max_abs_yaw_change_deg([-179.0, 179.0, 170.0]), 11.0)

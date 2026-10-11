@@ -22,6 +22,7 @@ from rl_eval_protocol import (  # noqa: E402
     legacy_outcome_label,
     legacy_truncated,
     load_sweep_configs,
+    parity_differences,
     resolve_model_path,
     summary_row,
     trace_telemetry,
@@ -195,6 +196,37 @@ class RunnerArgsTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             _parse_args(["--suite", "random"])
         self.assertEqual(_parse_args(["--model", "m", "--suite", "random"]).collision_signal, "geometric")
+
+
+class ParityTests(unittest.TestCase):
+    CLEAR = {"outcome": "stopped_clear", "speed_at_onset_mps": 19.94, "min_clearance_m": 3.263,
+             "max_abs_route_lateral_m": 5.260, "contact_speed_mps": None, "first_contact_time_s": None}
+    HIT = {"outcome": "contact", "speed_at_onset_mps": 15.59, "contact_speed_mps": 10.60,
+           "first_contact_time_s": 0.70, "min_clearance_m": -0.031, "max_abs_route_lateral_m": 1.73}
+
+    def test_identical_runs_have_no_differences(self):
+        self.assertEqual(parity_differences(dict(self.CLEAR), self.CLEAR), [])
+        self.assertEqual(parity_differences(dict(self.HIT), self.HIT), [])
+
+    def test_a_few_centimetres_of_clearance_is_still_parity_but_more_is_not(self):
+        self.assertEqual(parity_differences({**self.CLEAR, "min_clearance_m": 3.283}, self.CLEAR), [])
+        diffs = parity_differences({**self.CLEAR, "min_clearance_m": 3.40}, self.CLEAR)
+        self.assertEqual(len(diffs), 1)
+        self.assertIn("min_clearance_m", diffs[0])
+
+    def test_a_different_outcome_is_reported(self):
+        diffs = parity_differences({**self.CLEAR, "outcome": "passed_clear"}, self.CLEAR)
+        self.assertIn("outcome passed_clear vs stopped_clear", diffs)
+
+    def test_contacts_compare_the_impact_and_ignore_what_follows(self):
+        # After first contact nothing is repeatable: the env stops there, test26 runs on.
+        after = {**self.HIT, "min_clearance_m": -0.008, "max_abs_route_lateral_m": 1.26}
+        self.assertEqual(parity_differences(after, self.HIT), [])
+        self.assertTrue(parity_differences({**self.HIT, "contact_speed_mps": 9.0}, self.HIT))
+        self.assertTrue(parity_differences({**self.HIT, "first_contact_time_s": 0.80}, self.HIT))
+
+    def test_a_missing_value_is_a_difference_not_a_pass(self):
+        self.assertTrue(parity_differences({**self.CLEAR, "min_clearance_m": None}, self.CLEAR))
 
 
 if __name__ == "__main__":

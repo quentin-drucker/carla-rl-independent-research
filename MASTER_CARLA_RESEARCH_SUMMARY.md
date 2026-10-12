@@ -3293,6 +3293,16 @@ gets a penalty or bonus whose *size* reflects its rank:
   It should be revisited after the first training runs and raised with Prof. Izmirli.
 - What changing it would do: a larger value (say 1.0 m) pushes the policy toward wider
   swerves; a smaller value accepts closer passes.
+- **Changed to 1.0 m (Quentin, 2026-10-12)**, after training showed the cap shaping
+  behavior (passes shrinking toward 0.5 m). Literature check: emergency-avoidance work
+  and test protocols judge success by contact or impact severity and set no clearance
+  margin; evasive-path engineering pads obstacles by a small buffer (about 0-0.5 m);
+  frameworks such as RSS leave the minimum lateral distance to the designer. Normal
+  passing is larger: drivers pass pedestrians at about 1.5 m (acceptable about
+  0.9-2.2 m in one simulator study), and cyclist-passing laws are about 0.9-1.5 m.
+  1.0 m is the low end of human passing distances, and is reachable in every avoidable
+  case from 0.6 s of warning. It is a design choice, not a measured requirement. All
+  results before 2026-10-12 used 0.5 m.
 
 **What was removed from last semester's reward, and why.**
 - The bonus for stopping farther from the pedestrian: it rewarded ever more distance,

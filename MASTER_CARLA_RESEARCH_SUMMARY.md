@@ -72,7 +72,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
 | **Which vehicle physics? (Week 4, 2026-10-01)** | **CARLA's default physics stays primary. Built-in Chrono is a NO-GO for the main experiment and a LIMITED-GO for separate robustness studies only:** it cannot hold a braked car still at low speed in CARLA 0.9.16's bridge. See [the Week 4 decision](#week-4-decision-carlas-built-in-chrono-physics-is-not-the-research-backend-added-2026-10-01). |
-| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". **2026-10-11: first learned steering policies (50k steps, preliminary) are safe in 10 of 12 grid cases, hitting only at 0.4 s; lock_at_onset matches the best scripted route** ("Week 5 (Phase 2, step 5)"). **2026-10-12, 4 seeds: safety identical for both versions; per_tick learns a dithering steering command the reward does not see.** |
+| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". **2026-10-11: first learned steering policies (50k steps, preliminary) are safe in 10 of 12 grid cases, hitting only at 0.4 s; lock_at_onset matches the best scripted route** ("Week 5 (Phase 2, step 5)"). **2026-10-12, 4 seeds: safety identical for both versions. per_tick re-aims 2-5x as often as lock while moving (most of the "dithering" first reported was after the car had stopped). Retrain at 1.0 m clearance with an aim-change penalty: safety unchanged.** |
 
 ## One-sentence state of the research
 
@@ -2469,6 +2469,34 @@ crash):
   the jerk and lateral-acceleration terms** (yaw-rate wiggles are about the same as
   lock's). As trained, per_tick is not a usable controller. A fair comparison needs a
   steering-change penalty.
+  **Corrected 2026-10-12 (afternoon): 67-90% of those reversals happen after the car has
+  stopped** (it is at rest about 2 s after onset; the window runs 8 s), so most of this
+  was a stopped car turning its wheels to no effect, which is also why the yaw rate did
+  not show it. While the car is moving, per_tick reverses its steering 22-66 times
+  against lock's 9-14: a real but much smaller difference. "Not a usable controller"
+  was too strong.
+
+**Retrain, 2026-10-12: enough clearance 1.0 m and an aim-change penalty (0.07 per unit of
+u change), seeds 1-3 x both versions, 150k steps** (commit `66efc8f`; runs
+`src/runs/steering_train/20261012_081049...` to `20261012_143607...`; evaluation folders
+named in `steering_train/eval_<mode>_s<seed>_1m_<50k|150k>.log`):
+- **Safety unchanged: all 12 evaluations are 10 of 12 safe, contact only at TTC 0.4 s.**
+- **The 1.0 m target changed little that can be measured on the test grid.** Passes
+  closer than 1.0 m were already rare (1 of 30 avoided cases for lock, 0 of 30 for
+  per_tick) and are the same after. Mean clearance at 150k rose in 5 of 6 seed pairs
+  (lock 2.97 -> 3.37 m, per_tick 2.56 -> 3.21 m) and the trimming with longer training
+  no longer appears, but with 3 seeds and a 2.3-4.1 m spread between seeds this is
+  suggestive only. The earlier reading that the 0.5 m cap was "binding" was overstated:
+  clearances were 2-4 m. Peak sideways acceleration is unchanged (25-27 m/s^2).
+- **The penalty reduced per_tick's re-aiming but did not remove it.** Steering reversals
+  while moving (median per episode, seeds 1/2/3): 41/66/22 -> 30/24/20 (lock: 9-14).
+  After the stop: 290/51/290 -> 3/2/280.
+- Training was less stable for lock at 1.0 m in two of three seeds (11 and 9 hits in
+  avoidable scenarios in the second half of training, all with a sampled u of 0.18 or
+  less, against 1-3 under 0.5 m). The final deterministic policies are safe in those
+  cases. Cause not established.
+- **Evidence status: PRELIMINARY** (3 seeds, 12 test cases with one episode each,
+  stationary pedestrian).
 
 ---
 
@@ -3293,8 +3321,9 @@ gets a penalty or bonus whose *size* reflects its rank:
   It should be revisited after the first training runs and raised with Prof. Izmirli.
 - What changing it would do: a larger value (say 1.0 m) pushes the policy toward wider
   swerves; a smaller value accepts closer passes.
-- **Changed to 1.0 m (Quentin, 2026-10-12)**, after training showed the cap shaping
-  behavior (passes shrinking toward 0.5 m). Literature check: emergency-avoidance work
+- **Changed to 1.0 m (Quentin, 2026-10-12)**, after longer training showed clearances
+  shrinking (though still 2-4 m on average, so the 0.5 m cap was not yet binding; the
+  retrain later showed the change made little measurable difference). Literature check: emergency-avoidance work
   and test protocols judge success by contact or impact severity and set no clearance
   margin; evasive-path engineering pads obstacles by a small buffer (about 0-0.5 m);
   frameworks such as RSS leave the minimum lateral distance to the designer. Normal

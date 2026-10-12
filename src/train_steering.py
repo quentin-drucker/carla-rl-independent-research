@@ -34,6 +34,7 @@ Evidence (git-ignored):
 
 import argparse
 import csv
+import dataclasses
 import datetime
 import glob
 import json
@@ -48,7 +49,7 @@ import gymnasium
 import numpy as np
 
 from physics_backend import BACKEND_DEFAULT, create_run_dir
-from rl_steering import STEER_COMMIT_MODES, policy_should_act
+from rl_steering import STEER_COMMIT_MODES, SteeringRewardConfig, policy_should_act
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNS_ROOT = os.path.join(SRC_DIR, "runs", "steering_train")
@@ -211,7 +212,7 @@ def main(argv=None):
             "checkpoint_every": args.checkpoint_every, "mph_range": MPH_RANGE, "ttc_range_s": TTC_RANGE_S,
             "scenario": "steer_brake_baseline.baseline_scenario_config (stationary pedestrian, Town04)",
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
-            "reward": "rl_steering.SteeringRewardConfig defaults (first-guess values, MASTER decision 9)",
+            "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
         }
         with open(os.path.join(run_dir, "manifest.json"), "x") as f:

@@ -598,6 +598,7 @@ class CarlaAEBEnv(gymnasium.Env):
         self._commitment = SteeringCommitment(self._steer_commit, u_min=self._u_min, u_max=self._u_max)
         self._min_clearance_m = None
         self._went_off_road = False
+        self._prev_u_applied = 0.0
 
     def _steering_measurements(self, ego_speed_mps):
         """(passage, observation inputs) for this tick, all in the passage frame
@@ -647,9 +648,11 @@ class CarlaAEBEnv(gymnasium.Env):
             window_ended=window_ended, min_clearance_m=self._min_clearance_m, went_off_road=self._went_off_road,
             jerk_mps3=self._jerk, brake_cmd_this_tick=brake_cmd_now, brake_cmd_prev_tick=self._prev_brake_cmd,
             lateral_accel_mps2=lateral_accel, hazard_active=self._triggered, fixed_dt=FIXED_DT,
+            u_this_tick=self._commitment.u_applied, u_prev_tick=self._prev_u_applied,
             config=self._steering_reward,
         )
         self._prev_brake_cmd = brake_cmd_now
+        self._prev_u_applied = self._commitment.u_applied
 
         terminated = contact
         truncated = window_ended or (self._tick >= self._total_ticks)

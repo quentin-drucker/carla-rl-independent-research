@@ -207,13 +207,20 @@ class SteeringRewardConfig:
     # One-time bonus at the end of a contact-free window, scaled by
     # min clearance / enough_clearance_m and capped at 1. Only paid if the car
     # never left the road, so road-keeping outranks clearance.
-    enough_clearance_m: float = 0.5
+    enough_clearance_m: float = 1.0
+    # Quentin, 2026-10-12 (was 0.5 m): about the US 3-ft (0.91 m) minimum for
+    # passing a cyclist; MASTER "Phase 2 design decisions" 9.
     w_jerk: float = W_JERK
     w_smooth_brake: float = W_SMOOTH_ACTION
     # The two comfort terms last semester's reward already had, same weights.
     w_lateral_accel: float = 0.1
     # Per m/s^2 of lateral acceleration per second, after onset: makes a
     # gentler swerve preferable when two swerves are equally safe.
+    w_aim_change: float = 0.07
+    # Per unit change of the applied u from one tick to the next, after onset.
+    # One full re-aim costs 0.07; flipping every tick for a whole window ~28,
+    # still below the clearance bonus. Without it per_tick learned to dither
+    # (the car's dynamics hide the wheel buzz from the other comfort terms).
     window_s: float = 8.0
     # The scoring window (encounter_metrics); used only to check the ordering.
 
@@ -223,6 +230,8 @@ class SteeringRewardConfig:
         if self.w_contact <= self.w_off_road_per_s * self.window_s + self.w_clearance:
             raise ValueError("the lightest contact must cost more than a whole window off the road "
                              "plus the lost clearance bonus")
+        if self.w_aim_change * self.window_s / 0.02 >= self.w_clearance:  # 50 Hz ticks, full swing every tick
+            raise ValueError("re-aiming every tick for a whole window must cost less than the clearance bonus")
 
 
 def compute_steering_reward(
@@ -238,6 +247,8 @@ def compute_steering_reward(
     brake_cmd_prev_tick: float,
     lateral_accel_mps2: float,
     hazard_active: bool,
+    u_this_tick: float = 0.0,      # applied u (constant once locked, so lock_at_onset pays only its one choice)
+    u_prev_tick: float = 0.0,
     fixed_dt: float = 0.02,
     config: SteeringRewardConfig = SteeringRewardConfig(),
 ) -> Tuple[float, dict]:
@@ -254,6 +265,7 @@ def compute_steering_reward(
         r_comfort = -(config.w_jerk * abs(jerk_mps3)
                       + config.w_smooth_brake * abs(brake_cmd_this_tick - brake_cmd_prev_tick)
                       + config.w_lateral_accel * abs(lateral_accel_mps2)) * fixed_dt
+        r_comfort -= config.w_aim_change * abs(u_this_tick - u_prev_tick)
 
     r_safety = r_contact + r_off_road + r_clearance
     return r_safety + r_comfort, {

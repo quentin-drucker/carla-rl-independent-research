@@ -193,9 +193,9 @@ class RewardOrderingTests(unittest.TestCase):
     def test_clearance_counts_only_up_to_enough(self):
         def bonus(clearance_m, **kw):
             return reward(window_ended=True, min_clearance_m=clearance_m, **kw)[1]["r_clearance"]
-        self.assertEqual(bonus(0.5), bonus(5.0))       # more than enough earns nothing extra
-        self.assertAlmostEqual(bonus(0.5), 50.0)
-        self.assertAlmostEqual(bonus(0.2), 20.0)       # a narrow escape earns less
+        self.assertEqual(bonus(1.0), bonus(5.0))       # more than enough (1.0 m) earns nothing extra
+        self.assertAlmostEqual(bonus(1.0), 50.0)
+        self.assertAlmostEqual(bonus(0.5), 25.0)       # a narrow escape earns less
         self.assertEqual(bonus(5.0, went_off_road=True), 0.0)       # road-keeping outranks clearance
         self.assertEqual(bonus(5.0, contact_this_tick=True), 0.0)
         self.assertEqual(reward(min_clearance_m=5.0)[1]["r_clearance"], 0.0)  # only paid when the window ends
@@ -217,11 +217,22 @@ class RewardOrderingTests(unittest.TestCase):
                                 hazard_active=False)[0], 0.0)
         self.assertLess(reward(brake_cmd_this_tick=1.0)[0], 0.0)
 
+    def test_one_re_aim_is_cheap_but_dithering_is_not(self):
+        one_full_swing = reward(u_this_tick=1.0, u_prev_tick=0.0)[0]
+        self.assertAlmostEqual(one_full_swing, -0.07)
+        dither_whole_window = 400 * one_full_swing  # 8 s at 50 Hz, full swing every tick
+        self.assertLess(dither_whole_window, -20.0)
+        self.assertGreater(dither_whole_window, -reward(window_ended=True, min_clearance_m=5.0)[0])
+        self.assertEqual(reward(u_this_tick=0.6, u_prev_tick=0.6)[0], 0.0)  # a held aim (lock) costs nothing
+        self.assertEqual(reward(u_this_tick=1.0, u_prev_tick=0.0, hazard_active=False)[0], 0.0)
+
     def test_config_refuses_weights_that_break_the_ordering(self):
         with self.assertRaises(ValueError):
             SteeringRewardConfig(w_contact=100.0)
         with self.assertRaises(ValueError):
             SteeringRewardConfig(enough_clearance_m=0.0)
+        with self.assertRaises(ValueError):
+            SteeringRewardConfig(w_aim_change=0.2)  # dithering would outweigh the clearance bonus
         self.assertAlmostEqual(
             reward(window_ended=True, min_clearance_m=0.5,
                    config=SteeringRewardConfig(enough_clearance_m=1.0))[1]["r_clearance"], 25.0)

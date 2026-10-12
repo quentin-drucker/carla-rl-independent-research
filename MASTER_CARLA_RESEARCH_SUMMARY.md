@@ -72,7 +72,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
 | **Which vehicle physics? (Week 4, 2026-10-01)** | **CARLA's default physics stays primary. Built-in Chrono is a NO-GO for the main experiment and a LIMITED-GO for separate robustness studies only:** it cannot hold a braked car still at low speed in CARLA 0.9.16's bridge. See [the Week 4 decision](#week-4-decision-carlas-built-in-chrono-physics-is-not-the-research-backend-added-2026-10-01). |
-| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". **2026-10-11: first learned steering policies (50k steps, preliminary) are safe in 10 of 12 grid cases, hitting only at 0.4 s; lock_at_onset matches the best scripted route** ("Week 5 (Phase 2, step 5)"). |
+| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". **2026-10-11: first learned steering policies (50k steps, preliminary) are safe in 10 of 12 grid cases, hitting only at 0.4 s; lock_at_onset matches the best scripted route** ("Week 5 (Phase 2, step 5)"). **2026-10-12, 4 seeds: safety identical for both versions; per_tick learns a dithering steering command the reward does not see.** |
 
 ## One-sentence state of the research
 
@@ -2451,6 +2451,24 @@ training. Evidence: `src/runs/steering_train/20261011_185208...` and `20261011_1
 `src/runs/rl_encounter_eval/20261011_191544...` (lock) and `20261011_194106...`
 (per_tick). Lock's peak lateral acceleration (18-26 m/s^2) exceeds real-tire limits,
 which is the CARLA default physics caveat.
+
+**Follow-up, 2026-10-12: 3 more seeds at 150k steps per version** (runs
+`src/runs/steering_train/20261011_194942...` to `20261012_020016...`; evaluation
+folders are named in `steering_train/eval_<mode>_s<seed>_<50k|150k>.log`; no CARLA
+crash):
+- **Safety is identical: all 14 evaluations (2 versions x 4 seeds, at 50k and 150k) are
+  10 of 12 safe, hitting only at TTC 0.4 s at step 1's least-bad speed (13.5-13.8 /
+  17.1-17.5 m/s).** More training changed nothing on safety.
+- Clearance: lock is higher in all four seeds, but by only 0.06-0.16 m in two of them,
+  so step 5's large clearance gap mostly does not hold. With more training both versions
+  shrink their swerves toward the 0.5 m reward cap: mean clearance fell in all six runs,
+  and the tightest pass is now 0.85 m.
+- **The robust difference is commitment, and it grows with training: per_tick's steering
+  command flips direction 124-334 times in the 8 s window at 150k (lock: 9-14). The
+  reward does not penalize this, because the car's physics filters the wheel buzz out of
+  the jerk and lateral-acceleration terms** (yaw-rate wiggles are about the same as
+  lock's). As trained, per_tick is not a usable controller. A fair comparison needs a
+  steering-change penalty.
 
 ---
 

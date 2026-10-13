@@ -418,6 +418,7 @@ SUMMARY_COLUMNS = ["mph", "onset_ttc_s", "mode", "passage_u", "outcome", "safe_s
                    "peak_decel_normal_speed_mps2", "max_abs_jerk_normal_speed_mps3",
                    "max_abs_lateral_accel_mps2", "max_abs_yaw_change_deg",
                    "requested_side_reversals", "requested_offset_reversals",
+                   "requested_side_reversals_moving", "requested_offset_reversals_moving",
                    "target_offset_m", "passage_left_edge_m", "passage_right_edge_m", "missing_passage_ticks",
                    "carla_collision_sensor", "trigger_time_s"]
 

@@ -187,7 +187,7 @@ class SafetyAndDynamicsTests(unittest.TestCase):
         m = compute_encounter_metrics(_trace(N_FULL, speed_fn=_brake_speed),
                                       onset_time_s=ONSET_S, protocol=PROTOCOL)
         self.assertEqual(m.protocol["horizon_s"], 4.0)
-        self.assertEqual(m.to_dict()["protocol"]["protocol_version"], 2)
+        self.assertEqual(m.to_dict()["protocol"]["protocol_version"], 3)
         with self.assertRaises(ValueError):
             EncounterProtocol(horizon_s=0.0)
 
@@ -225,8 +225,21 @@ class CommitmentMetricTests(unittest.TestCase):
         self.assertEqual(count_direction_reversals([0.0, 1.0, 0.98, 1.2, 0.0, 0.03], 0.05), 1)
         self.assertEqual(count_direction_reversals([], 0.05), 0)
 
-    def test_protocol_version_is_2(self):
-        self.assertEqual(self._metrics(lambda t: 0.0).protocol["protocol_version"], 2)
+    def test_flipping_after_the_car_has_stopped_is_not_counted_as_moving(self):
+        # A steady swerve while moving (first 2 s), then left/right flipping once the car is at rest.
+        ticks = _trace(N_FULL, speed_fn=lambda t: 10.0 if t < ONSET_S + 2.0 else 0.0, ped=(500.0, 0.0),
+                       requested_fn=lambda t: (min(2.0, 4.0 * max(0.0, t - ONSET_S)) if t < ONSET_S + 2.0
+                                               else (1.5 if int(t / DT) % 2 else -1.5)))
+        m = compute_encounter_metrics(ticks, onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertGreater(m.requested_offset_reversals, 50)    # the whole-window count sees the parked flipping
+        self.assertEqual((m.requested_side_reversals_moving, m.requested_offset_reversals_moving), (0, 0))
+
+    def test_flipping_while_moving_is_counted_as_moving(self):
+        m = self._metrics(lambda t: 1.5 if int((t - ONSET_S) / 0.5) % 2 == 0 else -1.5)
+        self.assertEqual(m.requested_offset_reversals_moving, m.requested_offset_reversals)
+
+    def test_protocol_version_is_3(self):
+        self.assertEqual(self._metrics(lambda t: 0.0).protocol["protocol_version"], 3)
 
 
 if __name__ == "__main__":

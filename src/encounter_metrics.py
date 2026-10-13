@@ -44,9 +44,11 @@ from pedestrian_contact import (
 from physics_harness import LOW_SPEED_ARTIFACT_THRESHOLD_MPS
 from route_recovery import PhysicalRouteReturnTracker
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 # v2 (2026-10-05): adds the steering-commitment metrics; v1 outcomes and
 # metrics are unchanged.
+# v3 (2026-10-13): adds the commitment metrics counted only while the car is
+# moving; every v2 metric is unchanged.
 
 OUTCOME_NO_ONSET = "no_onset"
 OUTCOME_CONTACT = "contact"
@@ -81,6 +83,10 @@ class EncounterProtocol:
     offset_reversal_threshold_m: float = 0.05
     # The requested target must move back by at least this much to count as
     # a change of direction (hysteresis; filters tick-level jitter).
+    moving_speed_threshold_mps: float = 0.5
+    # The *_moving commitment counts use only ticks faster than this: once
+    # the car has stopped, changing the aim does nothing, and counting it
+    # made a parked car look like a twitching one (MASTER, Week 5 step 5).
     protocol_version: int = PROTOCOL_VERSION
 
     def __post_init__(self):
@@ -149,6 +155,10 @@ class EncounterMetrics:
     # Changes of direction of the requested target (outward <-> inward),
     # with hysteresis. A committed swerve-and-hold scores 0; a swerve then a
     # deliberate return to the route scores 1.
+    requested_side_reversals_moving: Optional[int] = None
+    requested_offset_reversals_moving: Optional[int] = None
+    # The same two counts over only the ticks where the car is moving
+    # (protocol.moving_speed_threshold_mps). These are the ones to report.
 
     protocol: Optional[dict] = None
 
@@ -245,6 +255,7 @@ def compute_encounter_metrics(
     prev = None
     lateral_values = []
     requested_values = []
+    requested_moving = []
     decels, jerks, lat_accels = [], [], []
     prev_accel_normal = None
     violation_ticks = 0 if footprint_drivable is not None else None
@@ -282,6 +293,8 @@ def compute_encounter_metrics(
 
         if r.requested_lateral_offset_m is not None:
             requested_values.append(r.requested_lateral_offset_m)
+            if r.speed_mps > protocol.moving_speed_threshold_mps:
+                requested_moving.append(r.requested_lateral_offset_m)
         if r.route_lateral_m is not None:
             lateral_values.append(r.route_lateral_m)
             requested = r.requested_lateral_offset_m if r.requested_lateral_offset_m is not None else 0.0
@@ -305,6 +318,9 @@ def compute_encounter_metrics(
     if requested_values:
         m.requested_side_reversals = count_side_reversals(requested_values, protocol.commitment_deadband_m)
         m.requested_offset_reversals = count_direction_reversals(requested_values, protocol.offset_reversal_threshold_m)
+        m.requested_side_reversals_moving = count_side_reversals(requested_moving, protocol.commitment_deadband_m)
+        m.requested_offset_reversals_moving = count_direction_reversals(
+            requested_moving, protocol.offset_reversal_threshold_m)
     if lateral_values:
         m.max_abs_route_lateral_m = max(abs(v) for v in lateral_values)
         m.final_route_lateral_m = lateral_values[-1]

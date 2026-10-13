@@ -207,6 +207,7 @@ SUMMARY_COLUMNS = [
     "sensor_collision_ticks", "legacy_proximity_ticks", "geometric_contact_ticks", "physics_label",
     # Steering mode (Phase 2); None for a braking-only policy. The first two are set by the evaluator.
     "steer_commit", "fixed_u", "first_contact_time_s", "requested_side_reversals", "requested_offset_reversals",
+    "requested_side_reversals_moving", "requested_offset_reversals_moving",
 ]
 
 

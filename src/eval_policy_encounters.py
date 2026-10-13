@@ -108,6 +108,14 @@ def _parse_args(argv=None):
     p.add_argument("--fixed-u", type=float, nargs="+",
                    help="no model: a constant [--fixed-brake, u] action, one episode per u (needs --steer-commit)")
     p.add_argument("--fixed-brake", type=float, default=1.0)
+    p.add_argument("--scripted-aim", choices=("clear_predicted",),
+                   help="no model: --fixed-brake with rl_steering.clear_predicted_u as the aim (needs --steer-commit)")
+    p.add_argument("--walker", nargs="+", default=["stationary"],
+                   help="pedestrian cases for --suite test26 (steer_brake_baseline.WALKER_CASES)")
+    p.add_argument("--walker-speed", type=float, nargs="+", default=[None],
+                   help="walking speeds in m/s for --suite test26 (default: the scenario default)")
+    p.add_argument("--lock-delay-s", type=float, default=0.0,
+                   help="lock_at_onset locks this long after onset (walking pedestrians: 0.2)")
     p.add_argument("--parity-with", metavar="TEST26_SWEEP",
                    help="compare each fixed-action episode with the scripted test26 run of the same case")
     p.add_argument("--sweep-csv", help="sweep_summary.csv for --suite sweep")
@@ -119,12 +127,14 @@ def _parse_args(argv=None):
     p.add_argument("--no-drivability", action="store_true", help="skip per-tick footprint drivability")
     p.add_argument("--watch", action="store_true", help="follow the ego with the spectator camera")
     args = p.parse_args(argv)
-    if bool(args.model) == bool(args.fixed_u):
-        p.error("give exactly one of --model and --fixed-u")
-    if args.fixed_u and not args.steer_commit:
-        p.error("--fixed-u needs --steer-commit")
-    if args.parity_with and not (args.fixed_u and args.suite == "test26" and args.fixed_brake == 1.0):
-        p.error("--parity-with needs --suite test26, --fixed-u and full brake (test26 always brakes fully)")
+    if sum(map(bool, (args.model, args.fixed_u, args.scripted_aim))) != 1:
+        p.error("give exactly one of --model, --fixed-u and --scripted-aim")
+    if (args.fixed_u or args.scripted_aim) and not args.steer_commit:
+        p.error("--fixed-u and --scripted-aim need --steer-commit")
+    if args.parity_with and not (args.fixed_u and args.suite == "test26" and args.fixed_brake == 1.0
+                                 and args.walker == ["stationary"]):
+        p.error("--parity-with needs --suite test26, --fixed-u, full brake and the stationary pedestrian "
+                "(test26 always brakes fully)")
     return args
 
 
@@ -138,6 +148,16 @@ class _FixedAction:
         return self.action, None
 
 
+class _ScriptedAim:
+    """Stands in for a model: a fixed brake and a hand-written aim rule on the observation."""
+
+    def __init__(self, brake, rule):
+        self.brake, self.rule = brake, rule
+
+    def predict(self, obs, deterministic=True):
+        return np.array([self.brake, self.rule(obs)], dtype=np.float32), None
+
+
 def _build_configs(args):
     if args.suite == "sweep":
         if not args.sweep_csv:
@@ -146,9 +166,14 @@ def _build_configs(args):
         source = {"sweep_csv": os.path.abspath(args.sweep_csv), "sweep_csv_sha256": file_sha256(args.sweep_csv)}
     elif args.suite == "test26":
         from steer_brake_baseline import baseline_scenario_config
-        configs = [baseline_scenario_config(mph, ttc, run_id=f"{mph:g}mph_ttc{ttc:g}")
-                   for mph in args.mph for ttc in args.ttc]
-        source = {"builder": "steer_brake_baseline.baseline_scenario_config", "mph": args.mph, "ttc": args.ttc}
+        configs = [baseline_scenario_config(
+                       mph, ttc, walker=walker, walker_speed_mps=speed,
+                       # the stationary name is what --parity-with looks up
+                       run_id=f"{mph:g}mph_ttc{ttc:g}" + ("" if walker == "stationary" else f"_{walker}")
+                       + ("" if speed is None else f"_{speed:g}mps"))
+                   for walker in args.walker for speed in args.walker_speed for mph in args.mph for ttc in args.ttc]
+        source = {"builder": "steer_brake_baseline.baseline_scenario_config", "mph": args.mph, "ttc": args.ttc,
+                  "walker": args.walker, "walker_speed_mps": args.walker_speed}
     else:
         from train_sac import sample_config  # imports the env module; deferred
         random.seed(args.seed)
@@ -267,12 +292,17 @@ def main(argv=None):
     if args.fixed_u:
         model, model_path = None, f"fixed_action:brake={args.fixed_brake:g},u={args.fixed_u}"
         episodes = [(cfg, u, _FixedAction(args.fixed_brake, u)) for cfg in configs for u in args.fixed_u]
+    elif args.scripted_aim:
+        from rl_steering import clear_predicted_u
+        model, model_path = None, f"scripted_aim:{args.scripted_aim},brake={args.fixed_brake:g}"
+        episodes = [(cfg, None, _ScriptedAim(args.fixed_brake, clear_predicted_u)) for cfg in configs]
     else:
         from stable_baselines3 import SAC
         model_path = resolve_model_path(args.model, search_dir=SRC_DIR)
         model = SAC.load(model_path)
         episodes = [(cfg, None, model) for cfg in configs]
-    env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit)
+    env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit,
+                      lock_delay_s=args.lock_delay_s)
     try:
         if model is not None and model.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {model.observation_space.shape} != env "
@@ -295,8 +325,9 @@ def main(argv=None):
             "model_size_bytes": None if model is None else os.path.getsize(model_path),
             "model_observation_shape": list(env.observation_space.shape),
             "model_action_shape": list(env.action_space.shape),
-            "steer_commit": args.steer_commit, "fixed_brake": args.fixed_brake if args.fixed_u else None,
-            "fixed_u": args.fixed_u, "parity_with": args.parity_with,
+            "steer_commit": args.steer_commit, "lock_delay_s": args.lock_delay_s,
+            "fixed_brake": args.fixed_brake if (args.fixed_u or args.scripted_aim) else None,
+            "fixed_u": args.fixed_u, "scripted_aim": args.scripted_aim, "parity_with": args.parity_with,
             "physics_backend": BACKEND_DEFAULT,
             "physics_backend_note": "CARLA default vehicle physics; Chrono never enabled (Week 4 decision).",
             "carla_client_version": client_v, "carla_server_version": server_v,

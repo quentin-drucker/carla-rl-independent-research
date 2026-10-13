@@ -36,7 +36,8 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
-from passage import DEFAULT_SCAN_MAX_M, Passage, passage_coordinate_to_offset_m
+from passage import DEFAULT_SCAN_MAX_M, DEFAULT_SIDE_MARGIN_M, Obstacle, Passage, passage_coordinate_to_offset_m
+from pedestrian_contact import EGO_HALF_WIDTH_M
 from rl_reward_design import STATE_DIM, W_JERK, W_SMOOTH_ACTION
 
 STEER_COMMIT_PER_TICK = "per_tick"
@@ -72,15 +73,21 @@ class SteeringCommitment:
       lock_at_onset  on the first post-onset tick that has a passage, u and
                      the passage are recorded and the target computed once;
                      later u values and later passages are ignored.
+                     lock_delay_ticks postpones that tick: until then the
+                     target stays 0 (a walking pedestrian has zero speed at
+                     onset, so a route locked on that tick is chosen blind).
     A post-onset tick with no passage keeps the last target (0 if there has
     never been one) and is counted in missing_passage_ticks, so the car never
     silently swerves on nothing.
     """
 
-    def __init__(self, mode: str, *, u_min: float = 0.0, u_max: float = 1.0):
+    def __init__(self, mode: str, *, u_min: float = 0.0, u_max: float = 1.0, lock_delay_ticks: int = 0):
         if mode not in STEER_COMMIT_MODES:
             raise ValueError(f"steer_commit must be one of {STEER_COMMIT_MODES}, got {mode!r}")
+        if lock_delay_ticks < 0:
+            raise ValueError("lock_delay_ticks must be >= 0")
         self.mode, self.u_min, self.u_max = mode, u_min, u_max
+        self._ticks_until_lock = lock_delay_ticks if mode == STEER_COMMIT_LOCK_AT_ONSET else 0
         self.locked = False
         self.u_applied = 0.0          # the u behind the current target ("previous u" in the observation)
         self.passage: Optional[Passage] = None  # the passage behind the current target
@@ -89,6 +96,9 @@ class SteeringCommitment:
 
     def target_offset_m(self, u: float, passage: Optional[Passage], *, triggered: bool) -> float:
         if not triggered or self.locked:
+            return self.target_m
+        if self._ticks_until_lock > 0:
+            self._ticks_until_lock -= 1
             return self.target_m
         if passage is None:
             self.missing_passage_ticks += 1
@@ -184,6 +194,20 @@ def build_steering_observation(
         _unit(heading_error_rad, HEADING_SCALE_RAD),
         min(max(float(previous_u), -1.0), 1.0),
     ]
+
+
+def clear_predicted_u(observation: Sequence[float]) -> float:
+    """A hand-written aim rule for the scripted reference runs: aim just past
+    where the pedestrian is predicted to be when the car arrives, on the
+    right; stay in lane (u = 0) if they will not be in the car's way there,
+    or if there is no room to their right. Reads only what the policy sees."""
+    right_edge_m = observation[STATE_DIM + STEERING_STATE_NAMES.index("passage_right_edge_norm")] * LATERAL_SCALE_M
+    predicted_m = observation[STATE_DIM + STEERING_STATE_NAMES.index("pedestrian_lateral_norm")] * LATERAL_SCALE_M
+    reach_m = Obstacle(0.0).radius_m + EGO_HALF_WIDTH_M + DEFAULT_SIDE_MARGIN_M  # the passage's exclusion zone
+    target_m = predicted_m + reach_m
+    if abs(predicted_m) >= reach_m or right_edge_m <= 0.0 or target_m > right_edge_m:
+        return 0.0
+    return target_m / right_edge_m
 
 
 # =============================================================================

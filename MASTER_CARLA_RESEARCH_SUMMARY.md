@@ -3408,6 +3408,38 @@ question without any training noise. This is also the first live run of the pred
 pedestrian's line. It can turn "past before they get there" into a hit, or a hit into
 "they have already crossed". The policy can brake or coast but not accelerate.
 
+**Result of the scripted walking sweep (2026-10-13; 120 scenarios x 7 options, evidence
+folders named in `src/runs/steering_train/walk_<tag>.log`):**
+
+| Option | Safe of 120 |
+|---|---|
+| Coast, stay in lane | 42 |
+| Full brake, stay in lane | 90 |
+| Full brake, u = 0.5 | 110 |
+| **Full brake, maximum swerve (u = 1)** | **118** |
+| Aim rule, re-aimed every tick | 92 |
+| Aim rule, locked 0.2 s / 0.5 s after onset | 90 / 93 |
+
+- **Full brake with the maximum right swerve is safe in 118 of 120.** It fails only when
+  the pedestrian comes from the right at 35 mph with 0.6 s of warning (it swerves into
+  them). No scenario defeats every option.
+- **Braking can cause the hit:** in 6 scenarios (35 mph, 0.6-0.8 s) coasting passes
+  before the pedestrian arrives and full braking in lane hits.
+- **Hazard band with full braking in lane: 0.6-1.0 s at 35 mph, 0.8-1.2 s at 45 mph.**
+  From 1.2 / 1.4 s braking alone stops short, as with the standing pedestrian.
+- **Choice 4 corrected: 0.2 s is too early to lock.** The scripted pedestrian needs about
+  0.7 s to reach walking speed. Locking at 0.5 s is safe in 3 scenarios where 0.2 s is
+  not, never the reverse.
+- The hand-written aim rule is weak (90-93), and re-aiming it every tick does not beat
+  locking it at 0.5 s (2 scenarios against 3).
+- **Choice 6 confirmed as needed:** the pedestrian walked into the stopped car in 6 runs.
+- **Open design point:** the best action here is almost always decidable at onset (which
+  side the pedestrian is on, how much warning), so these scenarios may not separate
+  lock_at_onset from per_tick. Re-aiming can only pay off when the best choice changes
+  after onset (a pedestrian who stops, turns back, or starts late).
+- **Evidence status: CONFIRMED for these scripted options; one episode per scenario,
+  deterministic.**
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

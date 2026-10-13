@@ -128,6 +128,15 @@ class PassageSweepTests(unittest.TestCase):
                          (160.0, 20.0, "step_constant"))
         self.assertAlmostEqual(cfg.sim_seconds, 160.0 / (45.0 * 0.44704) + 30.0)
 
+    def test_walking_cases_reuse_last_semesters_walker_and_start_at_onset(self):
+        cfg = baseline_scenario_config(35.0, 1.2, walker="right_far", walker_speed_mps=1.2)
+        self.assertEqual((cfg.walker_side, cfg.walker_cross, cfg.walker_speed_mps, cfg.trigger_ttc_s),
+                         ("right", "far", 1.2, 1.2))
+        self.assertEqual(baseline_scenario_config(35.0, 1.2, walker="left_near").walker_cross, "near")
+        self.assertEqual(baseline_scenario_config(35.0, 1.2, walker="left_far").walker_speed_mps, 1.8)  # the default
+        with self.assertRaises(KeyError):
+            baseline_scenario_config(35.0, 1.2, walker="sideways")
+
     def test_yaw_change_wraps_across_180(self):
         self.assertAlmostEqual(max_abs_yaw_change_deg([-179.0, 179.0, 170.0]), 11.0)
         self.assertIsNone(max_abs_yaw_change_deg([]))

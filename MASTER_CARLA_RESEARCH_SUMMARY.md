@@ -3363,6 +3363,33 @@ gets a penalty or bonus whose *size* reflects its rank:
 - The comfort numbers inherit known problems: jerk is measured imperfectly, and CARLA
   permits 2-2.6 g of sideways acceleration that real tires cannot give.
 
+### 10. The walking pedestrian: starting choices (2026-10-13)
+
+Quentin delegated these to the AI agent on the condition that each has a stated reason
+and is tried out. They are starting choices, to be revisited once the scripted sweep
+(below) has run. Full proposal: `plans/Phase-2_2026-10-12_walking-pedestrian-proposal.md`.
+
+| # | Choice | Reason |
+|---|---|---|
+| 1 | Three cases: pedestrian from the right walking left ("far"); from the left walking right ("far"); from the left stopping at the lane center ("near") | With right-only steering, the first is the one case where the car can pass behind them; the second is a race, because they walk into the car's escape side; the third ends as the standing-pedestrian case already measured, and breaks the "keeps walking" assumption of the prediction. All three already exist in the code (last semester's `walker_cross` / `walker_side`). |
+| 2 | Walking speeds 1.2 and 1.8 m/s | 1.2 m/s (4 ft/s) is the classic US signal-timing design speed (the MUTCD now uses 3.5 ft/s, 1.07 m/s, to cover slower walkers); 1.8 m/s is last semester's default, a brisk walk. Two values make the policy use the speed it is given. Running is left for later. |
+| 3 | Warning times: sweep 0.6-2.4 s first; the training range is set from the sweep | By arithmetic, a pedestrian starting 2.55 m to the side has not reached the car's path before about 0.64 s (1.8 m/s) or 0.97 s (1.2 m/s), so shorter warnings are not hazards. The upper end is where braking alone stops the car short. The sweep shows where the informative band really is, as step 1 did for the standing pedestrian. |
+| 4 | `lock_at_onset` locks 0.2 s after onset, not at onset | At onset the pedestrian is still standing with zero speed, so a route locked then is chosen blind. 0.2 s (10 ticks) is enough for the walking speed to be measured, and mirrors a real system needing a few frames to estimate velocity. The delay is a setting; 0 gives the old behavior, so every standing-pedestrian result is unaffected. The car brakes and holds its lane during the delay. |
+| 5 | Right-only steering stays | One new thing at a time. Left swerves have never run live, and the first case above already allows passing behind. Left swerves are a setting (`u_bounds`), to be its own step. |
+| 6 | A hit while the car is at rest and the pedestrian walks into it is reported separately | The scripted pedestrian never avoids anything, so that is not the driving policy's failure. Rule to be fixed after the sweep shows whether and how it happens; until then such contacts are flagged by their impact speed (0.5 m/s or less). A slow creep into a standing pedestrian must still count as a hit. |
+| 7 | Walking pedestrians only first, then a mix with standing ones | A clean answer to lock vs. per-tick before mixing in a case where the two cannot differ. |
+
+**Scripted reference before any training** (as step 1 did): through the verified
+environment, for every scenario: no braking (was it a hazard at all?); full brake with
+u = 0, 0.5 and 1; and a hand-written aim rule, "aim just past where the pedestrian is
+predicted to be, on the right; stay in lane if they will not be in it", run once locked
+(0.2 s after onset) and once re-aimed every tick. The last two are the lock vs. per-tick
+question without any training noise. This is also the first live run of the prediction.
+
+**Why braking is no longer automatically safe:** braking delays the car's arrival at the
+pedestrian's line. It can turn "past before they get there" into a hit, or a hit into
+"they have already crossed". The policy can brake or coast but not accelerate.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

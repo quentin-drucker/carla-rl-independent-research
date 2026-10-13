@@ -172,7 +172,7 @@ class CarlaAEBEnv(gymnasium.Env):
     # -----------------------------------------------------------------------
     def __init__(self, cfg: ScenarioConfig = None, config_fn=None,
                  collision_signal: str = COLLISION_SIGNAL_LEGACY,
-                 steer_commit: str = None, u_bounds=(0.0, 1.0),
+                 steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
                  steering_reward: SteeringRewardConfig = None):
         """
         Args:
@@ -206,6 +206,9 @@ class CarlaAEBEnv(gymnasium.Env):
                  target) at onset; braking stays per tick.
             u_bounds: (u_min, u_max) for the steering action. (0, 1) = right
                  swerves only; (-1, 1) opens both sides.
+            lock_delay_s: lock_at_onset locks this long after onset
+                 instead of at onset (0 = at onset). For a walking
+                 pedestrian, who has no speed yet on the onset tick.
             steering_reward: SteeringRewardConfig; None = its defaults.
         """
         super().__init__()
@@ -230,7 +233,8 @@ class CarlaAEBEnv(gymnasium.Env):
         self._steer_commit = steer_commit
         if steer_commit is not None:
             self._u_min, self._u_max = u_bounds
-            SteeringCommitment(steer_commit, u_min=self._u_min, u_max=self._u_max)  # fail fast on a bad mode
+            self._lock_delay_ticks = int(round(lock_delay_s / FIXED_DT))
+            self._new_commitment()  # fail fast on a bad mode or delay
             self._steering_reward = steering_reward or SteeringRewardConfig()
             self.observation_space = Box(low=-1.0, high=1.0, shape=(STEERING_STATE_DIM,), dtype=np.float32)
             self.action_space = Box(low=np.array([0.0, self._u_min], dtype=np.float32),
@@ -587,6 +591,10 @@ class CarlaAEBEnv(gymnasium.Env):
     # Steering mode (Phase 2, opt-in). Nothing below runs in the default mode.
     # -----------------------------------------------------------------------
 
+    def _new_commitment(self):
+        return SteeringCommitment(self._steer_commit, u_min=self._u_min, u_max=self._u_max,
+                                  lock_delay_ticks=self._lock_delay_ticks)
+
     def _setup_steering(self, carla_map, encounter_loc):
         """Per-episode steering state. The road's width at the pedestrian's
         line is scanned once here; the passage is rebuilt from it every tick
@@ -595,7 +603,7 @@ class CarlaAEBEnv(gymnasium.Env):
         road, frame = passage_at_location(carla_map, encounter_loc)  # no obstacles: just the road extent
         self._road_extent = (road.road_left_m, road.road_right_m)
         self._frame_origin, self._frame_right = frame["origin_xyz"][:2], frame["right_xy"]
-        self._commitment = SteeringCommitment(self._steer_commit, u_min=self._u_min, u_max=self._u_max)
+        self._commitment = self._new_commitment()
         self._min_clearance_m = None
         self._went_off_road = False
         self._prev_u_applied = 0.0

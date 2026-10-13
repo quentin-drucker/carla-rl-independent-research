@@ -16,6 +16,7 @@ from rl_steering import (  # noqa: E402
     SteeringCommitment,
     SteeringRewardConfig,
     build_steering_observation,
+    clear_predicted_u,
     compute_steering_reward,
     frame_coordinates_m,
     heading_error_rad,
@@ -76,6 +77,23 @@ class CommitmentTests(unittest.TestCase):
         self.assertEqual(c.target_offset_m(0.0, moved, triggered=True), locked_target)
         self.assertEqual(c.u_applied, 0.5)
         self.assertIs(c.observed_passage(moved), first)
+
+    def test_lock_delay_holds_the_lane_then_locks_on_what_it_sees_then(self):
+        c = SteeringCommitment(STEER_COMMIT_LOCK_AT_ONSET, lock_delay_ticks=2)
+        self.assertEqual(c.target_offset_m(0.9, passage(), triggered=False), 0.0)  # before onset: no countdown
+        for _ in range(2):  # the pedestrian has no measured speed yet: stay in lane, do not lock
+            self.assertEqual(c.target_offset_m(0.9, passage(), triggered=True), 0.0)
+            self.assertFalse(c.locked)
+        later = passage(pedestrian_lateral_m=1.0)
+        self.assertAlmostEqual(c.target_offset_m(0.5, later, triggered=True), 0.5 * later.right_edge_m)
+        self.assertTrue(c.locked)
+        self.assertIs(c.observed_passage(passage()), later)
+        with self.assertRaises(ValueError):
+            SteeringCommitment(STEER_COMMIT_LOCK_AT_ONSET, lock_delay_ticks=-1)
+
+    def test_lock_delay_does_not_apply_to_per_tick(self):
+        c = SteeringCommitment(STEER_COMMIT_PER_TICK, lock_delay_ticks=5)
+        self.assertGreater(c.target_offset_m(0.5, passage(), triggered=True), 0.0)
 
     def test_per_tick_shows_the_current_passage(self):
         c = SteeringCommitment(STEER_COMMIT_PER_TICK)
@@ -156,6 +174,20 @@ class ObservationTests(unittest.TestCase):
         left_only = compute_passage(lambda lat: -5.25 <= lat <= 1.2, [Obstacle(0.0)])
         self.assertEqual(self._obs(passage=left_only)[7], 0.0)
         self.assertLess(self._obs(passage=left_only)[6], 0.0)
+
+    def test_scripted_aim_goes_just_past_the_predicted_pedestrian_or_stays(self):
+        right_edge = passage().right_edge_m  # about 7.42 m; the exclusion zone reaches 1.68 m either side
+        in_lane = clear_predicted_u(self._obs(pedestrian_lateral_m=0.0))
+        self.assertAlmostEqual(in_lane * right_edge, 1.68, places=1)
+        walking_right = clear_predicted_u(self._obs(pedestrian_lateral_m=1.0))
+        self.assertAlmostEqual(walking_right * right_edge, 2.68, places=1)       # chases in front of them
+        behind = clear_predicted_u(self._obs(pedestrian_lateral_m=-1.0))
+        self.assertAlmostEqual(behind * right_edge, 0.68, places=1)              # a smaller swerve passes behind
+        self.assertEqual(clear_predicted_u(self._obs(pedestrian_lateral_m=-2.55)), 0.0)  # not in the car's way
+        self.assertEqual(clear_predicted_u(self._obs(pedestrian_lateral_m=2.55)), 0.0)
+        self.assertEqual(clear_predicted_u(self._obs(pedestrian_lateral_m=1.6,   # no room left on the right
+                                                     passage=compute_passage(lambda lat: -5.25 <= lat <= 4.0,
+                                                                             [Obstacle(1.6)]))), 0.0)
 
     def test_wrong_base_length_rejected(self):
         with self.assertRaises(ValueError):

@@ -48,14 +48,27 @@ BRAKE_RAMP_UP_PER_S = 20.0        # "slam" end of ScenarioConfig's range: each
                                   # strategy's physical best case, not comfort
 
 
-def baseline_scenario_config(mph: float, ttc: float, *, run_id: str = ""):
-    """The stationary-pedestrian scenario every Phase 2 controller is scored
-    on: test26's scripted baselines, the steering environment's parity gate,
-    and learned-policy evaluation (eval_policy_encounters --suite test26)."""
+WALKER_CASES = {  # name -> (walker_side, walker_cross); MASTER "Phase 2 design decisions" 10
+    "stationary": ("left", "stationary"),
+    "right_far": ("right", "far"),   # walks left across the lane: the car can pass behind them on the right
+    "left_far": ("left", "far"),     # walks right across the lane, into the car's escape side
+    "left_near": ("left", "near"),   # walks to the lane center and stops there
+}
+
+
+def baseline_scenario_config(mph: float, ttc: float, *, run_id: str = "", walker: str = "stationary",
+                             walker_speed_mps: float = None):
+    """The scenario every Phase 2 controller is scored on: test26's scripted
+    baselines, the steering environment's parity gate, and learned-policy
+    evaluation (eval_policy_encounters --suite test26). The default is the
+    stationary pedestrian; `walker` picks a WALKER_CASES entry, where the
+    pedestrian starts walking at onset."""
     from scenario_config import ScenarioConfig
 
+    side, cross = WALKER_CASES[walker]
+    extra = {} if walker_speed_mps is None else {"walker_speed_mps": float(walker_speed_mps)}
     return ScenarioConfig(
-        walker_cross="stationary", walker_side="left", trigger_ttc_s=ttc,
+        walker_cross=cross, walker_side=side, trigger_ttc_s=ttc, **extra,
         target_mph=mph, encounter_distance_m=ENCOUNTER_DISTANCE_M,
         braking_ramp_up_per_s=BRAKE_RAMP_UP_PER_S, brake_profile="step_constant",
         weather_preset="ClearSunset", sun_altitude_deg=0,

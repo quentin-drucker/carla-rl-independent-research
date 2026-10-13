@@ -14,13 +14,18 @@ is a braking-plus-steering maneuver achievable, and in which conditions does
 it succeed where braking alone fails? Perception timing is a separate,
 later question (LiDAR-in-the-loop follow-up).
 
-Three matched controller modes:
+Four matched controller modes:
   no_intervention -- hazard braking disabled for the whole run; the ego keeps
                      cruising (establishes that the encounter is dangerous).
   brake_only      -- from onset: scripted brake target, wheel on the route.
   brake_steer     -- from onset: the same scripted brake target PLUS the
                      existing scripted swerve (test5's
                      HazardClearRecoveryController).
+  brake_passage_edge -- (Phase 2, 2026-10-05) from onset: the same brake PLUS
+                     Prof. Izmirli's rule: aim the steering at the extreme
+                     right edge of the "passage" (passage.py), i.e. passage
+                     coordinate u = +1. A scripted reference for the learned
+                     steering policy, which outputs u itself.
 LiDAR hazard detection is disabled in all three (the scripted decision is
 False before onset), so pre-onset driving is identical across modes.
 """
@@ -31,10 +36,45 @@ from typing import List, Tuple
 MODE_NO_INTERVENTION = "no_intervention"
 MODE_BRAKE_ONLY = "brake_only"
 MODE_BRAKE_STEER = "brake_steer"
-MODES = (MODE_NO_INTERVENTION, MODE_BRAKE_ONLY, MODE_BRAKE_STEER)
+MODE_BRAKE_PASSAGE_EDGE = "brake_passage_edge"
+MODES = (MODE_NO_INTERVENTION, MODE_BRAKE_ONLY, MODE_BRAKE_STEER, MODE_BRAKE_PASSAGE_EDGE)
 
 # Tesla Model 3 footprint, same constants as pedestrian_contact.py.
 from pedestrian_contact import EGO_HALF_LENGTH_M, EGO_HALF_WIDTH_M  # noqa: E402
+
+
+ENCOUNTER_DISTANCE_M = 160.0      # long enough to reach 45 mph before onset
+BRAKE_RAMP_UP_PER_S = 20.0        # "slam" end of ScenarioConfig's range: each
+                                  # strategy's physical best case, not comfort
+
+
+WALKER_CASES = {  # name -> (walker_side, walker_cross); MASTER "Phase 2 design decisions" 10
+    "stationary": ("left", "stationary"),
+    "right_far": ("right", "far"),   # walks left across the lane: the car can pass behind them on the right
+    "left_far": ("left", "far"),     # walks right across the lane, into the car's escape side
+    "left_near": ("left", "near"),   # walks to the lane center and stops there
+}
+
+
+def baseline_scenario_config(mph: float, ttc: float, *, run_id: str = "", walker: str = "stationary",
+                             walker_speed_mps: float = None):
+    """The scenario every Phase 2 controller is scored on: test26's scripted
+    baselines, the steering environment's parity gate, and learned-policy
+    evaluation (eval_policy_encounters --suite test26). The default is the
+    stationary pedestrian; `walker` picks a WALKER_CASES entry, where the
+    pedestrian starts walking at onset."""
+    from scenario_config import ScenarioConfig
+
+    side, cross = WALKER_CASES[walker]
+    extra = {} if walker_speed_mps is None else {"walker_speed_mps": float(walker_speed_mps)}
+    return ScenarioConfig(
+        walker_cross=cross, walker_side=side, trigger_ttc_s=ttc, **extra,
+        target_mph=mph, encounter_distance_m=ENCOUNTER_DISTANCE_M,
+        braking_ramp_up_per_s=BRAKE_RAMP_UP_PER_S, brake_profile="step_constant",
+        weather_preset="ClearSunset", sun_altitude_deg=0,
+        sim_seconds=ENCOUNTER_DISTANCE_M / (mph * 0.44704) + 30.0,
+        run_id=run_id,
+    )
 
 
 def make_hazard_command_fn(mode: str, *, brake_target: float = 1.0):
@@ -54,7 +94,136 @@ def make_hazard_command_fn(mode: str, *, brake_target: float = 1.0):
 
 
 def mode_uses_steering(mode: str) -> bool:
-    return mode == MODE_BRAKE_STEER
+    return mode in (MODE_BRAKE_STEER, MODE_BRAKE_PASSAGE_EDGE)
+
+
+class PassageEdgeOffset:
+    """run_scenario lateral_offset_fn for brake_passage_edge: 0 before onset,
+    then the lateral target for passage coordinate `u` (default +1, the
+    passage's right edge), re-evaluated every tick from the latest passage.
+
+    The caller supplies the passage via set_passage() (computed from the CARLA
+    map and the pedestrian's position; for a stationary pedestrian it is the
+    same every tick, so computing it once before onset is exact). Until a
+    passage is set, the target is 0 and `missing_passage_ticks` counts the
+    post-onset ticks affected, so a run can never silently swerve on nothing.
+    """
+
+    def __init__(self, *, u: float = 1.0, u_min: float = 0.0, u_max: float = 1.0):
+        self.u, self.u_min, self.u_max = u, u_min, u_max
+        self.passage = None
+        self.missing_passage_ticks = 0
+        self.last_target_m = 0.0
+
+    def set_passage(self, passage) -> None:
+        self.passage = passage
+
+    def __call__(self, sim_time_s, triggered, trigger_time_s, hazard_clear_info=None):
+        from passage import passage_coordinate_to_offset_m
+
+        if not triggered:
+            self.last_target_m = 0.0
+        elif self.passage is None:
+            self.missing_passage_ticks += 1
+            self.last_target_m = 0.0
+        else:
+            self.last_target_m = passage_coordinate_to_offset_m(self.u, self.passage, u_min=self.u_min,
+                                                                u_max=self.u_max)
+        return self.last_target_m
+
+
+def expand_runs(modes, passage_u=(1.0,)) -> List[Tuple[str, object, str]]:
+    """[(mode, u, label)]: brake_passage_edge once per aim position u, every
+    other mode once (u = None). The label names the run's folder."""
+    runs = []
+    for mode in modes:
+        if mode == MODE_BRAKE_PASSAGE_EDGE:
+            runs += [(mode, u, f"{mode}_u{u:g}") for u in passage_u]
+        else:
+            runs.append((mode, None, mode))
+    return runs
+
+
+def max_abs_yaw_change_deg(yaws_deg):
+    """Largest heading change from the first sample, wrapped to [-180, 180]
+    (spin check). None for no samples."""
+    if not yaws_deg:
+        return None
+    return max(abs((y - yaws_deg[0] + 180.0) % 360.0 - 180.0) for y in yaws_deg)
+
+
+def best_option(rows):
+    """(kind, row) for one scenario's runs. "safe": the safe run with the most
+    clearance. Else "no_contact_unsafe": a run that missed the pedestrian but
+    is not safe (left the road, or unresolved), most clearance. Else
+    "all_contact": the run with the lowest impact speed. Ties keep the first."""
+    safe = [r for r in rows if r["safe_success"]]
+    if safe:
+        return "safe", max(safe, key=lambda r: r["min_clearance_m"])
+    missed = [r for r in rows if r["outcome"] != "contact"]
+    if missed:
+        return "no_contact_unsafe", max(missed, key=lambda r: r["min_clearance_m"])
+    return "all_contact", min(rows, key=lambda r: r["contact_speed_mps"])
+
+
+def _option_name(r) -> str:
+    return r["mode"] if r.get("passage_u") is None else f"u={r['passage_u']:g}"
+
+
+def _result_cell(r) -> str:
+    if r["outcome"] == "contact":
+        return f"hit {r['contact_speed_mps']:.1f} m/s"
+    what = {"passed_clear": "passed", "stopped_clear": "stopped"}.get(r["outcome"], r["outcome"])
+    off_road = " OFF-ROAD" if r.get("drivable_violation_ticks") else ""
+    return f"{what} {r['min_clearance_m']:.2f} m{off_road}"
+
+
+def _best_cell(rows) -> str:
+    kind, r = best_option(rows)
+    if kind == "safe":
+        return f"{_option_name(r)} ({r['min_clearance_m']:.2f} m)"
+    if kind == "no_contact_unsafe":
+        return f"none safe; {_option_name(r)} misses ({_result_cell(r)})"
+    return f"all hit; least bad {_option_name(r)} at {r['contact_speed_mps']:.1f} m/s"
+
+
+def format_best_route_table(rows) -> str:
+    """Markdown report from test26 summary rows: per speed, every option's
+    result per onset TTC with the best option and the best aim position u;
+    then the gate facts (live passage edges, missing-passage ticks, and per u
+    whether the car left the road or swung its heading)."""
+    out = []
+    options = list(dict.fromkeys(_option_name(r) for r in rows))
+    for mph in sorted({r["mph"] for r in rows}):
+        out += [f"### {mph:g} mph", "",
+                "| Onset TTC (s) | " + " | ".join(options) + " | Best option | Best u |",
+                "|---" * (len(options) + 3) + "|"]
+        for ttc in sorted({r["onset_ttc_s"] for r in rows if r["mph"] == mph}):
+            case = [r for r in rows if r["mph"] == mph and r["onset_ttc_s"] == ttc]
+            by_name = {_option_name(r): r for r in case}
+            aimed = [r for r in case if r.get("passage_u") is not None]
+            out.append(f"| {ttc:g} | " + " | ".join(_result_cell(by_name[o]) if o in by_name else "-" for o in options)
+                       + f" | {_best_cell(case)} | {_best_cell(aimed) if aimed else '-'} |")
+        out.append("")
+
+    aimed = [r for r in rows if r.get("passage_u") is not None]
+    if aimed:
+        edges = sorted({f"({r['passage_left_edge_m']:.2f}, {r['passage_right_edge_m']:.2f})" for r in aimed})
+        out += ["### Passage gate", "",
+                "Live passage edges (left, right) in m: " + "; ".join(edges),
+                f"Missing-passage ticks, all runs: {sum(r['missing_passage_ticks'] for r in aimed)}", "",
+                "| u | aim offset (m) | max lateral reached (m) | max heading change (deg) | runs off-road |",
+                "|---|---|---|---|---|"]
+        for u in sorted({r["passage_u"] for r in aimed}):
+            at_u = [r for r in aimed if r["passage_u"] == u]
+            out.append(f"| {u:g} | {max(r['target_offset_m'] for r in at_u):.2f} "
+                       f"| {max(r['max_abs_route_lateral_m'] for r in at_u):.2f} "
+                       f"| {max(r['max_abs_yaw_change_deg'] for r in at_u):.1f} "
+                       f"| {sum(bool(r['drivable_violation_ticks']) for r in at_u)} of {len(at_u)} |")
+        out.append("")
+    out.append(f"Contacts: {sum(r['outcome'] == 'contact' for r in rows)} of {len(rows)} runs at the 0.3 m "
+               f"pedestrian radius; {sum(bool(r.get('contact_r0188')) for r in rows)} at 0.188 m.")
+    return "\n".join(out)
 
 
 def footprint_corners_xy(

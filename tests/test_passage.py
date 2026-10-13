@@ -1,0 +1,166 @@
+import sys
+import unittest
+from pathlib import Path
+
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from passage import (  # noqa: E402
+    Obstacle,
+    admissible_center_intervals,
+    compute_passage,
+    corridor_segments,
+    drivable_extent_m,
+    passage_coordinate_to_offset_m,
+    passage_from_extent,
+    predicted_lateral_at_arrival,
+)
+
+HW = 1.0   # ego half-width used in these tests
+MG = 0.25  # margin
+
+
+def road(left, right, seams=(), unknown=()):
+    """Fake probe: drivable on [left, right] except tiny seam gaps."""
+    def probe(lat):
+        if any(abs(lat - u) < 1e-9 for u in unknown):
+            return None
+        if any(abs(lat - s) < 0.011 for s in seams):
+            return False
+        return left - 1e-9 <= lat <= right + 1e-9
+    return probe
+
+
+class DrivableExtentTests(unittest.TestCase):
+    def test_plain_road(self):
+        left, right = drivable_extent_m(road(-5.25, 3.0))
+        self.assertAlmostEqual(left, -5.25)
+        self.assertAlmostEqual(right, 3.0)
+
+    def test_bridges_hairline_lane_seam(self):
+        # Town04_Opt: ~2 cm gaps between adjacent driving lanes.
+        left, right = drivable_extent_m(road(-5.25, 3.0, seams=(1.5, -1.5)))
+        self.assertAlmostEqual((left, right), (-5.25, 3.0))
+
+    def test_does_not_bridge_a_real_gap(self):
+        probe = lambda lat: -2.0 <= lat <= 1.0 or 1.5 <= lat <= 4.0  # 0.5 m median strip  # noqa: E731
+        left, right = drivable_extent_m(probe)
+        self.assertAlmostEqual(right, 1.0)
+
+    def test_unknown_probe_ends_the_scan_conservatively(self):
+        left, right = drivable_extent_m(road(-5.0, 5.0, unknown=(2.0,)))
+        self.assertAlmostEqual(right, 1.95)
+
+    def test_route_center_off_road(self):
+        self.assertEqual(drivable_extent_m(lambda lat: False), (None, None))
+
+
+class IntervalTests(unittest.TestCase):
+    def test_road_shrunk_by_half_width_and_margin(self):
+        self.assertEqual(admissible_center_intervals(-4.0, 4.0, ego_half_width_m=HW, margin_m=MG), [(-2.75, 2.75)])
+
+    def test_pedestrian_at_lane_center_splits_the_passage(self):
+        iv = admissible_center_intervals(-4.0, 4.0, [Obstacle(0.0, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        self.assertEqual(len(iv), 2)
+        self.assertAlmostEqual(iv[0][1], -1.55)
+        self.assertAlmostEqual(iv[1][0], 1.55)
+
+    def test_second_obstacle_narrows_further(self):
+        iv = admissible_center_intervals(-4.0, 6.0, [Obstacle(0.0, 0.3), Obstacle(4.0, 1.0)],
+                                         ego_half_width_m=HW, margin_m=MG)
+        self.assertEqual(len(iv), 2)
+        self.assertAlmostEqual(iv[1][0], 1.55)
+        self.assertAlmostEqual(iv[1][1], 1.75)  # right gap now ends where the second obstacle's zone starts
+
+    def test_too_narrow_road_has_no_passage(self):
+        self.assertEqual(admissible_center_intervals(-1.0, 1.0, ego_half_width_m=HW, margin_m=MG), [])
+
+
+class PassageAndActionTests(unittest.TestCase):
+    def setUp(self):
+        self.p = compute_passage(road(-5.25, 3.0), [Obstacle(0.0, 0.3)], ego_half_width_m=HW, margin_m=MG)
+
+    def test_edges_are_the_extreme_admissible_center_positions(self):
+        self.assertAlmostEqual(self.p.left_edge_m, -4.0)
+        self.assertAlmostEqual(self.p.right_edge_m, 1.75)
+        self.assertTrue(self.p.admits(1.7))
+        self.assertFalse(self.p.admits(0.0))  # straight ahead is blocked by the pedestrian
+
+    def test_u_maps_proportionally_to_each_edge(self):
+        self.assertEqual(passage_coordinate_to_offset_m(0.0, self.p), 0.0)
+        self.assertAlmostEqual(passage_coordinate_to_offset_m(1.0, self.p), 1.75)
+        self.assertAlmostEqual(passage_coordinate_to_offset_m(0.5, self.p), 0.875)
+        self.assertAlmostEqual(passage_coordinate_to_offset_m(-1.0, self.p), -4.0)
+
+    def test_right_only_mode_clips_left_actions_to_straight(self):
+        self.assertEqual(passage_coordinate_to_offset_m(-1.0, self.p, u_min=0.0), 0.0)
+        self.assertAlmostEqual(passage_coordinate_to_offset_m(2.0, self.p, u_min=0.0), 1.75)
+
+    def test_side_without_room_maps_to_zero(self):
+        p = compute_passage(road(-5.0, 1.2), [Obstacle(0.0, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        self.assertLess(p.right_edge_m, 0.0)  # only the left gap exists
+        self.assertEqual(passage_coordinate_to_offset_m(1.0, p), 0.0)
+
+    def test_empty_passage_means_no_swerve(self):
+        p = compute_passage(road(-1.0, 1.0), ego_half_width_m=HW, margin_m=MG)
+        self.assertTrue(p.empty)
+        self.assertEqual(passage_coordinate_to_offset_m(1.0, p), 0.0)
+
+    def test_passage_from_a_known_extent_matches_a_fresh_scan(self):
+        scanned = compute_passage(road(-5.25, 3.0), [Obstacle(0.4, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        rebuilt = passage_from_extent(scanned.road_left_m, scanned.road_right_m, [Obstacle(0.4, 0.3)],
+                                      ego_half_width_m=HW, margin_m=MG)
+        self.assertEqual(rebuilt, scanned)
+        self.assertTrue(passage_from_extent(None, None).empty)
+
+    def test_bad_bounds_rejected(self):
+        with self.assertRaises(ValueError):
+            passage_coordinate_to_offset_m(0.0, self.p, u_min=0.5, u_max=0.0)
+
+    def test_corridor_segments_in_the_town04_frame(self):
+        # Ego heading -x (Town04 spawn 242): right vector (0, -1), so +lateral is -y.
+        segs = corridor_segments(self.p, (100.0, 50.0), (0.0, -1.0))
+        self.assertEqual([kind for kind, _, _ in segs], ["road", "open", "open", "blocked"])
+        by_kind = {kind: (a, b) for kind, a, b in segs}
+        self.assertEqual(by_kind["road"], ((100.0, 55.25), (100.0, 47.0)))
+        self.assertEqual(by_kind["blocked"], ((100.0, 51.55), (100.0, 48.45)))  # around the pedestrian
+
+    def test_corridor_is_empty_when_the_road_is_unknown(self):
+        p = compute_passage(lambda lat: None)
+        self.assertEqual(corridor_segments(p, (0.0, 0.0), (0.0, -1.0)), [])
+
+
+class PredictionTests(unittest.TestCase):
+    def test_stationary_pedestrian_stays_put(self):
+        self.assertEqual(predicted_lateral_at_arrival(-1.5, 0.0, 20.0, 20.0), -1.5)
+
+    def test_walking_toward_the_lane(self):
+        # 20 m at 20 m/s = 1.0 s; 1.5 m left of center walking right at 1.8 m/s.
+        self.assertAlmostEqual(predicted_lateral_at_arrival(-1.5, 1.8, 20.0, 20.0), 0.3)
+
+    def test_walking_away_from_the_lane(self):
+        self.assertAlmostEqual(predicted_lateral_at_arrival(-1.5, -1.8, 20.0, 20.0), -3.3)
+
+    def test_car_nearly_stopped_is_capped_not_divided(self):
+        self.assertAlmostEqual(predicted_lateral_at_arrival(0.0, 1.0, 20.0, 0.0), 8.0)
+        self.assertAlmostEqual(predicted_lateral_at_arrival(0.0, 1.0, 20.0, 0.01), 8.0)
+        self.assertAlmostEqual(predicted_lateral_at_arrival(0.0, 1.0, 20.0, 0.0, max_time_s=2.0), 2.0)
+
+    def test_at_or_past_the_line_uses_the_current_position(self):
+        self.assertEqual(predicted_lateral_at_arrival(0.4, 1.8, 0.0, 20.0), 0.4)
+        self.assertEqual(predicted_lateral_at_arrival(0.4, 1.8, -3.0, 20.0), 0.4)
+
+    def test_passage_opens_behind_a_crossing_pedestrian(self):
+        # Now: 2.5 m left of center, walking right. On arrival: 0.2 m right of center.
+        now = compute_passage(road(-5.25, 8.8), [Obstacle(-2.5, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        predicted = predicted_lateral_at_arrival(-2.5, 1.8, 30.0, 20.0)
+        at_arrival = compute_passage(road(-5.25, 8.8), [Obstacle(predicted, 0.3)], ego_half_width_m=HW, margin_m=MG)
+        self.assertTrue(now.admits(0.0))          # the lane looks free right now ...
+        self.assertFalse(at_arrival.admits(0.0))  # ... but is blocked when the car gets there
+        self.assertFalse(now.admits(-2.5))
+        self.assertTrue(at_arrival.admits(-2.5))  # where the pedestrian was (behind them) is open
+
+
+if __name__ == "__main__":
+    unittest.main()

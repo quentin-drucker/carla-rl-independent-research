@@ -72,6 +72,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **Where did I leave off?** | v3-1600k was presented as the strongest final checkpoint. I thought it roughly matched the best fixed rules, performed especially well at high speed, and was less comfortable. The later audit preserves only the archived overall collision-rate proximity; the high-speed and comfort comparisons remain unresolved. |
 | **What should I do first?** | Do **not** train another policy first. Preserve the artifacts, identify/hash the authoritative v3 ZIP, repair termination/outcome and metric-window inconsistencies, add provenance and seeds, then rerun a fair matched comparison. |
 | **Which vehicle physics? (Week 4, 2026-10-01)** | **CARLA's default physics stays primary. Built-in Chrono is a NO-GO for the main experiment and a LIMITED-GO for separate robustness studies only:** it cannot hold a braked car still at low speed in CARLA 0.9.16's bridge. See [the Week 4 decision](#week-4-decision-carlas-built-in-chrono-physics-is-not-the-research-backend-added-2026-10-01). |
+| **Does steering help, and how much? (Week 5, 2026-10-10)** | **Scripted full braking plus steering aimed into the "passage" avoids a stationary pedestrian with as little as 0.5 s of warning; braking alone needs 1.2-1.4 s. At 0.4 s or less every option hits.** The passage computation matched its offline check on the live server. This is the reference for the learned steering policy. See "Week 5 (Phase 2, step 1)". **2026-10-11: first learned steering policies (50k steps, preliminary) are safe in 10 of 12 grid cases, hitting only at 0.4 s; lock_at_onset matches the best scripted route** ("Week 5 (Phase 2, step 5)"). **2026-10-12, 4 seeds: safety identical for both versions. per_tick re-aims 2-5x as often as lock while moving (most of the "dithering" first reported was after the car had stopped). Retrain at 1.0 m clearance with an aim-change penalty: safety unchanged.** |
 
 ## One-sentence state of the research
 
@@ -2284,6 +2285,239 @@ speed (known problem #5).
 
 ---
 
+## Week 5 (Phase 2, step 1): the passage checked live, and the best aim position per scenario (added 2026-10-10)
+
+**What was done** (branch `experiment/steering-rl-env`, CARLA default physics, renderless):
+- `test26` gained `--passage-u`: the `brake_passage_edge` mode (full brake plus steering
+  aimed at passage coordinate `u`, held from onset) runs once per aim position. It also
+  gained `progress.log`, `--resume`, `--relaunch-carla` and `--table`.
+- Two sweeps on the stationary-pedestrian scenario, 35 and 45 mph, 126 runs in total:
+  `20261010_104704` (onset TTC 0.6-1.6 s) and `20261010_112344` (0.3-0.5 s, added to find
+  where no option works). Each scenario ran no_intervention, brake_only, brake_steer
+  (last week's fixed 1.98 m swerve) and `u` = 0.25, 0.5, 0.75, 1.0.
+- `u` = 1.0 aims 7.42 m to the right (two lanes over); 0.25 aims 1.85 m.
+
+**Measured.** "passed" and "stopped" give the smallest gap between the car's body and
+the pedestrian (0.3 m radius); "hit" gives the impact speed. no_intervention hit at full
+speed in every scenario.
+
+35 mph:
+
+| Onset TTC (s) | brake_only | brake_steer | u=0.25 | u=0.5 | u=0.75 | u=1.0 | Best |
+|---|---|---|---|---|---|---|---|
+| 0.3 | hit 14.9 | hit 14.9 | hit 14.6 | hit 14.6 | hit 14.6 | hit 14.6 | all hit; least bad u=0.5, 14.6 m/s |
+| 0.4 | hit 14.2 | hit 14.1 | hit 13.9 | hit 13.5 | hit 13.5 | hit 13.5 | all hit; least bad u=0.75, 13.5 m/s |
+| 0.5 | hit 13.3 | hit 13.1 | hit 12.9 | passed 0.44 m | passed 0.49 m | passed 0.48 m | u=0.75 |
+| 0.6 | hit 12.3 | hit 12.1 | hit 10.6 | passed 0.98 m | passed 1.34 m | passed 1.35 m | u=1.0 |
+| 0.8 | hit 10.2 | passed 0.12 m | passed 0.20 m | stopped 1.64 m | stopped 2.83 m | stopped 3.61 m | u=1.0 |
+| 1.0 | hit 8.0 | stopped 0.32 m | stopped 0.31 m | stopped 1.98 m | stopped 3.60 m | stopped 4.96 m | u=1.0 |
+| 1.2 | stopped 0.23 m | stopped 0.79 m | stopped 1.29 m | stopped 3.44 m | stopped 5.03 m | stopped 6.28 m | u=1.0 |
+| 1.4 | stopped 3.37 m | stopped 3.87 m | stopped 4.29 m | stopped 6.13 m | stopped 7.94 m | stopped 9.50 m | u=1.0 |
+| 1.6 | stopped 6.48 m | stopped 6.93 m | stopped 7.31 m | stopped 9.39 m | stopped 10.99 m | stopped 12.50 m | u=1.0 |
+
+45 mph:
+
+| Onset TTC (s) | brake_only | brake_steer | u=0.25 | u=0.5 | u=0.75 | u=1.0 | Best |
+|---|---|---|---|---|---|---|---|
+| 0.3 | hit 19.0 | hit 18.9 | hit 18.6 | hit 18.4 | hit 18.4 | hit 18.4 | all hit; least bad u=0.75, 18.4 m/s |
+| 0.4 | hit 18.1 | hit 18.0 | hit 17.7 | hit 17.2 | hit 17.1 | hit 17.1 | all hit; least bad u=0.75, 17.1 m/s |
+| 0.5 | hit 17.0 | hit 16.8 | hit 16.1 | passed 0.45 m | passed 0.44 m | passed 0.32 m | u=0.5 |
+| 0.6 | hit 15.9 | hit 15.7 | passed 0.16 m | passed 1.25 m | passed 1.64 m | passed 1.68 m | u=1.0 |
+| 0.8 | hit 13.6 | passed 0.30 m | passed 0.36 m | passed 1.97 m | passed 3.26 m | passed 4.19 m | u=1.0 |
+| 1.0 | hit 10.9 | passed 0.45 m | passed 0.45 m | stopped 2.16 m | stopped 3.77 m | stopped 5.29 m | u=1.0 |
+| 1.2 | hit 8.1 | stopped 0.54 m | stopped 0.47 m | stopped 2.40 m | stopped 4.78 m | stopped 6.73 m | u=1.0 |
+| 1.4 | stopped 0.95 m | stopped 1.84 m | stopped 2.41 m | stopped 5.05 m | stopped 7.62 m | stopped 9.65 m | u=1.0 |
+| 1.6 | stopped 4.93 m | stopped 5.71 m | stopped 6.18 m | stopped 8.65 m | stopped 11.10 m | stopped 13.21 m | u=1.0 |
+
+"Best" is the safe option with the most clearance or, where every option hits, the one
+with the lowest impact speed. Full tables: `best_route_table.md` in each sweep folder, or
+`test26 --table <sweep>`.
+
+**Findings:**
+- **The passage is right on the live server.** Its edges were -3.87 m and +7.42 m in all
+  72 aimed runs, identical to the offline check, with no tick missing a passage.
+- **The results are repeatable.** All 36 runs shared with last week's sweep reproduced it
+  exactly.
+- **Aiming into the passage avoids the pedestrian with as little as 0.5 s of warning.**
+  Braking alone needs 1.2 s at 35 mph and 1.4 s at 45 mph; last week's fixed swerve needs
+  0.8 s.
+- **At 0.4 s or less there is no safe route: every option hits, at both speeds.** The
+  larger swerves hit slowest, but only 0.3-1.0 m/s slower than braking alone.
+- **A bigger swerve almost always gives more clearance, and `u` = 1.0 is usable.** It
+  never left the road or spun the car in 18 runs, so the action range needs no cap. The
+  car does not reach the 7.42 m aim under full braking: it gets 4.6-5.1 m over at 35 mph
+  and 6.2-6.5 m at 45 mph, and stops angled 37-50 degrees to the road.
+- **At the limit, more is not better.** At 0.5 s the best aim is `u` = 0.75 (35 mph) and
+  0.5 (45 mph); at 45 mph `u` = 1.0 leaves 0.32 m against 0.45 m, because the sharper
+  turn swings the car's side closer.
+- The smallest aim that is safe is `u` = 0.5 at TTC 0.5 s and at 35 mph / 0.6 s, and
+  `u` = 0.25 in every other scenario from 0.6 s up.
+- Pedestrian radius: 58 contacts at 0.3 m, 57 at 0.188 m. The one difference is 35 mph /
+  0.6 s / `u` = 0.25, which overlaps the 0.3 m circle by 3 cm and misses CARLA's walker
+  box by 8 cm.
+- Steering commitment: 0 side switches and 0 direction changes in every aimed run, as
+  expected for a held aim.
+- CARLA's collision sensor reported 4 of the 58 contacts.
+
+**Caveat (known, not pursued):** steering costs no braking in CARLA's default vehicle
+model. Lateral acceleration (speed x yaw rate) reached 19 m/s^2 at 35 mph and 26 m/s^2
+at 45 mph in the aimed runs, about 2-2.6 g, which real tires cannot give. These
+clearances are CARLA's, not real-world predictions.
+
+**What this means for the RL environment (open, for Quentin and Prof. Izmirli):**
+- In this scene a bigger swerve costs nothing, so "safest by clearance" is nearly always
+  `u` = 1.0. If the policy should prefer the smallest swerve that clears, the reward has
+  to say so.
+- The informative warning times are about 0.3-1.2 s. Above that every option succeeds.
+
+**Evidence status:** **CONFIRMED** for this scenario: one location, stationary pedestrian,
+right swerves, full brake, held aim, one deterministic run per case.
+
+---
+
+## Week 5 (Phase 2, step 4): the steering RL environment, verified before any training (added 2026-10-10)
+
+**What was built** (branch `experiment/steering-rl-env`):
+- `src/rl_steering.py` (pure, tested): the action split, the route lock, the 14-value
+  observation and the ordered reward. The design and its reasons are in "Phase 2 design
+  decisions" 6 and 9.
+- `CarlaAEBEnv(steer_commit="per_tick" | "lock_at_onset")`: an opt-in steering mode.
+  Leaving `steer_commit` out gives last semester's braking-only environment.
+- `eval_policy_encounters.py` gained the test26 scenario grid (`--suite test26`), the
+  steering mode (`--steer-commit`), a constant action in place of a model (`--fixed-u`)
+  and a comparison with the scripted runs (`--parity-with`). The same tool will score
+  the learned policies.
+
+**The three gates, all passed:**
+
+| Gate | Check | Result |
+|---|---|---|
+| 1 | Every pure piece tested offline | 24 tests in `tests/test_rl_steering.py`; suite 436/436 |
+| 2 | The old braking-only mode is unchanged | sac_v3_1600k through the default environment, two episodes of 374 ticks: **identical tick for tick** before and after on pose, control, action, reward, termination and observation |
+| 3 | Parity: a fixed "full brake, constant `u`" action through the new environment reproduces the scripted test26 run | **32 of 32 cases match** (below) |
+
+**Gate 3 in detail.** 16 cases (35 and 45 mph; onset TTC 0.6 and 1.0 s; `u` = 0, 0.25,
+0.75, 1.0), each run through both commitment versions and scored with
+`encounter_metrics`, against sweep `20261010_104704`. `u` = 0 is compared with
+`brake_only`.
+- Every outcome is the same: 5 hits, 6 passes and 5 stops per version.
+- Hits: the same impact speed within 0.001 m/s and the same impact time to the tick.
+- Passes and stops: the same minimum clearance within 5 mm (most to the millimeter).
+- `lock_at_onset` and `per_tick` give identical results, as they must for a constant aim
+  and a standing pedestrian.
+
+**What this does and does not show.** The environment drives the car exactly as the
+scripted baseline does when given the same commands, so a learned policy's results can be
+compared with the step 1 table. It does not test anything about learning, and three
+things have not run live at all: a walking pedestrian (so the prediction, and any real
+difference between the two commitment versions), the off-road penalty, and left swerves.
+
+**Evidence status:** **CONFIRMED** for the stationary-pedestrian scenario. Evidence:
+`src/runs/rl_encounter_eval/20261010_202653...` and `20261010_202918...` (each with
+`parity.json`), and `src/_scratch/regression_4b/` for gate 2.
+
+## Week 5 (Phase 2, step 5): first steering policies trained (added 2026-10-11)
+
+**What ran:** `src/train_steering.py` (SAC with train_sac v3's settings), 50k steps of each
+commitment version (about 128 episodes each, 23 min each), stationary pedestrian, 30-50
+mph, onset TTC 0.3-1.5 s, seed 0 for both. Each final policy was scored with
+`eval_policy_encounters.py --suite test26` on the 35/45 mph x TTC 0.4-1.4 s grid
+(encounter_metrics, 0.3 m contact radius, one episode per case). Default physics.
+
+**Learning:** in scenarios that can be avoided (TTC >= 0.5 s) the per-episode reward rose
+from about -10 (lock) / -26 (per_tick) in the first quarter to +45 in the last, and
+**neither version made contact in an avoidable scenario during the second half of
+training**. Every TTC < 0.5 s episode hit, as step 1 predicts. The raw rolling mean
+fell, because by chance the last quarter drew more of those unavoidable cases; it is not
+a usable learning signal on its own.
+
+**Evaluation against step 1's scripted table:**
+- **Both versions: 10 of 12 safe. The only contacts are the two TTC 0.4 s cases, where
+  every scripted option also hits. brake_only hits in 7 of these 12 cases.** The plan
+  gate (match brake_only where braking alone works) passes for both, with more clearance
+  than brake_only. No off-road ticks; every swerve went right.
+- **lock_at_onset reproduces the best scripted route at short warning** (locked u =
+  0.99-1.00; clearances 1.35/3.60/1.68/4.16 m vs. scripted 1.35/3.61/1.68/4.19 m; at
+  0.4 s the same least-bad impact speed, 13.5/17.1 m/s). With more warning it picks a
+  smaller u (0.48-0.86) and keeps 2-6 m of clearance, since the reward stops paying
+  above 0.5 m.
+- **per_tick is safe in the same cases but with 1.1-2.3 m clearance and a twitchy aim:**
+  its requested offset reverses 10-31 times per episode (up to 345). It has lower peak
+  lateral acceleration.
+
+**Evidence status:** **PRELIMINARY.** One seed, 50k steps, one evaluation episode per
+case, stationary pedestrian only. The lock vs. per-tick gap may close with more
+training. Evidence: `src/runs/steering_train/20261011_185208...` and `20261011_191733...`,
+`src/runs/rl_encounter_eval/20261011_191544...` (lock) and `20261011_194106...`
+(per_tick). Lock's peak lateral acceleration (18-26 m/s^2) exceeds real-tire limits,
+which is the CARLA default physics caveat.
+
+**Follow-up, 2026-10-12: 3 more seeds at 150k steps per version** (runs
+`src/runs/steering_train/20261011_194942...` to `20261012_020016...`; evaluation
+folders are named in `steering_train/eval_<mode>_s<seed>_<50k|150k>.log`; no CARLA
+crash):
+- **Safety is identical: all 14 evaluations (2 versions x 4 seeds, at 50k and 150k) are
+  10 of 12 safe, hitting only at TTC 0.4 s at step 1's least-bad speed (13.5-13.8 /
+  17.1-17.5 m/s).** More training changed nothing on safety.
+- Clearance: lock is higher in all four seeds, but by only 0.06-0.16 m in two of them,
+  so step 5's large clearance gap mostly does not hold. With more training both versions
+  shrink their swerves toward the 0.5 m reward cap: mean clearance fell in all six runs,
+  and the tightest pass is now 0.85 m.
+- **The robust difference is commitment, and it grows with training: per_tick's steering
+  command flips direction 124-334 times in the 8 s window at 150k (lock: 9-14). The
+  reward does not penalize this, because the car's physics filters the wheel buzz out of
+  the jerk and lateral-acceleration terms** (yaw-rate wiggles are about the same as
+  lock's). As trained, per_tick is not a usable controller. A fair comparison needs a
+  steering-change penalty.
+  **Corrected 2026-10-12 (afternoon): 67-90% of those reversals happen after the car has
+  stopped** (it is at rest about 2 s after onset; the window runs 8 s), so most of this
+  was a stopped car turning its wheels to no effect, which is also why the yaw rate did
+  not show it. While the car is moving, per_tick reverses its steering 22-66 times
+  against lock's 9-14: a real but much smaller difference. "Not a usable controller"
+  was too strong.
+
+**Retrain, 2026-10-12: enough clearance 1.0 m and an aim-change penalty (0.07 per unit of
+u change), seeds 1-3 x both versions, 150k steps** (commit `66efc8f`; runs
+`src/runs/steering_train/20261012_081049...` to `20261012_143607...`; evaluation folders
+named in `steering_train/eval_<mode>_s<seed>_1m_<50k|150k>.log`):
+- **Safety unchanged: all 12 evaluations are 10 of 12 safe, contact only at TTC 0.4 s.**
+- **The 1.0 m target changed little that can be measured on the test grid.** Passes
+  closer than 1.0 m were already rare (1 of 30 avoided cases for lock, 0 of 30 for
+  per_tick) and are the same after. Mean clearance at 150k rose in 5 of 6 seed pairs
+  (lock 2.97 -> 3.37 m, per_tick 2.56 -> 3.21 m) and the trimming with longer training
+  no longer appears, but with 3 seeds and a 2.3-4.1 m spread between seeds this is
+  suggestive only. The earlier reading that the 0.5 m cap was "binding" was overstated:
+  clearances were 2-4 m. Peak sideways acceleration is unchanged (25-27 m/s^2).
+- **The penalty reduced per_tick's re-aiming but did not remove it.** Steering reversals
+  while moving (median per episode, seeds 1/2/3): 41/66/22 -> 30/24/20 (lock: 9-14).
+  After the stop: 290/51/290 -> 3/2/280.
+- Training was less stable for lock at 1.0 m in two of three seeds (11 and 9 hits in
+  avoidable scenarios in the second half of training, all with a sampled u of 0.18 or
+  less, against 1-3 under 0.5 m). The final deterministic policies are safe in those
+  cases. Cause not established.
+- **Evidence status: PRELIMINARY** (3 seeds, 12 test cases with one episode each,
+  stationary pedestrian).
+
+**Finer test grid, 2026-10-13: 60 cases (30-50 mph x TTC 0.4-1.5 s) for all 12 trained
+150k policies, plus a scripted reference** (evidence folders named in
+`src/runs/steering_train/grid_<tag>.log`; scored with protocol v3, which adds the
+commitment counts taken only while the car is moving):
+- **Full braking alone is safe in 15 of 60 cases; full braking with the maximum swerve in
+  55 of 60 (it fails only at TTC 0.4 s). 10 of the 12 policies reach that 55.**
+- **Three avoidable hits appear, all in lock_at_onset trained with the 1.0 m target:**
+  seed 2 at 50 mph / 1.4 s (locked u = 0.14), and seed 3 at 30 and 35 mph / 0.5 s
+  (locked u = 0.06 and 0.17). lock_at_onset at 0.5 m is clean in 3 of 3 seeds and
+  per_tick in 6 of 6. The 12-case grid had missed these. Cause not established; lock
+  makes one choice from one observation, so a locally wrong choice is final.
+- With the 1.0 m target per_tick no longer passes closer than 1.0 m where more room is
+  possible (5/5/5 such passes per seed, all in the TTC 0.5 s row where it is unavoidable,
+  against 9/7/5 before). lock_at_onset is unchanged (10/6/5 against 9/6/5).
+- **Commitment while moving: lock 0 re-aims; per_tick a median of 32/65/18 per episode
+  without the aim penalty and 28/24/12 with it.**
+- **Evidence status: PRELIMINARY** (3 seeds per setting, stationary pedestrian).
+
+---
+
 # Tentative and Inconclusive Findings
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
@@ -2993,6 +3227,218 @@ to it.** Reasons:
   test26 outcome changes.
 - Reports should say "contact (including passes within ~0.1 m)" where the distinction
   matters.
+
+### 6. A locked steering choice freezes the whole route (Quentin, 2026-10-10)
+
+Two steering-commitment versions are built and compared (Oct 6 advisor meeting):
+
+- **`steer_commit="lock_at_onset"`: the route is decided once, at the moment the hazard
+  starts, and never changes.** At that tick the passage is computed (using the predicted
+  pedestrian position), the policy picks `u`, and that choice becomes a sideways target in
+  meters. **Both the passage and the target are then frozen for the rest of the episode.**
+  Even if the pedestrian's predicted position changes later, the route does not move.
+- **Only the route is locked.** Braking is still decided every tick (and throttle, if it
+  is added later), so the policy keeps learning how hard to slow down along its fixed
+  route.
+- `steer_commit="per_tick"`: the passage and `u` are both re-decided every tick.
+
+Why freeze the passage too, and not only `u`: if only `u` were held, a moving prediction
+would move the passage edges and the target in meters would still drift, so the "locked"
+car would not really be committed to one route. For a stationary pedestrian the two
+readings are identical; the difference only appears with a walking pedestrian.
+
+For now the locked route is "swerve out and hold". The return to the lane after the
+pedestrian is not built or tested yet (see decision 8).
+
+### 7. Training warning times: onset TTC 0.3-1.5 s (Quentin, 2026-10-10)
+
+Training samples the hazard's warning time from 0.3 to 1.5 s (the Week 5 plan said
+0.6-2.0 s). The scripted baseline showed that below 0.5 s nothing avoids the pedestrian
+and above about 1.2 s every option does, so this range covers the cases where the choice
+matters, plus some unavoidable and some easy cases on each side.
+
+### 8. Deferred on purpose, and must come back (Quentin, 2026-10-10)
+
+- **LiDAR along the bent route.** While the hazard starts by script (decision 2), LiDAR
+  decides nothing: distances are measured and logged only. **When LiDAR detection returns
+  (Phase 4), it must look along the bent corridor the car is actually taking, not the
+  original straight lane corridor.** The Week 3 swept-path code
+  (`use_swept_path_clearance_override`) already does this and is the starting point.
+- **Merging back to the lane.** After the hazard is passed and judged safe, the car
+  should curve back to its original lane, and the debug corridor should show that curve
+  the same way it shows the swerve out. Not needed while the work is on the hazard
+  itself. The single-corridor view (`run_scenario(planned_route_view=True)`, test26
+  `--draw`) already bends toward whatever sideways target is commanded, so it will draw
+  the return once a controller commands one; that has not been checked live in this view.
+
+### 9. How the steering policy learns: the reward, and why it is built this way (2026-10-10)
+
+**Status: a first version to try out.** The structure below was proposed on 2026-10-10 and
+accepted by Quentin as a starting point. **Every number in it, including the 0.5 m
+"enough clearance" distance, is a first guess to test, not a measured or justified
+value.** Nothing here has been confirmed by Prof. Izmirli yet. All of it lives in one
+place, `SteeringRewardConfig` in `src/rl_steering.py`, so a number can be changed without
+rewriting anything.
+
+**What the policy does.** It is a Soft Actor-Critic (SAC) policy, the same learning
+algorithm as last semester. Fifty times a second it reads 14 numbers describing the
+situation and outputs two: how hard to brake (0 to 1) and where across the passage to aim
+(`u`, 0 = stay in lane, 1 = the far right edge of the safe gap). It learns by driving the
+same kind of encounter thousands of times and being scored after every tick; over time it
+keeps the choices that led to higher scores. The score is the **reward**, so the reward
+is the definition of "good driving" that the policy ends up with.
+
+**What the policy sees (14 numbers).**
+- Last semester's 6: speed, how close the obstacle is, how urgent the time-to-collision
+  is, its own last brake command, whether the hazard is active, and whether it can still
+  stop in time.
+- 8 new ones for steering: the left and right edges of the passage, where the pedestrian
+  will be when the car arrives (computed by hand, section "Week 5 ... step 3"), the
+  pedestrian's sideways speed, the distance to the pedestrian's line, the car's own
+  sideways position, how far its heading is off the road's direction, and the `u` it
+  last chose.
+- The prediction and the passage are computed for the policy rather than learned by it.
+  This follows Prof. Izmirli's concern (Oct 6) that the task might be too hard to learn:
+  the policy only has to learn *where to aim and how hard to brake*.
+
+**What "safe" means, as an ordered list.** Quentin's working definition is that safety
+has two parts: whether there was a collision (and driving safety generally), and how
+rough the ride was for the passenger. The reward turns that into five ranked goals. A
+lower goal only matters when the ones above it are equal:
+
+1. **Do not touch the pedestrian.**
+2. **If a hit cannot be avoided, hit as slowly as possible.**
+3. **Keep the whole car on the road.**
+4. **Leave enough clearance**, counted only up to a set "enough" distance.
+5. **Ride comfort:** less jerk, fewer sudden brake changes, less sideways acceleration.
+
+Goals 1-4 are reported as "safety" and goal 5 as "comfort", in separate columns, so
+comfort can never hide a collision.
+
+**How the ranking becomes numbers.** The policy only understands a score, so each goal
+gets a penalty or bonus whose *size* reflects its rank:
+
+| Goal | Score | Why this size |
+|---|---|---|
+| 1. Contact | -300, once | Same as last semester's collision penalty. It must dwarf everything else. |
+| 2. Impact speed | a further -15 per m/s at the moment of contact | A 20 m/s hit costs 600, a 5 m/s hit 375. This is how "least bad" is taught in cases with no safe route (below 0.5 s of warning, measured in step 1). |
+| 3. Off the road | -25 per second while any corner of the car is off the driving lanes | A full 8 s off the road costs 200, deliberately less than the lightest contact: leaving the road is bad, but better than hitting a person. |
+| 4. Clearance | up to +50, once, at the end of an 8 s window with no contact | Paid in proportion to the smallest gap reached, **capped at the "enough" distance**, and only if the car never left the road. |
+| 5. Comfort | small penalties every tick after the hazard starts | Jerk and brake-change terms keep last semester's weights; a sideways-acceleration term is new. A harsh 2-second maneuver costs a few points in total. |
+
+**Why clearance is capped at "enough" (the 0.5 m).**
+- Step 1 measured that in this scene a bigger swerve costs nothing: more swerve almost
+  always means more clearance, and CARLA lets the car do it without leaving the road or
+  spinning. A reward that pays for *more* clearance would therefore teach "always swerve
+  as far as possible", which is not safe driving in any realistic sense.
+- With a cap, clearance beyond "enough" earns nothing extra, so the comfort terms decide
+  between maneuvers that are all safe, and the gentlest swerve that clears wins.
+- **0.5 m is an arbitrary starting value chosen to try the idea out.** The only evidence
+  behind it is that the narrow escapes in step 1 were 0.1-0.5 m, so 0.5 m separates
+  "barely made it" from "clearly made it". It is not taken from a standard or a paper.
+  It should be revisited after the first training runs and raised with Prof. Izmirli.
+- What changing it would do: a larger value (say 1.0 m) pushes the policy toward wider
+  swerves; a smaller value accepts closer passes.
+- **Changed to 1.0 m (Quentin, 2026-10-12)**, after longer training showed clearances
+  shrinking (though still 2-4 m on average, so the 0.5 m cap was not yet binding; the
+  retrain later showed the change made little measurable difference). Literature check: emergency-avoidance work
+  and test protocols judge success by contact or impact severity and set no clearance
+  margin; evasive-path engineering pads obstacles by a small buffer (about 0-0.5 m);
+  frameworks such as RSS leave the minimum lateral distance to the designer. Normal
+  passing is larger: drivers pass pedestrians at about 1.5 m (acceptable about
+  0.9-2.2 m in one simulator study), and cyclist-passing laws are about 0.9-1.5 m.
+  1.0 m is the low end of human passing distances, and is reachable in every avoidable
+  case from 0.6 s of warning. It is a design choice, not a measured requirement. All
+  results before 2026-10-12 used 0.5 m.
+
+**What was removed from last semester's reward, and why.**
+- The bonus for stopping farther from the pedestrian: it rewarded ever more distance,
+  the same "more is always better" problem.
+- The penalty for a low time-to-collision and the bonus for braking hard when it is low:
+  both assume braking is the only answer. With steering, a close pass at speed can be
+  correct.
+- The bonus for a full stop and the cruise bonus: episodes no longer end at a stop.
+
+**Other choices in the learning setup.**
+- **Every episode runs the full 8 s after the hazard starts unless there is contact.**
+  Last semester's episodes ended at the first full stop, which hid cars that stopped and
+  then crept forward into the pedestrian.
+- **Contact is judged by geometry** (the car's outline against the pedestrian), not by
+  CARLA's collision sensor, which missed 54 of 58 contacts in step 1.
+- **The hazard starts by script**, at the same moment for every controller (decision 2).
+- **Warning times in training: 0.3-1.5 s** (decision 7), which includes cases with no
+  safe route, so goal 2 is exercised.
+- **No penalty for changing the steering choice.** Whether the policy wavers is measured
+  instead (the commitment metric), and the two versions `lock_at_onset` and `per_tick`
+  (decision 6) are compared on it.
+
+**Known weaknesses of this first version.**
+- The ranking is by size of number, not absolute. A very harsh maneuver's comfort cost
+  can outweigh a few centimeters of clearance.
+- The reward is sparse: it speaks loudly only at contact and at the end of the window.
+  If the first short training runs do not learn, adding a guiding term back is the first
+  thing to try.
+- The comfort numbers inherit known problems: jerk is measured imperfectly, and CARLA
+  permits 2-2.6 g of sideways acceleration that real tires cannot give.
+
+### 10. The walking pedestrian: starting choices (2026-10-13)
+
+Quentin delegated these to the AI agent on the condition that each has a stated reason
+and is tried out. They are starting choices, to be revisited once the scripted sweep
+(below) has run. Full proposal: `plans/Phase-2_2026-10-12_walking-pedestrian-proposal.md`.
+
+| # | Choice | Reason |
+|---|---|---|
+| 1 | Three cases: pedestrian from the right walking left ("far"); from the left walking right ("far"); from the left stopping at the lane center ("near") | With right-only steering, the first is the one case where the car can pass behind them; the second is a race, because they walk into the car's escape side; the third ends as the standing-pedestrian case already measured, and breaks the "keeps walking" assumption of the prediction. All three already exist in the code (last semester's `walker_cross` / `walker_side`). |
+| 2 | Walking speeds 1.2 and 1.8 m/s | 1.2 m/s (4 ft/s) is the classic US signal-timing design speed (the MUTCD now uses 3.5 ft/s, 1.07 m/s, to cover slower walkers); 1.8 m/s is last semester's default, a brisk walk. Two values make the policy use the speed it is given. Running is left for later. |
+| 3 | Warning times: sweep 0.6-2.4 s first; the training range is set from the sweep | By arithmetic, a pedestrian starting 2.55 m to the side has not reached the car's path before about 0.64 s (1.8 m/s) or 0.97 s (1.2 m/s), so shorter warnings are not hazards. The upper end is where braking alone stops the car short. The sweep shows where the informative band really is, as step 1 did for the standing pedestrian. |
+| 4 | `lock_at_onset` locks 0.2 s after onset, not at onset | At onset the pedestrian is still standing with zero speed, so a route locked then is chosen blind. 0.2 s (10 ticks) is enough for the walking speed to be measured, and mirrors a real system needing a few frames to estimate velocity. The delay is a setting; 0 gives the old behavior, so every standing-pedestrian result is unaffected. The car brakes and holds its lane during the delay. |
+| 5 | Right-only steering stays | One new thing at a time. Left swerves have never run live, and the first case above already allows passing behind. Left swerves are a setting (`u_bounds`), to be its own step. |
+| 6 | A hit while the car is at rest and the pedestrian walks into it is reported separately | The scripted pedestrian never avoids anything, so that is not the driving policy's failure. Rule to be fixed after the sweep shows whether and how it happens; until then such contacts are flagged by their impact speed (0.5 m/s or less). A slow creep into a standing pedestrian must still count as a hit. |
+| 7 | Walking pedestrians only first, then a mix with standing ones | A clean answer to lock vs. per-tick before mixing in a case where the two cannot differ. |
+
+**Scripted reference before any training** (as step 1 did): through the verified
+environment, for every scenario: no braking (was it a hazard at all?); full brake with
+u = 0, 0.5 and 1; and a hand-written aim rule, "aim just past where the pedestrian is
+predicted to be, on the right; stay in lane if they will not be in it", run once locked
+(0.2 s after onset) and once re-aimed every tick. The last two are the lock vs. per-tick
+question without any training noise. This is also the first live run of the prediction.
+
+**Why braking is no longer automatically safe:** braking delays the car's arrival at the
+pedestrian's line. It can turn "past before they get there" into a hit, or a hit into
+"they have already crossed". The policy can brake or coast but not accelerate.
+
+**Result of the scripted walking sweep (2026-10-13; 120 scenarios x 7 options, evidence
+folders named in `src/runs/steering_train/walk_<tag>.log`):**
+
+| Option | Safe of 120 |
+|---|---|
+| Coast, stay in lane | 42 |
+| Full brake, stay in lane | 90 |
+| Full brake, u = 0.5 | 110 |
+| **Full brake, maximum swerve (u = 1)** | **118** |
+| Aim rule, re-aimed every tick | 92 |
+| Aim rule, locked 0.2 s / 0.5 s after onset | 90 / 93 |
+
+- **Full brake with the maximum right swerve is safe in 118 of 120.** It fails only when
+  the pedestrian comes from the right at 35 mph with 0.6 s of warning (it swerves into
+  them). No scenario defeats every option.
+- **Braking can cause the hit:** in 6 scenarios (35 mph, 0.6-0.8 s) coasting passes
+  before the pedestrian arrives and full braking in lane hits.
+- **Hazard band with full braking in lane: 0.6-1.0 s at 35 mph, 0.8-1.2 s at 45 mph.**
+  From 1.2 / 1.4 s braking alone stops short, as with the standing pedestrian.
+- **Choice 4 corrected: 0.2 s is too early to lock.** The scripted pedestrian needs about
+  0.7 s to reach walking speed. Locking at 0.5 s is safe in 3 scenarios where 0.2 s is
+  not, never the reverse.
+- The hand-written aim rule is weak (90-93), and re-aiming it every tick does not beat
+  locking it at 0.5 s (2 scenarios against 3).
+- **Choice 6 confirmed as needed:** the pedestrian walked into the stopped car in 6 runs.
+- **Open design point:** the best action here is almost always decidable at onset (which
+  side the pedestrian is on, how much warning), so these scenarios may not separate
+  lock_at_onset from per_tick. Re-aiming can only pay off when the best choice changes
+  after onset (a pedestrian who stops, turns back, or starts late).
+- **Evidence status: CONFIRMED for these scripted options; one episode per scenario,
+  deterministic.**
 
 ## Questions revealed by reconstruction
 

@@ -205,7 +205,41 @@ SUMMARY_COLUMNS = [
     "max_abs_route_lateral_m", "drivable_violation_ticks", "peak_decel_normal_speed_mps2",
     "max_abs_jerk_normal_speed_mps3", "onset_time_s", "legacy_label", "legacy_end_reason",
     "sensor_collision_ticks", "legacy_proximity_ticks", "geometric_contact_ticks", "physics_label",
+    # Steering mode (Phase 2); None for a braking-only policy. The first two are set by the evaluator.
+    "steer_commit", "fixed_u", "first_contact_time_s", "requested_side_reversals", "requested_offset_reversals",
+    "requested_side_reversals_moving", "requested_offset_reversals_moving",
 ]
+
+
+def parity_differences(env: dict, ref: dict, *, clearance_tol_m: float = 0.03, speed_tol_mps: float = 0.05,
+                       time_tol_s: float = 0.021) -> List[str]:
+    """Where an environment episode's encounter metrics differ from the
+    scripted test26 run of the same case; [] means parity (step 4 gate 3).
+
+    Always compared: the outcome and the speed at onset. For a contact: the
+    impact speed and its time after onset; nothing later, because CARLA's
+    car-pedestrian contact physics is not repeatable and the scripted
+    pedestrian does not react. Otherwise: the minimum clearance and the
+    largest lateral offset. time_tol_s is one 50 Hz tick."""
+    def gap(key):
+        a, b = env.get(key), ref.get(key)
+        return None if a is None or b is None else abs(a - b)
+
+    diffs = []
+    if env.get("outcome") != ref.get("outcome"):
+        diffs.append(f"outcome {env.get('outcome')} vs {ref.get('outcome')}")
+    checks = [("speed_at_onset_mps", speed_tol_mps)]
+    if ref.get("outcome") == "contact":
+        checks += [("contact_speed_mps", speed_tol_mps), ("first_contact_time_s", time_tol_s)]
+    else:
+        checks += [("min_clearance_m", clearance_tol_m), ("max_abs_route_lateral_m", clearance_tol_m)]
+    for key, tol in checks:
+        g = gap(key)
+        if g is None:
+            diffs.append(f"{key} missing ({env.get(key)} vs {ref.get(key)})")
+        elif g > tol:
+            diffs.append(f"{key} {env[key]:.4f} vs {ref[key]:.4f} (tolerance {tol})")
+    return diffs
 
 
 def summary_row(*, episode: int, cfg: ScenarioConfig, metrics: dict, stop_reason: str, legacy_label,

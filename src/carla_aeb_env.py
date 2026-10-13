@@ -89,6 +89,20 @@ from walker_utils import (
     destroy_scripted_walker,
 )
 from rl_reward_design import build_state_vector, compute_reward, STATE_DIM
+# Steering mode only (Phase 2; opt-in via steer_commit=...):
+from map_drivability import footprint_drivable
+from passage import Obstacle, passage_from_extent, predicted_lateral_at_arrival
+from passage_carla import passage_at_location
+from rl_steering import (
+    STEERING_STATE_DIM,
+    SteeringCommitment,
+    SteeringRewardConfig,
+    build_steering_observation,
+    compute_steering_reward,
+    frame_coordinates_m,
+    heading_error_rad,
+    split_action,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +171,9 @@ class CarlaAEBEnv(gymnasium.Env):
 
     # -----------------------------------------------------------------------
     def __init__(self, cfg: ScenarioConfig = None, config_fn=None,
-                 collision_signal: str = COLLISION_SIGNAL_LEGACY):
+                 collision_signal: str = COLLISION_SIGNAL_LEGACY,
+                 steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
+                 steering_reward: SteeringRewardConfig = None):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -175,6 +191,25 @@ class CarlaAEBEnv(gymnasium.Env):
                  adds oriented-footprint pedestrian contact in every direction
                  (catches the stationary/far-cross hits the sensor misses).
                  Every component is reported in info either way.
+            steer_commit: None (default) = last semester's braking-only
+                 environment, unchanged. "per_tick" or "lock_at_onset" turns
+                 on the Phase 2 STEERING MODE (rl_steering.py):
+                   - action = [brake, u]; observation = 14 values;
+                   - the hazard starts by script at the trigger ("oracle
+                     onset", as in test26), not by LiDAR detection, and the
+                     policy has no effect before it;
+                   - contact is the oriented-footprint check; the reward is
+                     compute_steering_reward;
+                   - the episode runs the full scoring window after onset
+                     unless there is contact (no ending at a full stop).
+                 "lock_at_onset" freezes the route (passage and lateral
+                 target) at onset; braking stays per tick.
+            u_bounds: (u_min, u_max) for the steering action. (0, 1) = right
+                 swerves only; (-1, 1) opens both sides.
+            lock_delay_s: lock_at_onset locks this long after onset
+                 instead of at onset (0 = at onset). For a walking
+                 pedestrian, who has no speed yet on the onset tick.
+            steering_reward: SteeringRewardConfig; None = its defaults.
         """
         super().__init__()
 
@@ -193,6 +228,17 @@ class CarlaAEBEnv(gymnasium.Env):
         self.action_space = Box(
             low=0.0, high=1.0, shape=(1,), dtype=np.float32
         )
+
+        # Steering mode (opt-in) replaces both spaces ------------------------
+        self._steer_commit = steer_commit
+        if steer_commit is not None:
+            self._u_min, self._u_max = u_bounds
+            self._lock_delay_ticks = int(round(lock_delay_s / FIXED_DT))
+            self._new_commitment()  # fail fast on a bad mode or delay
+            self._steering_reward = steering_reward or SteeringRewardConfig()
+            self.observation_space = Box(low=-1.0, high=1.0, shape=(STEERING_STATE_DIM,), dtype=np.float32)
+            self.action_space = Box(low=np.array([0.0, self._u_min], dtype=np.float32),
+                                    high=np.array([1.0, self._u_max], dtype=np.float32), dtype=np.float32)
 
         # CARLA handles (established once, kept alive across episodes) -------
         self._client = None
@@ -286,7 +332,10 @@ class CarlaAEBEnv(gymnasium.Env):
             info       (dict): reward breakdown + sim diagnostics
         """
         # --- Unpack action -------------------------------------------------
-        brake_override = float(np.clip(np.asarray(action).flat[0], 0.0, 1.0))
+        if self._steer_commit is None:
+            brake_override = float(np.clip(np.asarray(action).flat[0], 0.0, 1.0))
+        else:
+            brake_override, u_action = split_action(np.asarray(action).ravel(), u_min=self._u_min, u_max=self._u_max)
 
         # --- Advance simulation --------------------------------------------
         self._world.tick()
@@ -356,6 +405,15 @@ class CarlaAEBEnv(gymnasium.Env):
             t=self._tick,
         )
 
+        # --- Steering mode: route target + scripted hazard start ------------
+        steer_kwargs = {}
+        if self._steer_commit is not None:
+            passage_now, steer_obs = self._steering_measurements(ego_speed_mps)
+            target_m = self._commitment.target_offset_m(u_action, passage_now, triggered=self._triggered)
+            steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._triggered)
+            if not self._triggered:
+                brake_override = None  # before onset the policy has no effect: same control path as test26
+
         # --- Controller step with RL brake override ------------------------
         telemetry = lane_follow_step(
             self._world, self._vehicle,
@@ -373,6 +431,7 @@ class CarlaAEBEnv(gymnasium.Env):
             ramp_down_per_s=RAMP_DOWN_PER_S,
             brake_profile="proportional_ramp",   # ignored — rl_brake_override takes over
             rl_brake_override=brake_override,
+            **steer_kwargs,
         )
 
         # Store raw telemetry for external inspection (inspect_brake_curves.py etc.)
@@ -444,6 +503,13 @@ class CarlaAEBEnv(gymnasium.Env):
             clearance_m=ped_clearance_m,
         )
         collision_this_tick = collision_signals.collision
+
+        if self._steer_commit is not None:
+            return self._finish_steering_step(
+                sim_time_s=sim_time_s, ego_speed_mps=ego_speed_mps, d_min_ahead=d_min_ahead,
+                trigger_dist_now=trigger_dist_now, hazard_active=hazard_active, ttc_s=ttc_s,
+                brake_cmd_now=brake_cmd_now, drive_mode=drive_mode, collision_signals=collision_signals,
+                ped_xy=ped_xy, passage_now=passage_now, steer_obs=steer_obs, target_m=target_m, u_action=u_action)
 
         # --- Reward --------------------------------------------------------
         reward, breakdown = compute_reward(
@@ -519,6 +585,108 @@ class CarlaAEBEnv(gymnasium.Env):
             "post_trigger_timeout": post_trigger_timeout,
         }
 
+        return obs, float(reward), terminated, truncated, info
+
+    # -----------------------------------------------------------------------
+    # Steering mode (Phase 2, opt-in). Nothing below runs in the default mode.
+    # -----------------------------------------------------------------------
+
+    def _new_commitment(self):
+        return SteeringCommitment(self._steer_commit, u_min=self._u_min, u_max=self._u_max,
+                                  lock_delay_ticks=self._lock_delay_ticks)
+
+    def _setup_steering(self, carla_map, encounter_loc):
+        """Per-episode steering state. The road's width at the pedestrian's
+        line is scanned once here; the passage is rebuilt from it every tick
+        as the pedestrian's predicted position changes."""
+        self._map = carla_map
+        road, frame = passage_at_location(carla_map, encounter_loc)  # no obstacles: just the road extent
+        self._road_extent = (road.road_left_m, road.road_right_m)
+        self._frame_origin, self._frame_right = frame["origin_xyz"][:2], frame["right_xy"]
+        self._commitment = self._new_commitment()
+        self._min_clearance_m = None
+        self._went_off_road = False
+        self._prev_u_applied = 0.0
+
+    def _steering_measurements(self, ego_speed_mps):
+        """(passage, observation inputs) for this tick, all in the passage frame
+        anchored on the route at the pedestrian's line.
+        ponytail: one straight frame for the whole approach. Exact near the
+        line, where the policy acts; on a curved approach the far-away ego
+        lateral and heading error are approximate. Use route-relative values
+        if a curved location is ever trained on."""
+        tf = self._vehicle.get_transform()
+        ego_along, ego_lateral = frame_coordinates_m(self._frame_origin, self._frame_right,
+                                                     (tf.location.x, tf.location.y))
+        ped_loc, ped_vel = self._walker.get_location(), self._walker.get_velocity()
+        _, ped_lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (ped_loc.x, ped_loc.y))
+        ped_lateral_speed = ped_vel.x * self._frame_right[0] + ped_vel.y * self._frame_right[1]
+        distance = -ego_along
+        predicted = predicted_lateral_at_arrival(ped_lateral, ped_lateral_speed, distance, ego_speed_mps)
+        passage = passage_from_extent(*self._road_extent, [Obstacle(predicted)])
+        return (None if passage.road_left_m is None else passage), dict(
+            pedestrian_lateral_m=predicted, pedestrian_lateral_speed_mps=ped_lateral_speed,
+            distance_to_pedestrian_line_m=distance, ego_lateral_m=ego_lateral,
+            heading_error_rad=heading_error_rad(tf.rotation.yaw, self._frame_right))
+
+    def _steering_obs(self, base_obs, passage_now, steer_obs):
+        return np.array(build_steering_observation(
+            [float(v) for v in base_obs], passage=self._commitment.observed_passage(passage_now),
+            previous_u=self._commitment.u_applied, **steer_obs), dtype=np.float32)
+
+    def _finish_steering_step(self, *, sim_time_s, ego_speed_mps, d_min_ahead, trigger_dist_now, hazard_active,
+                              ttc_s, brake_cmd_now, drive_mode, collision_signals, ped_xy, passage_now, steer_obs,
+                              target_m, u_action):
+        """Reward, termination, observation and info for one steering-mode tick."""
+        contact = collision_signals.geometric_contact
+        tf = self._vehicle.get_transform()
+        on_road, _ = footprint_drivable(self._map, tf.location.x, tf.location.y, tf.rotation.yaw, tf.location.z)
+        off_road = self._triggered and on_road is False
+        self._went_off_road = self._went_off_road or off_road
+        clearance = collision_signals.clearance_m
+        if self._triggered and clearance is not None and (
+                self._min_clearance_m is None or clearance < self._min_clearance_m):
+            self._min_clearance_m = clearance
+        window_ended = (self._triggered and not contact
+                        and sim_time_s >= self._trigger_time_s + self._steering_reward.window_s - 1e-9)
+        lateral_accel = ego_speed_mps * math.radians(self._vehicle.get_angular_velocity().z)
+
+        reward, breakdown = compute_steering_reward(
+            contact_this_tick=contact, ego_speed_mps=ego_speed_mps, off_road_this_tick=off_road,
+            window_ended=window_ended, min_clearance_m=self._min_clearance_m, went_off_road=self._went_off_road,
+            jerk_mps3=self._jerk, brake_cmd_this_tick=brake_cmd_now, brake_cmd_prev_tick=self._prev_brake_cmd,
+            lateral_accel_mps2=lateral_accel, hazard_active=self._triggered, fixed_dt=FIXED_DT,
+            u_this_tick=self._commitment.u_applied, u_prev_tick=self._prev_u_applied,
+            config=self._steering_reward,
+        )
+        self._prev_brake_cmd = brake_cmd_now
+        self._prev_u_applied = self._commitment.u_applied
+
+        terminated = contact
+        truncated = window_ended or (self._tick >= self._total_ticks)
+        obs = self._steering_obs(
+            self._build_obs(ego_speed_mps, d_min_ahead, trigger_dist_now, hazard_active, ttc_s), passage_now, steer_obs)
+        shown = self._commitment.observed_passage(passage_now)
+        info = {
+            "r_safety": breakdown["r_safety"], "r_comfort": breakdown["r_comfort"], "r_efficiency": 0.0,
+            "r_contact": breakdown["r_contact"], "r_off_road": breakdown["r_off_road"],
+            "r_clearance": breakdown["r_clearance"],
+            "ttc_s": ttc_s, "jerk_mps3": self._jerk, "drive_mode": drive_mode,
+            "tick": self._tick, "sim_time_s": sim_time_s,
+            **collision_signals.to_info(),
+            "collision": contact,  # steering mode: the oriented-footprint check decides
+            "ego_speed_mps": ego_speed_mps, "pedestrian_x_m": ped_xy[0], "pedestrian_y_m": ped_xy[1],
+            "triggered": self._triggered, "trigger_time_s": self._trigger_time_s,
+            "full_stop_achieved": self._full_stop_achieved, "ped_crossed": False, "post_trigger_timeout": False,
+            "steer_commit": self._steer_commit, "u_action": u_action, "u_applied": self._commitment.u_applied,
+            "route_locked": self._commitment.locked, "requested_lateral_offset_m": target_m,
+            "passage_left_edge_m": None if shown is None else shown.left_edge_m,
+            "passage_right_edge_m": None if shown is None else shown.right_edge_m,
+            "missing_passage_ticks": self._commitment.missing_passage_ticks,
+            "off_road": off_road, "went_off_road": self._went_off_road, "footprint_on_road": on_road,
+            "min_clearance_m": self._min_clearance_m, "lateral_accel_mps2": lateral_accel,
+            "window_ended": window_ended, **steer_obs,
+        }
         return obs, float(reward), terminated, truncated, info
 
     def close(self):
@@ -649,19 +817,25 @@ class CarlaAEBEnv(gymnasium.Env):
         self._full_stop_achieved      = False
         self._hazard_engaged_once     = False
 
+        if self._steer_commit is not None:
+            self._setup_steering(carla_map, encounter_wp.transform.location)
+
         # Tick once to let CARLA settle the newly spawned actors
         self._world.tick()
 
     def _get_obs(self):
         """Return the current observation as a float32 numpy array."""
         ego_speed_mps = get_speed_mps(self._vehicle) if self._vehicle else 0.0
-        return self._build_obs(
+        base_obs = self._build_obs(
             ego_speed_mps=ego_speed_mps,
             d_min_ahead=None,
             trigger_distance_m=20.0,
             hazard_active=False,
             ttc_s=float("inf"),
         )
+        if self._steer_commit is not None:
+            return self._steering_obs(base_obs, *self._steering_measurements(ego_speed_mps))
+        return base_obs
 
     def _build_obs(self, ego_speed_mps, d_min_ahead, trigger_distance_m, hazard_active, ttc_s):
         """Build and return the normalized 6-float state vector."""

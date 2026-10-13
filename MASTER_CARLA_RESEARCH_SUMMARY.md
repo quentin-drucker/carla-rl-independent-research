@@ -2498,6 +2498,24 @@ named in `steering_train/eval_<mode>_s<seed>_1m_<50k|150k>.log`):
 - **Evidence status: PRELIMINARY** (3 seeds, 12 test cases with one episode each,
   stationary pedestrian).
 
+**Finer test grid, 2026-10-13: 60 cases (30-50 mph x TTC 0.4-1.5 s) for all 12 trained
+150k policies, plus a scripted reference** (evidence folders named in
+`src/runs/steering_train/grid_<tag>.log`; scored with protocol v3, which adds the
+commitment counts taken only while the car is moving):
+- **Full braking alone is safe in 15 of 60 cases; full braking with the maximum swerve in
+  55 of 60 (it fails only at TTC 0.4 s). 10 of the 12 policies reach that 55.**
+- **Three avoidable hits appear, all in lock_at_onset trained with the 1.0 m target:**
+  seed 2 at 50 mph / 1.4 s (locked u = 0.14), and seed 3 at 30 and 35 mph / 0.5 s
+  (locked u = 0.06 and 0.17). lock_at_onset at 0.5 m is clean in 3 of 3 seeds and
+  per_tick in 6 of 6. The 12-case grid had missed these. Cause not established; lock
+  makes one choice from one observation, so a locally wrong choice is final.
+- With the 1.0 m target per_tick no longer passes closer than 1.0 m where more room is
+  possible (5/5/5 such passes per seed, all in the TTC 0.5 s row where it is unavoidable,
+  against 9/7/5 before). lock_at_onset is unchanged (10/6/5 against 9/6/5).
+- **Commitment while moving: lock 0 re-aims; per_tick a median of 32/65/18 per episode
+  without the aim penalty and 28/24/12 with it.**
+- **Evidence status: PRELIMINARY** (3 seeds per setting, stationary pedestrian).
+
 ---
 
 # Tentative and Inconclusive Findings

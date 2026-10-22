@@ -3542,8 +3542,21 @@ classical controller takes over: hazard mode ends (cruise resumes through lane_f
 RECOVER -> CRUISE) and the lateral target returns to the route center along a smoothstep
 at no more than 1.5 m/s (at least 2 s). Hazard-generic, so a parked car can reuse it
 (`src/merge_back.py`, `--merge-back`, default off). The policy is charged no comfort terms
-for the return. Open: a car that stops before passing the hazard never sees it "behind",
-so it waits; a resume rule is the next decision.
+for the return.
+
+**Drive on after stopping (Quentin, 2026-10-22).** A car that stopped (<= 0.5 m/s) beside
+or before the hazard drives on along its swerve path once that path is clear: the strip from
+where the car is to where it aims, body edge to hazard edge >= 1.0 m now and over the next
+2 s at the hazard's current lateral speed (confirmed 0.5 s). Hazard mode ends and the swerve
+offset is held until the hazard is behind the car; then the return above. If the path is
+blocked again while driving on, hazard mode returns (brake, policy in control). Principle:
+the path the car is currently on is the path monitored for hazards; later a second hazard on
+the swerve or return path should trigger the same logic, branching into a new swerve if
+needed. A moving car keeps policy control, so the rule never overrides an avoidance.
+Live check (54 scripted episodes): 44 complete swerve -> drive on -> return to 0.00 m at
+cruise speed with no road departure or contact; safety unchanged (50/54); the other 10 wait
+because a pedestrian who finished crossing stands beside the swerve path while the lane is
+clear (a direct return to the lane is the next refinement).
 
 ## Questions revealed by reconstruction
 

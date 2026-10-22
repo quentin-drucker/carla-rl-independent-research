@@ -432,13 +432,15 @@ class CarlaAEBEnv(gymnasium.Env):
             if self._merge_back is not None and self._triggered:
                 ped = self._walker.get_location()
                 _, ped_lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (ped.x, ped.y))
-                path_clear = path_clear_of_hazard(  # the car's CURRENT path: from where it is to where it aims
-                    path_lo_m=steer_obs["ego_lateral_m"], path_hi_m=self._merge_back.aim_m(target_m),
-                    hazard_lateral_m=ped_lateral, hazard_lateral_speed_mps=steer_obs["pedestrian_lateral_speed_mps"],
-                    hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M)
+                def clear_to(aim_m):  # the strip from where the car is to aim_m
+                    return path_clear_of_hazard(
+                        path_lo_m=steer_obs["ego_lateral_m"], path_hi_m=aim_m, hazard_lateral_m=ped_lateral,
+                        hazard_lateral_speed_mps=steer_obs["pedestrian_lateral_speed_mps"],
+                        hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M)
                 target_m, self._hazard_on = self._merge_back.update(
                     sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m,
-                    path_clear=path_clear, ego_stopped=ego_speed_mps <= DRIVE_ON_SPEED_MPS)
+                    path_clear=clear_to(self._merge_back.aim_m(target_m)), lane_clear=clear_to(0.0),
+                    ego_stopped=ego_speed_mps <= DRIVE_ON_SPEED_MPS, ego_lateral_m=steer_obs["ego_lateral_m"])
             steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._hazard_on)
             if not self._hazard_on:
                 brake_override = None  # before onset / after merge-back starts the policy has no effect

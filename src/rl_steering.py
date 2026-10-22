@@ -216,19 +216,25 @@ PASS_BEHIND_SPEED_MPS = 0.3  # sideways speed below this counts as standing
 def pass_behind_u(observation: Sequence[float]) -> float:
     """Week 7 scripted replanner (run per_tick, it re-decides as the
     pedestrian changes): pass BEHIND the pedestrian with right-only steering.
-    Walking left -> u = 1 (the far right opens up behind them); walking right,
+    In order: already right of where they will be -> u = 1 (never cut back
+    across them); walking left -> u = 1 if they will reach the car's path
+    (the far right opens up behind them), else hold the lane; walking right,
     toward the escape side -> u = 0 (the lane opens up behind them); standing
     -> swerve right only if they stand in the car's path. Reads only what the
-    policy sees; no prediction of the car's own braking (the Week 5 aim rule's
-    weakness)."""
-    speed = observation[STATE_DIM + STEERING_STATE_NAMES.index("pedestrian_lateral_speed_norm")] \
-        * PEDESTRIAN_SPEED_SCALE_MPS
-    if speed < -PASS_BEHIND_SPEED_MPS:
+    policy sees."""
+    def value(name, scale):
+        return observation[STATE_DIM + STEERING_STATE_NAMES.index(name)] * scale
+
+    speed = value("pedestrian_lateral_speed_norm", PEDESTRIAN_SPEED_SCALE_MPS)
+    predicted_m = value("pedestrian_lateral_norm", LATERAL_SCALE_M)
+    ego_m = value("ego_lateral_norm", LATERAL_SCALE_M)
+    reach_m = Obstacle(0.0).radius_m + EGO_HALF_WIDTH_M + DEFAULT_SIDE_MARGIN_M
+    if ego_m > predicted_m:
         return 1.0
+    if speed < -PASS_BEHIND_SPEED_MPS:
+        return 1.0 if predicted_m < ego_m + reach_m else 0.0
     if speed > PASS_BEHIND_SPEED_MPS:
         return 0.0
-    predicted_m = observation[STATE_DIM + STEERING_STATE_NAMES.index("pedestrian_lateral_norm")] * LATERAL_SCALE_M
-    reach_m = Obstacle(0.0).radius_m + EGO_HALF_WIDTH_M + DEFAULT_SIDE_MARGIN_M
     return 1.0 if abs(predicted_m) < reach_m else 0.0
 
 

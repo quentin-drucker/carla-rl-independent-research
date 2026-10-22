@@ -191,13 +191,16 @@ class ObservationTests(unittest.TestCase):
                                                                              [Obstacle(1.6)]))), 0.0)
 
     def test_pass_behind_rule_aims_away_from_where_the_pedestrian_is_heading(self):
-        def u(lat, speed):
-            return pass_behind_u(self._obs(pedestrian_lateral_m=lat, pedestrian_lateral_speed_mps=speed))
-        self.assertEqual(u(1.0, -1.8), 1.0)    # walking left: the far right opens up behind them
+        def u(lat, speed, ego=0.0):
+            return pass_behind_u(self._obs(pedestrian_lateral_m=lat, pedestrian_lateral_speed_mps=speed,
+                                           ego_lateral_m=ego))
+        self.assertEqual(u(1.0, -1.8), 1.0)    # walking left into the car's path: go behind them on the right
+        self.assertEqual(u(2.2, -1.8), 0.0)    # walking left but not in the car's path by arrival: hold the lane
         self.assertEqual(u(1.0, 1.8), 0.0)     # turned back toward the escape side: hold the lane
+        self.assertEqual(u(2.0, 1.8, ego=2.5), 1.0)  # ...unless already right of them: never cut back across
         self.assertEqual(u(2.55, 0.0), 0.0)    # standing beside the lane: hold the lane
         self.assertEqual(u(0.5, 0.1), 1.0)     # standing in the car's path: go around on the right
-        self.assertEqual(u(-2.55, 0.2), 0.0)   # standing off to the left
+        self.assertEqual(u(-2.55, 0.2), 1.0)   # standing off to the left, car already right of them
 
     def test_wrong_base_length_rejected(self):
         with self.assertRaises(ValueError):

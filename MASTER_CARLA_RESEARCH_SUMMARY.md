@@ -3558,6 +3558,22 @@ cruise speed with no road departure or contact; safety unchanged (50/54); the ot
 because a pedestrian who finished crossing stands beside the swerve path while the lane is
 clear (a direct return to the lane is the next refinement).
 
+**Direct return and its live check (2026-10-22).** Added: a stopped car whose swerve path is
+blocked but whose path back to the lane center is clear returns to the lane from its actual
+position (the swerve path is preferred when both are clear). Live re-check of the same 54
+cases: unchanged (44 complete, 10 wait, 52/54 safe under v4). **Correction: in the 10 waiting
+cases the pedestrian stands between the car and its lane, in 7 of them 0-0.4 m from the car's
+side; driving on or returning would both pass a person within the 1 m margin, so waiting is
+correct.** The cause is that the scripted "far" crossing ends inside the adjacent lane
+(+/-2.55 m) and the pedestrian stands there for good, in the lane the car swerved into;
+letting crossings continue to the curb is the proposed fix.
+
+**Merge-back training (2026-10-22).** The same walking 50k pair retrained with `--merge-back`:
+per_tick 112/120 safe (v4), lock_at_onset 92/120 (still 32/60 for the pedestrian from the
+right); scripted references identical to the runs without merge-back (brake u = 1 114/120).
+Merge-back costs no safety. Many returns are still in progress when the 8 s scoring window
+ends; the cars still in "avoiding" are almost all the waiting case above.
+
 ## Questions revealed by reconstruction
 
 1. What is SAC's true full-stop rate under the same three-second tail as fixed profiles?

@@ -85,6 +85,7 @@ def _parse_args(argv=None):
     p.add_argument("--ttc-range", type=float, nargs=2, default=list(TTC_RANGE_S), metavar=("LO", "HI"))
     p.add_argument("--lock-delay-s", type=float, default=0.0, help="lock_at_onset locks this long after onset")
     p.add_argument("--road-right-limit-m", type=float, help="cap the passage's right road edge (default: whole road)")
+    p.add_argument("--merge-back", action="store_true", help="return to the lane once the hazard is clear behind the car")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--relaunch-carla", action="store_true",
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and continue")
@@ -235,6 +236,7 @@ def main(argv=None):
             "scenario": "steer_brake_baseline.baseline_scenario_config (Town04)", "walkers": args.walker,
             "walker_speed_mps": args.walker_speed, "walker_change_s": args.walker_change_s,
             "lock_delay_s": args.lock_delay_s, "road_right_limit_m": args.road_right_limit_m,
+            "merge_back": args.merge_back,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -259,7 +261,8 @@ def main(argv=None):
         # identical to an uninterrupted one.
         # .get(): Week 5 manifests predate these keys and mean the stationary defaults.
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
-                          road_right_limit_m=manifest.get("road_right_limit_m"))
+                          road_right_limit_m=manifest.get("road_right_limit_m"),
+                          merge_back=manifest.get("merge_back", False))
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),

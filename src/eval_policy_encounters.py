@@ -120,6 +120,8 @@ def _parse_args(argv=None):
                         "(default: steer_brake_baseline.DEFAULT_WALKER_CHANGE_S)")
     p.add_argument("--lock-delay-s", type=float, default=0.0,
                    help="lock_at_onset locks this long after onset (walking pedestrians: 0.2)")
+    p.add_argument("--road-right-limit-m", type=float,
+                   help="cap the passage's right road edge (4.5 = adjacent lane only); default: whole road")
     p.add_argument("--parity-with", metavar="TEST26_SWEEP",
                    help="compare each fixed-action episode with the scripted test26 run of the same case")
     p.add_argument("--sweep-csv", help="sweep_summary.csv for --suite sweep")
@@ -316,7 +318,7 @@ def main(argv=None):
         model = SAC.load(model_path)
         episodes = [(cfg, None, model) for cfg in configs]
     env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit,
-                      lock_delay_s=args.lock_delay_s)
+                      lock_delay_s=args.lock_delay_s, road_right_limit_m=args.road_right_limit_m)
     try:
         if model is not None and model.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {model.observation_space.shape} != env "
@@ -340,6 +342,7 @@ def main(argv=None):
             "model_observation_shape": list(env.observation_space.shape),
             "model_action_shape": list(env.action_space.shape),
             "steer_commit": args.steer_commit, "lock_delay_s": args.lock_delay_s,
+            "road_right_limit_m": args.road_right_limit_m,
             "fixed_brake": args.fixed_brake if (args.fixed_u or args.scripted_aim) else None,
             "fixed_u": args.fixed_u, "scripted_aim": args.scripted_aim, "parity_with": args.parity_with,
             "physics_backend": BACKEND_DEFAULT,

@@ -174,7 +174,7 @@ class CarlaAEBEnv(gymnasium.Env):
     def __init__(self, cfg: ScenarioConfig = None, config_fn=None,
                  collision_signal: str = COLLISION_SIGNAL_LEGACY,
                  steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
-                 steering_reward: SteeringRewardConfig = None):
+                 steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -211,6 +211,10 @@ class CarlaAEBEnv(gymnasium.Env):
                  instead of at onset (0 = at onset). For a walking
                  pedestrian, who has no speed yet on the onset tick.
             steering_reward: SteeringRewardConfig; None = its defaults.
+            road_right_limit_m: caps the passage's right road edge at this
+                 route-relative lateral (e.g. 4.5 = the adjacent lane's far
+                 edge, so u = 1 aims at the adjacent lane, not three lanes
+                 over). None (default) = the whole drivable road.
         """
         super().__init__()
 
@@ -235,6 +239,7 @@ class CarlaAEBEnv(gymnasium.Env):
         if steer_commit is not None:
             self._u_min, self._u_max = u_bounds
             self._lock_delay_ticks = int(round(lock_delay_s / FIXED_DT))
+            self._road_right_limit_m = road_right_limit_m
             self._new_commitment()  # fail fast on a bad mode or delay
             self._steering_reward = steering_reward or SteeringRewardConfig()
             self.observation_space = Box(low=-1.0, high=1.0, shape=(STEERING_STATE_DIM,), dtype=np.float32)
@@ -605,7 +610,10 @@ class CarlaAEBEnv(gymnasium.Env):
         as the pedestrian's predicted position changes."""
         self._map = carla_map
         road, frame = passage_at_location(carla_map, encounter_loc)  # no obstacles: just the road extent
-        self._road_extent = (road.road_left_m, road.road_right_m)
+        right = road.road_right_m
+        if right is not None and self._road_right_limit_m is not None:
+            right = min(right, self._road_right_limit_m)
+        self._road_extent = (road.road_left_m, right)
         self._frame_origin, self._frame_right = frame["origin_xyz"][:2], frame["right_xy"]
         self._commitment = self._new_commitment()
         self._min_clearance_m = None

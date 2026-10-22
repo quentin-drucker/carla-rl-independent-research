@@ -93,6 +93,7 @@ from rl_reward_design import build_state_vector, compute_reward, STATE_DIM
 from map_drivability import footprint_drivable
 from passage import Obstacle, passage_from_extent, predicted_lateral_at_arrival
 from passage_carla import passage_at_location
+from walker_script import WalkerScript
 from rl_steering import (
     STEERING_STATE_DIM,
     SteeringCommitment,
@@ -255,6 +256,7 @@ class CarlaAEBEnv(gymnasium.Env):
         # Per-tick state (initialized in _setup_episode) --------------------
         self._speed_state      = {}
         self._crossing_state   = None
+        self._walker_script    = None
         self._tick             = 0
 
         # LiDAR frame cache
@@ -377,7 +379,9 @@ class CarlaAEBEnv(gymnasium.Env):
             if self._trigger_time_s is not None and (sim_time_s - self._trigger_time_s) >= cfg.walker_post_trigger_delay_s:
                 self._crossing_motion_started = True
 
-        if self._crossing_motion_started:
+        if self._crossing_motion_started and self._walker_script is not None:
+            self._step_walker_script(sim_time_s - self._trigger_time_s)
+        elif self._crossing_motion_started:
             update_scripted_crossing(self._walker, self._crossing_state, fixed_dt=FIXED_DT)
 
         # Refresh debug markers each tick so they expire the moment this episode
@@ -686,8 +690,21 @@ class CarlaAEBEnv(gymnasium.Env):
             "off_road": off_road, "went_off_road": self._went_off_road, "footprint_on_road": on_road,
             "min_clearance_m": self._min_clearance_m, "lateral_accel_mps2": lateral_accel,
             "window_ended": window_ended, **steer_obs,
+            "walker_phase": None if self._walker_script is None else self._walker_script.index,
         }
         return obs, float(reward), terminated, truncated, info
+
+    @property
+    def walker_transitions(self):
+        """The scripted walker's phase changes this episode (walker_script.py), or None."""
+        return None if self._walker_script is None else list(self._walker_script.transitions)
+
+    def _step_walker_script(self, t_since_onset_s):
+        (ox, oy), (rx, ry) = self._walker_line
+        loc = self._walker.get_location()
+        direction, speed = self._walker_script.step(t_since_onset_s, (loc.x - ox) * rx + (loc.y - oy) * ry)
+        self._walker.apply_control(carla.WalkerControl(  # type: ignore[attr-defined]
+            direction=carla.Vector3D(x=rx * direction, y=ry * direction, z=0.0), speed=speed, jump=False))
 
     def close(self):
         """Tear down all CARLA actors and restore async mode."""
@@ -775,6 +792,13 @@ class CarlaAEBEnv(gymnasium.Env):
             end_loc=self._walker_end_loc,
             speed_mps=cfg.walker_speed_mps,
         )
+        self._walker_script = None
+        if cfg.walker_script is not None:  # Week 7: behavior that changes after onset
+            start_lat, _ = crossing_lateral_offsets_m(side=cfg.walker_side, cross=cfg.walker_cross,
+                                                      lane_width_m=LANE_WIDTH_M)
+            self._walker_script = WalkerScript(cfg.walker_script, start_lateral_m=start_lat)
+            center, right = encounter_wp.transform.location, encounter_wp.transform.get_right_vector()
+            self._walker_line = ((center.x, center.y), (right.x, right.y))
 
         # Controller state dict (mirrors test3's speed_state)
         self._speed_state = {

@@ -44,11 +44,14 @@ from pedestrian_contact import (
 from physics_harness import LOW_SPEED_ARTIFACT_THRESHOLD_MPS
 from route_recovery import PhysicalRouteReturnTracker
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 # v2 (2026-10-05): adds the steering-commitment metrics; v1 outcomes and
 # metrics are unchanged.
 # v3 (2026-10-13): adds the commitment metrics counted only while the car is
 # moving; every v2 metric is unchanged.
+# v4 (2026-10-21): adds contact_cause / outcome_v4 / ego_safe_success, which
+# report a pedestrian walking into an already-stopped car separately; every
+# v3 field (outcome and safe_success included) is unchanged.
 
 OUTCOME_NO_ONSET = "no_onset"
 OUTCOME_CONTACT = "contact"
@@ -56,6 +59,10 @@ OUTCOME_PASSED_CLEAR = "passed_clear"
 OUTCOME_STOPPED_CLEAR = "stopped_clear"
 OUTCOME_UNRESOLVED = "unresolved_at_horizon"
 OUTCOME_INCOMPLETE = "incomplete_window"
+OUTCOME_PEDESTRIAN_INTO_STOPPED_EGO = "pedestrian_into_stopped_ego"  # outcome_v4 only
+
+CONTACT_CAUSE_EGO = "ego"
+CONTACT_CAUSE_PEDESTRIAN = "pedestrian"
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,11 @@ class EncounterProtocol:
     # The *_moving commitment counts use only ticks faster than this: once
     # the car has stopped, changing the aim does nothing, and counting it
     # made a parked car look like a twitching one (MASTER, Week 5 step 5).
+    stopped_contact_speed_mps: float = 0.5
+    # v4: a first contact at or below this ego speed is the pedestrian's if
+    # their motion, not the car's, closed the gap (see contact_cause).
+    contact_cause_window_s: float = 0.5
+    # v4: how far before first contact the closing motion is compared.
     protocol_version: int = PROTOCOL_VERSION
 
     def __post_init__(self):
@@ -160,6 +172,18 @@ class EncounterMetrics:
     # The same two counts over only the ticks where the car is moving
     # (protocol.moving_speed_threshold_mps). These are the ones to report.
 
+    # v4: who closed the gap at first contact (None = no contact). "pedestrian"
+    # only when the car was at or below protocol.stopped_contact_speed_mps and
+    # the pedestrian's own motion did more of the closing than the car's: a
+    # scripted pedestrian never avoids anything, so walking into a stopped
+    # car is not the driving policy's hit. A slow creep into a standing
+    # pedestrian stays "ego". outcome / safe_success above do NOT use this.
+    contact_cause: Optional[str] = None
+    outcome_v4: Optional[str] = None
+    # = outcome, except OUTCOME_PEDESTRIAN_INTO_STOPPED_EGO for a "pedestrian" contact.
+    ego_safe_success: Optional[bool] = None
+    # safe_success, but a "pedestrian" contact does not fail it.
+
     protocol: Optional[dict] = None
 
     def to_dict(self) -> dict:
@@ -212,6 +236,28 @@ def count_direction_reversals(values: Sequence[float], threshold: float) -> int:
     return reversals
 
 
+def classify_contact_cause(before, at_contact, contact_speed_mps: float,
+                           protocol: "EncounterProtocol" = None) -> str:
+    """CONTACT_CAUSE_PEDESTRIAN or CONTACT_CAUSE_EGO for a first contact.
+    before / at_contact: TraceTick rows protocol.contact_cause_window_s apart
+    (or less, at the start of the window). The gap closed by each party is
+    measured with the other held where it was at `before`."""
+    protocol = protocol or EncounterProtocol()
+    if contact_speed_mps > protocol.stopped_contact_speed_mps:
+        return CONTACT_CAUSE_EGO
+
+    def clearance(ego, ped):
+        return compute_oriented_ego_pedestrian_clearance_m(
+            ego_x_m=ego.pos_x_m, ego_y_m=ego.pos_y_m, ego_yaw_deg=ego.yaw_deg,
+            pedestrian_x_m=ped.pedestrian_x_m, pedestrian_y_m=ped.pedestrian_y_m,
+            pedestrian_radius_m=protocol.pedestrian_radius_m)
+
+    start = clearance(before, before)
+    closed_by_pedestrian = start - clearance(before, at_contact)
+    closed_by_ego = start - clearance(at_contact, before)
+    return CONTACT_CAUSE_PEDESTRIAN if closed_by_pedestrian > closed_by_ego else CONTACT_CAUSE_EGO
+
+
 def compute_encounter_metrics(
     ticks: Sequence,
     *,
@@ -229,7 +275,8 @@ def compute_encounter_metrics(
 
     base = dict(onset_time_s=onset_time_s, horizon_s=protocol.horizon_s, protocol=asdict(protocol))
     if onset_time_s is None or not rows:
-        return EncounterMetrics(outcome=OUTCOME_NO_ONSET, safe_success=False, window_complete=False, **base)
+        return EncounterMetrics(outcome=OUTCOME_NO_ONSET, safe_success=False, window_complete=False,
+                               outcome_v4=OUTCOME_NO_ONSET, ego_safe_success=False, **base)
 
     end_time_s = onset_time_s + protocol.horizon_s
     eps = 1e-6
@@ -237,7 +284,8 @@ def compute_encounter_metrics(
         (i, r) for i, r in enumerate(rows) if onset_time_s - eps <= r.sim_time_s <= end_time_s + eps
     ]
     if not window:
-        return EncounterMetrics(outcome=OUTCOME_NO_ONSET, safe_success=False, window_complete=False, **base)
+        return EncounterMetrics(outcome=OUTCOME_NO_ONSET, safe_success=False, window_complete=False,
+                               outcome_v4=OUTCOME_NO_ONSET, ego_safe_success=False, **base)
     dt_guess = (rows[-1].sim_time_s - rows[0].sim_time_s) / max(1, len(rows) - 1)
     window_complete = rows[-1].sim_time_s >= end_time_s - 0.5 * dt_guess
 
@@ -281,6 +329,12 @@ def compute_encounter_metrics(
                 if m.first_contact_time_s is None:
                     m.first_contact_time_s = t_rel
                     m.contact_speed_mps = r.speed_mps
+                    # ponytail: only the FIRST contact is classified; a car that is walked into and
+                    # then drives on into the pedestrian keeps "pedestrian". Classify every contact
+                    # run if that ever shows up in a trace.
+                    before = next(b for _, b in window if b.pedestrian_x_m is not None
+                                  and b.sim_time_s >= r.sim_time_s - protocol.contact_cause_window_s - eps)
+                    m.contact_cause = classify_contact_cause(before, r, r.speed_mps, protocol)
             if not m.passed and _pedestrian_longitudinal_m(r) < behind_threshold_m:
                 m.passed = True
                 m.pass_time_s = t_rel
@@ -347,6 +401,9 @@ def compute_encounter_metrics(
         m.outcome in (OUTCOME_PASSED_CLEAR, OUTCOME_STOPPED_CLEAR)
         and not (violation_ticks or 0)
     )
+    pedestrian_caused = m.contact_cause == CONTACT_CAUSE_PEDESTRIAN
+    m.outcome_v4 = OUTCOME_PEDESTRIAN_INTO_STOPPED_EGO if pedestrian_caused else m.outcome
+    m.ego_safe_success = m.safe_success or (pedestrian_caused and window_complete and not (violation_ticks or 0))
     return m
 
 
@@ -359,7 +416,8 @@ def summarize_for_console(m: EncounterMetrics) -> List[str]:
         f"outcome={m.outcome} safe_success={m.safe_success} window_complete={m.window_complete}",
         f"onset speed {f(m.speed_at_onset_mps)} m/s | min clearance {f(m.min_clearance_m)} m "
         f"at +{f(m.min_clearance_time_s)} s ({f(m.speed_at_min_clearance_mps)} m/s)",
-        f"contact ticks {m.contact_ticks} (first +{f(m.first_contact_time_s)} s at {f(m.contact_speed_mps)} m/s)",
+        f"contact ticks {m.contact_ticks} (first +{f(m.first_contact_time_s)} s at {f(m.contact_speed_mps)} m/s, "
+        f"cause {m.contact_cause}) | v4: {m.outcome_v4} ego_safe_success={m.ego_safe_success}",
         f"stop: {m.stopped} in {f(m.time_to_stop_s)} s over {f(m.stopping_distance_m)} m | "
         f"passed: {m.passed} at +{f(m.pass_time_s)} s ({f(m.speed_when_passing_mps)} m/s)",
         f"lateral max {f(m.max_abs_route_lateral_m)} m final {f(m.final_route_lateral_m, '+.2f')} m "

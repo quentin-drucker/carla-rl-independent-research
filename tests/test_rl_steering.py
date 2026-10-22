@@ -20,6 +20,7 @@ from rl_steering import (  # noqa: E402
     compute_steering_reward,
     frame_coordinates_m,
     heading_error_rad,
+    pass_behind_u,
     policy_should_act,
     split_action,
 )
@@ -188,6 +189,15 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(clear_predicted_u(self._obs(pedestrian_lateral_m=1.6,   # no room left on the right
                                                      passage=compute_passage(lambda lat: -5.25 <= lat <= 4.0,
                                                                              [Obstacle(1.6)]))), 0.0)
+
+    def test_pass_behind_rule_aims_away_from_where_the_pedestrian_is_heading(self):
+        def u(lat, speed):
+            return pass_behind_u(self._obs(pedestrian_lateral_m=lat, pedestrian_lateral_speed_mps=speed))
+        self.assertEqual(u(1.0, -1.8), 1.0)    # walking left: the far right opens up behind them
+        self.assertEqual(u(1.0, 1.8), 0.0)     # turned back toward the escape side: hold the lane
+        self.assertEqual(u(2.55, 0.0), 0.0)    # standing beside the lane: hold the lane
+        self.assertEqual(u(0.5, 0.1), 1.0)     # standing in the car's path: go around on the right
+        self.assertEqual(u(-2.55, 0.2), 0.0)   # standing off to the left
 
     def test_wrong_base_length_rejected(self):
         with self.assertRaises(ValueError):

@@ -85,6 +85,12 @@ class ScenarioConfig:
     # Additional pause between the trigger event and the first walker
     # motion step. Separate from walker_startup_s. Usually 0.
 
+    walker_script: Optional[list] = None
+    # Week 7: phases that change the pedestrian's behavior after onset
+    # (walker_script.py: walk / wait, turn back, start late). The walker
+    # starts at walker_side's crossing start (walker_cross "far" or "near"
+    # only sets that start). None = the plain crossing above, unchanged.
+
     # ------------------------------------------------------------------
     # Ego vehicle parameters
     # ------------------------------------------------------------------

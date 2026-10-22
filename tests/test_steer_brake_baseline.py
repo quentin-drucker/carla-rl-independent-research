@@ -137,6 +137,24 @@ class PassageSweepTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             baseline_scenario_config(35.0, 1.2, walker="sideways")
 
+    def test_dynamic_pairs_behave_identically_until_the_change(self):
+        from steer_brake_baseline import DYNAMIC_WALKER_PAIRS
+        from walker_script import WalkerScript
+        self.assertIsNone(baseline_scenario_config(35.0, 1.2, walker="right_far").walker_script)  # old cases unchanged
+        for a, b in DYNAMIC_WALKER_PAIRS:
+            paths = []
+            for walker in (a, b):
+                cfg = baseline_scenario_config(40.0, 0.9, walker=walker, walker_speed_mps=1.2, walker_change_s=0.7)
+                self.assertEqual((cfg.walker_side, cfg.walker_cross, cfg.walker_speed_mps), ("right", "far", 1.2))
+                script, lat, path = WalkerScript(cfg.walker_script, start_lateral_m=2.55), 2.55, []
+                for k in range(150):
+                    d, v = script.step(k * 0.02, lat)
+                    lat += d * v * 0.02
+                    path.append(lat)
+                paths.append(path)
+            self.assertEqual(paths[0][:35], paths[1][:35], (a, b))            # same until 0.7 s
+            self.assertNotAlmostEqual(paths[0][-1], paths[1][-1], 1, (a, b))  # different by 3 s
+
     def test_yaw_change_wraps_across_180(self):
         self.assertAlmostEqual(max_abs_yaw_change_deg([-179.0, 179.0, 170.0]), 11.0)
         self.assertIsNone(max_abs_yaw_change_deg([]))

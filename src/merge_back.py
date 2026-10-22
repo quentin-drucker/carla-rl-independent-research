@@ -22,6 +22,12 @@ the path becomes blocked again while driving on, hazard mode comes back
 which later may branch into a new swerve. While the car is still moving the
 policy keeps control, so the rule never overrides an avoidance in progress.
 
+Direct return (2026-10-22): a stopped car whose swerve path is blocked but
+whose ORIGINAL lane path (from where it is back to the lane center) is clear
+returns to the lane directly, from its actual position, instead of waiting.
+The first, simplest case of choosing a new path when the current one is
+blocked; the swerve path is preferred when both are clear.
+
 Hazard-generic: "behind" means past the ego's rear bumper by the hazard's own
 half-length plus a margin, and the path check uses the hazard's lateral
 extent, so a parked car (half-length ~2.4 m) works the same way as a
@@ -81,6 +87,8 @@ class MergeBack:
         self._drive_on_target_m: Optional[float] = None
         self.drive_on_start_s: Optional[float] = None    # latest start of driving on
         self.drive_on_count = 0
+        self._lane_clear_since_s: Optional[float] = None
+        self.direct_return = False                       # returned from a stop, hazard not yet behind
         self.return_start_s: Optional[float] = None
         self.return_duration_s: Optional[float] = None
         self.return_from_m = 0.0
@@ -97,34 +105,45 @@ class MergeBack:
 
     def summary(self) -> dict:
         return {"state": self.state, "drive_on_start_s": self.drive_on_start_s, "drive_on_count": self.drive_on_count,
-                "return_start_s": self.return_start_s, "return_duration_s": self.return_duration_s}
+                "return_start_s": self.return_start_s, "return_duration_s": self.return_duration_s,
+                "direct_return": self.direct_return}
 
     def _confirmed(self, since: Optional[float], t_s: float) -> bool:
         return since is not None and t_s - since >= self.clear_confirm_s - 1e-9
 
+    def _start_return(self, t_s: float, from_m: float) -> None:
+        self.return_start_s, self.return_from_m = t_s, from_m
+        self.return_duration_s = max(self.min_return_s, abs(from_m) / self.return_rate_mps)
+
+    def _since(self, since: Optional[float], t_s: float, condition: bool) -> Optional[float]:
+        return (t_s if since is None else since) if condition else None
+
     def update(self, t_s: float, *, hazard_behind: bool, target_m: float, path_clear: bool = False,
-               ego_stopped: bool = False) -> Tuple[float, bool]:
+               ego_stopped: bool = False, lane_clear: bool = False,
+               ego_lateral_m: Optional[float] = None) -> Tuple[float, bool]:
         if self.return_start_s is None:
             held = target_m if self._drive_on_target_m is None else self._drive_on_target_m
-            self.clear_since_s = (self.clear_since_s if self.clear_since_s is not None else t_s) if hazard_behind else None
+            self.clear_since_s = self._since(self.clear_since_s, t_s, hazard_behind)
             if self._confirmed(self.clear_since_s, t_s):
                 # ponytail: once returning it keeps returning; a hazard behind a moving car cannot get back
                 # in front of it. Check the return path too (as driving on does) when a second hazard is added.
-                self.return_start_s, self.return_from_m = t_s, held
-                self.return_duration_s = max(self.min_return_s, abs(held) / self.return_rate_mps)
+                self._start_return(t_s, held)
             elif self._drive_on_target_m is not None:
                 if path_clear:
                     return held, False
                 self._drive_on_target_m = self._path_clear_since_s = None  # blocked again: hazard mode
                 return target_m, True
             else:
-                stopped_and_clear = ego_stopped and path_clear
-                self._path_clear_since_s = (self._path_clear_since_s if self._path_clear_since_s is not None
-                                            else t_s) if stopped_and_clear else None
+                self._path_clear_since_s = self._since(self._path_clear_since_s, t_s, ego_stopped and path_clear)
+                self._lane_clear_since_s = self._since(self._lane_clear_since_s, t_s,
+                                                       ego_stopped and lane_clear and not path_clear)
                 if self._confirmed(self._path_clear_since_s, t_s):
                     self._drive_on_target_m, self.drive_on_start_s = target_m, t_s
                     self.drive_on_count += 1
                     return target_m, False
-                return target_m, True
+                if not self._confirmed(self._lane_clear_since_s, t_s):
+                    return target_m, True
+                self.direct_return = True
+                self._start_return(t_s, target_m if ego_lateral_m is None else ego_lateral_m)
         self._fraction = (t_s - self.return_start_s) / self.return_duration_s
         return self.return_from_m * (1.0 - _smoothstep(self._fraction)), False

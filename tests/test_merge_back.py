@@ -138,5 +138,41 @@ class DriveOnTests(unittest.TestCase):
         self.assertEqual(mb.drive_on_count, 1)
 
 
+class DirectReturnTests(unittest.TestCase):
+    """A stopped car whose swerve path is blocked but whose original lane is clear
+    returns to the lane directly, starting from where the car actually is."""
+
+    def run_mb(self, mb, *, path_clear, lane_clear, stopped=True, seconds=10.0, ego_lateral_m=3.0):
+        return [(k * DT, *mb.update(k * DT, hazard_behind=False, path_clear=path_clear, lane_clear=lane_clear,
+                                     ego_stopped=stopped, target_m=7.4, ego_lateral_m=ego_lateral_m))
+                for k in range(int(seconds / DT))]
+
+    def test_blocked_swerve_but_clear_lane_returns_from_the_cars_position(self):
+        mb = MergeBack(clear_confirm_s=0.5, return_rate_mps=1.5, min_return_s=2.0)
+        trace = self.run_mb(mb, path_clear=False, lane_clear=True)
+        self.assertAlmostEqual(mb.return_start_s, 0.5)
+        self.assertTrue(mb.direct_return)
+        after = [x for x in trace if x[0] >= 0.5 - 1e-9]
+        self.assertAlmostEqual(after[0][1], 3.0)                 # from the car, not from the 7.4 m aim
+        self.assertTrue(all(t <= 3.0 and not active for _, t, active in after))
+        self.assertEqual(trace[-1][1:], (0.0, False))
+
+    def test_both_blocked_waits(self):
+        mb = MergeBack()
+        trace = self.run_mb(mb, path_clear=False, lane_clear=False)
+        self.assertTrue(all(active for *_, active in trace))
+        self.assertEqual(mb.state, "avoiding")
+
+    def test_swerve_path_clear_is_preferred_over_returning(self):
+        mb = MergeBack()
+        self.run_mb(mb, path_clear=True, lane_clear=True, seconds=2.0)
+        self.assertEqual((mb.state, mb.direct_return), ("driving_on", False))
+
+    def test_a_moving_car_never_returns_directly(self):
+        mb = MergeBack()
+        trace = self.run_mb(mb, path_clear=False, lane_clear=True, stopped=False)
+        self.assertTrue(all(active for *_, active in trace))
+
+
 if __name__ == "__main__":
     unittest.main()

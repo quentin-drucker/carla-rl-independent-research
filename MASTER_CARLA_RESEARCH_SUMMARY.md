@@ -2578,6 +2578,23 @@ v3. `src/analyze_replanning_gate.py`. Evidence: the 12 folders listed in
   side (needs a scripted left-swerve safety check first), a pedestrian who commits into the
   lane before turning back, or a faster pedestrian.
 
+**Follow-up (2026-10-22): first policies trained on walking pedestrians, and merge-back.**
+Quentin deferred the mid-run behavior changes until a model can swerve around a hazard and
+merge back reliably. Matched 50k pair, seed 0, steady crossings both ways (right_far,
+left_far, 1.8 m/s), TTC 0.5-1.6 s, lock delay 0.5 s; same 60-case grid x 2 directions
+(evidence folders in `src/runs/steering_train/w7_walk.log`):
+- Full brake + u = 1 is safe in 114/120; every case is avoidable by some scripted option.
+- **per_tick: 110/120 (v4).** Its 10 misses are all the pedestrian from the right with
+  0.5-0.6 s of warning, where staying in lane is right and it swerved into them.
+- **lock_at_onset: 94/120; 25 avoidable misses from the right at all speeds, TTC 0.6-1.1 s,
+  locking a partial swerve into the pedestrian.** Not diagnosed; 50k steps may be too few for
+  a policy that makes one route decision per episode.
+- **Merge-back (Option A, decision 12) works when the car passes the hazard still moving**
+  (10 of 54 scripted checks: back to 0.00 m and cruise speed, no road departure, avoidance
+  outcomes unchanged in all 36 comparable cases). **With full braking the car usually stops
+  before passing (44 of 54), and then waits beside the hazard,** because "clear" means
+  "behind the car". A rule for when a stopped car may drive on is needed next.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.
@@ -3516,6 +3533,17 @@ folders named in `src/runs/steering_train/walk_<tag>.log`):**
 - `--road-right-limit-m` caps the passage (e.g. 4.5 = adjacent lane only). Default: the
   whole road, as before. Whether the passage should be capped is still open with
   Prof. Izmirli.
+
+### 12. Merge-back to the original lane: Option A (Quentin, 2026-10-22)
+
+The learned policy decides only the avoidance (brake and u). Once the hazard is confirmed
+clear behind the car (0.5 s past the rear bumper by its own half-length plus 1.0 m), the
+classical controller takes over: hazard mode ends (cruise resumes through lane_follow's
+RECOVER -> CRUISE) and the lateral target returns to the route center along a smoothstep
+at no more than 1.5 m/s (at least 2 s). Hazard-generic, so a parked car can reuse it
+(`src/merge_back.py`, `--merge-back`, default off). The policy is charged no comfort terms
+for the return. Open: a car that stops before passing the hazard never sees it "behind",
+so it waits; a resume rule is the next decision.
 
 ## Questions revealed by reconstruction
 

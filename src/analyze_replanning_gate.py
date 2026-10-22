@@ -42,7 +42,7 @@ def controller_name(manifest: dict, fixed_u) -> str:
         return f"rule_{manifest['scripted_aim']}_{commit}{lock}"
     if manifest.get("fixed_u"):
         return f"{'coast' if manifest['fixed_brake'] == 0 else 'brake'}_u{float(fixed_u):g}"
-    return f"model:{os.path.basename(str(manifest.get('model_path')))}"
+    return f"sac_{manifest.get('steer_commit')}"  # ponytail: two models of one commit mode would share a column
 
 
 def walker_of(run_id: str) -> str:

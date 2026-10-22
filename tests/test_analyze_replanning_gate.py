@@ -53,6 +53,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(controller_name({"fixed_u": [0, 1], "fixed_brake": 0.0}, "1.0"), "coast_u1")
         self.assertEqual(controller_name({"scripted_aim": "pass_behind", "steer_commit": "lock_at_onset",
                                           "lock_delay_s": 0.5}, ""), "rule_pass_behind_lock_at_onset_0.5s")
+        self.assertEqual(controller_name({"model_path": "x/final_model.zip", "steer_commit": "per_tick"}, ""), "sac_per_tick")
 
 
 if __name__ == "__main__":

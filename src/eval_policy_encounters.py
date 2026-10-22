@@ -124,6 +124,9 @@ def _parse_args(argv=None):
                    help="cap the passage's right road edge (4.5 = adjacent lane only); default: whole road")
     p.add_argument("--merge-back", action="store_true",
                    help="return to the original lane once the hazard is clear behind the car (merge_back.py)")
+    p.add_argument("--observe-after-s", type=float, default=0.0,
+                   help="keep simulating this long after the scoring window (e.g. to watch a merge-back finish); "
+                        "metrics still use only the window")
     p.add_argument("--parity-with", metavar="TEST26_SWEEP",
                    help="compare each fixed-action episode with the scripted test26 run of the same case")
     p.add_argument("--sweep-csv", help="sweep_summary.csv for --suite sweep")
@@ -201,14 +204,15 @@ def _build_configs(args):
     return configs, source
 
 
-def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch):
+def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch, observe_after_s=0.0):
     from avoidability import compute_avoidability
     from carla_aeb_env import FIXED_DT, POST_TRIGGER_TIMEOUT_S
     from map_drivability import footprint_drivable  # the same rule as test26
     from trajectory_recording import TrajectoryRecorder
 
     original_sim_seconds = cfg.sim_seconds
-    sim_seconds_used = extended_sim_seconds(original_sim_seconds, PROTOCOL.horizon_s, POST_TRIGGER_TIMEOUT_S)
+    sim_seconds_used = extended_sim_seconds(original_sim_seconds, PROTOCOL.horizon_s + observe_after_s,
+                                            POST_TRIGGER_TIMEOUT_S)
     cfg.sim_seconds = sim_seconds_used
     env.cfg = cfg
     obs, _ = env.reset()
@@ -256,8 +260,10 @@ def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch):
                       "terminated": terminated, "truncated": truncated,
                       "action": json.dumps(np.asarray(action, dtype=float).ravel().tolist())})
 
+        # Observing past the window: the env's own window-end truncation is ignored once the hazard has started.
         decision = window_decision(sim_time_s=info["sim_time_s"], trigger_time_s=info["trigger_time_s"],
-                                   horizon_s=PROTOCOL.horizon_s, truncated=truncated, fixed_dt_s=FIXED_DT,
+                                   horizon_s=PROTOCOL.horizon_s + observe_after_s,
+                                   truncated=truncated and not (observe_after_s and info["triggered"]), fixed_dt_s=FIXED_DT,
                                    legacy_ended=legacy.ended)
         if decision.stop:
             break
@@ -289,7 +295,8 @@ def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch):
             "legacy_label": legacy.label, "legacy_end_reason": legacy.end_reason, "legacy_end_tick": legacy.end_tick,
             "signal_tick_counts": counts, "drivability_check": None if carla_map is None else "seam_tolerant",
             "avoidability": {k: (v if v != float("inf") else "inf") for k, v in avoid.items()},
-            "walker_transitions": env.walker_transitions,
+            "walker_transitions": env.walker_transitions, "merge_back": env.merge_back_summary,
+            "observe_after_s": observe_after_s,
         }, f, indent=2)
 
     row = summary_row(episode=episode, cfg=cfg, metrics=metrics.to_dict(), stop_reason=decision.reason,
@@ -346,6 +353,7 @@ def main(argv=None):
             "model_action_shape": list(env.action_space.shape),
             "steer_commit": args.steer_commit, "lock_delay_s": args.lock_delay_s,
             "road_right_limit_m": args.road_right_limit_m, "merge_back": args.merge_back,
+            "observe_after_s": args.observe_after_s,
             "fixed_brake": args.fixed_brake if (args.fixed_u or args.scripted_aim) else None,
             "fixed_u": args.fixed_u, "scripted_aim": args.scripted_aim, "parity_with": args.parity_with,
             "physics_backend": BACKEND_DEFAULT,
@@ -370,7 +378,7 @@ def main(argv=None):
             print(f"\n[eval] ===== episode {i}/{len(episodes)}: {cfg.walker_cross} {cfg.walker_side} "
                   f"{cfg.target_mph:.1f} mph ttc={cfg.trigger_ttc_s} fixed_u={fixed_u} =====")
             metrics, row = _run_episode(env, policy, cfg, episode=i, ep_dir=os.path.join(out_dir, f"ep_{i:04d}"),
-                                        carla_map=carla_map, watch=args.watch)
+                                        carla_map=carla_map, watch=args.watch, observe_after_s=args.observe_after_s)
             row.update(steer_commit=args.steer_commit, fixed_u=fixed_u)
             for line in summarize_for_console(metrics):
                 print("    " + line)

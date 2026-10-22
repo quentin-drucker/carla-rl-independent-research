@@ -94,7 +94,7 @@ from map_drivability import footprint_drivable
 from passage import Obstacle, passage_from_extent, predicted_lateral_at_arrival
 from passage_carla import passage_at_location
 from walker_script import WalkerScript
-from merge_back import MergeBack, hazard_behind_ego
+from merge_back import DRIVE_ON_SPEED_MPS, MergeBack, hazard_behind_ego, path_clear_of_hazard
 from pedestrian_contact import DEFAULT_PEDESTRIAN_RADIUS_M
 from rl_steering import (
     STEERING_STATE_DIM,
@@ -430,8 +430,15 @@ class CarlaAEBEnv(gymnasium.Env):
             target_m = self._commitment.target_offset_m(u_action, passage_now, triggered=self._triggered)
             self._hazard_on = self._triggered
             if self._merge_back is not None and self._triggered:
+                ped = self._walker.get_location()
+                _, ped_lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (ped.x, ped.y))
+                path_clear = path_clear_of_hazard(  # the car's CURRENT path: from where it is to where it aims
+                    path_lo_m=steer_obs["ego_lateral_m"], path_hi_m=self._merge_back.aim_m(target_m),
+                    hazard_lateral_m=ped_lateral, hazard_lateral_speed_mps=steer_obs["pedestrian_lateral_speed_mps"],
+                    hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M)
                 target_m, self._hazard_on = self._merge_back.update(
-                    sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m)
+                    sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m,
+                    path_clear=path_clear, ego_stopped=ego_speed_mps <= DRIVE_ON_SPEED_MPS)
             steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._hazard_on)
             if not self._hazard_on:
                 brake_override = None  # before onset / after merge-back starts the policy has no effect
@@ -656,6 +663,11 @@ class CarlaAEBEnv(gymnasium.Env):
             distance_to_pedestrian_line_m=distance, ego_lateral_m=ego_lateral,
             heading_error_rad=heading_error_rad(tf.rotation.yaw, self._frame_right))
 
+    @property
+    def merge_back_summary(self):
+        """This episode's merge-back states and times (merge_back.py), or None when off."""
+        return None if getattr(self, "_merge_back", None) is None else self._merge_back.summary()
+
     def _hazard_behind_ego(self):
         tf, ped = self._vehicle.get_transform(), self._walker.get_location()
         return hazard_behind_ego(ego_x_m=tf.location.x, ego_y_m=tf.location.y, ego_yaw_deg=tf.rotation.yaw,
@@ -721,6 +733,7 @@ class CarlaAEBEnv(gymnasium.Env):
             "walker_phase": None if self._walker_script is None else self._walker_script.index,
             "merge_back_state": None if self._merge_back is None else self._merge_back.state,
             "merge_back_return_start_s": None if self._merge_back is None else self._merge_back.return_start_s,
+            "merge_back_drive_on_start_s": None if self._merge_back is None else self._merge_back.drive_on_start_s,
         }
         return obs, float(reward), terminated, truncated, info
 

@@ -6,7 +6,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from merge_back import MergeBack, hazard_behind_ego  # noqa: E402
+from merge_back import MergeBack, hazard_behind_ego, path_clear_of_hazard  # noqa: E402
 from pedestrian_contact import EGO_HALF_LENGTH_M  # noqa: E402
 
 DT = 0.02
@@ -73,6 +73,69 @@ class MergeBackTests(unittest.TestCase):
         mb = MergeBack(clear_confirm_s=0.5)
         trace = drive(mb, lambda t: 1.0 <= t < 2.0)
         self.assertEqual(trace[-1][1:], (0.0, False))
+
+
+class PathClearTests(unittest.TestCase):
+    """The car's CURRENT path (from where it is to where it aims) is what is checked."""
+
+    def test_a_pedestrian_in_the_lane_does_not_block_a_car_holding_far_right(self):
+        self.assertTrue(path_clear_of_hazard(path_lo_m=7.0, path_hi_m=7.4, hazard_lateral_m=0.0,
+                                             hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3))
+
+    def test_a_hazard_between_the_car_and_its_aim_blocks_the_path(self):
+        self.assertFalse(path_clear_of_hazard(path_lo_m=0.0, path_hi_m=7.4, hazard_lateral_m=2.55,
+                                              hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3))
+
+    def test_margin_is_measured_from_the_car_body_and_the_hazard_edge(self):
+        # car body edge at 3.0 - 1.08 = 1.92; pedestrian edge at 0.3: gap 1.62 m
+        kw = dict(path_lo_m=3.0, path_hi_m=3.0, hazard_lateral_m=0.0, hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3)
+        self.assertTrue(path_clear_of_hazard(margin_m=1.5, **kw))
+        self.assertFalse(path_clear_of_hazard(margin_m=1.7, **kw))
+
+    def test_walking_toward_the_path_blocks_it_walking_away_does_not(self):
+        kw = dict(path_lo_m=5.0, path_hi_m=5.5, hazard_lateral_m=1.0, hazard_radius_m=0.3, horizon_s=2.0)
+        self.assertTrue(path_clear_of_hazard(hazard_lateral_speed_mps=0.0, **kw))
+        self.assertFalse(path_clear_of_hazard(hazard_lateral_speed_mps=1.8, **kw))   # reaches ~4.6 m in 2 s
+        self.assertTrue(path_clear_of_hazard(hazard_lateral_speed_mps=-1.8, **kw))
+
+
+class DriveOnTests(unittest.TestCase):
+    """A car that STOPPED beside the hazard drives on along its swerve path once
+    that path is clear, then returns once the hazard is behind it."""
+
+    def run_mb(self, mb, *, stopped_fn, clear_fn, behind_fn, seconds=12.0, target_m=7.4):
+        return [(k * DT, *mb.update(k * DT, hazard_behind=behind_fn(k * DT), path_clear=clear_fn(k * DT),
+                                     ego_stopped=stopped_fn(k * DT), target_m=target_m))
+                for k in range(int(seconds / DT))]
+
+    def test_stopped_and_clear_drives_on_holding_the_swerve_then_returns(self):
+        mb = MergeBack(clear_confirm_s=0.5)
+        trace = self.run_mb(mb, stopped_fn=lambda t: 2.0 <= t < 3.0, clear_fn=lambda t: t >= 2.0,
+                            behind_fn=lambda t: t >= 5.0)
+        at = {round(t, 2): (target, active) for t, target, active in trace}
+        self.assertEqual(at[2.0], (7.4, True))             # stopped, clear not yet confirmed
+        self.assertEqual(at[2.6], (7.4, False))            # drives on: hazard mode off, swerve path held
+        self.assertEqual(at[4.9], (7.4, False))
+        self.assertAlmostEqual(mb.drive_on_start_s, 2.5)
+        self.assertAlmostEqual(mb.return_start_s, 5.5)     # behind for 0.5 s
+        self.assertEqual(trace[-1][1:], (0.0, False))
+
+    def test_a_moving_car_keeps_policy_control_even_with_a_clear_path(self):
+        mb = MergeBack()
+        trace = self.run_mb(mb, stopped_fn=lambda t: False, clear_fn=lambda t: True, behind_fn=lambda t: False)
+        self.assertTrue(all(active for *_, active in trace))
+        self.assertIsNone(mb.drive_on_start_s)
+
+    def test_path_blocked_again_while_driving_on_goes_back_to_hazard_mode(self):
+        # The hook for a second hazard on the swerve path: brake, policy back in control.
+        mb = MergeBack(clear_confirm_s=0.5)
+        trace = self.run_mb(mb, stopped_fn=lambda t: t >= 2.0, clear_fn=lambda t: 2.0 <= t < 4.0,
+                            behind_fn=lambda t: False)
+        at = {round(t, 2): active for t, _, active in trace}
+        self.assertFalse(at[3.0])
+        self.assertTrue(at[4.1])
+        self.assertEqual(mb.state, "avoiding")
+        self.assertEqual(mb.drive_on_count, 1)
 
 
 if __name__ == "__main__":

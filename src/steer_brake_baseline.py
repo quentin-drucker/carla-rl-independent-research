@@ -53,6 +53,9 @@ WALKER_CASES = {  # name -> (walker_side, walker_cross); MASTER "Phase 2 design 
     "right_far": ("right", "far"),   # walks left across the lane: the car can pass behind them on the right
     "left_far": ("left", "far"),     # walks right across the lane, into the car's escape side
     "left_near": ("left", "near"),   # walks to the lane center and stops there
+    # Quentin 2026-10-23: crossing pedestrians keep walking across the whole road and off its far edge.
+    "right_edge": ("right", "far_edge"),
+    "left_edge": ("left", "far_edge"),
 }
 
 

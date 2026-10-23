@@ -28,6 +28,10 @@ returns to the lane directly, from its actual position, instead of waiting.
 The first, simplest case of choosing a new path when the current one is
 blocked; the swerve path is preferred when both are clear.
 
+After a contact (2026-10-23, Quentin's demo note): the car stops and holds;
+no drive-on and no return. note_contact() freezes the lateral target and
+keeps hazard mode on; the caller forces full braking.
+
 Hazard-generic: "behind" means past the ego's rear bumper by the hazard's own
 half-length plus a margin, and the path check uses the hazard's lateral
 extent, so a parked car (half-length ~2.4 m) works the same way as a
@@ -89,12 +93,16 @@ class MergeBack:
         self.drive_on_count = 0
         self._lane_clear_since_s: Optional[float] = None
         self.direct_return = False                       # returned from a stop, hazard not yet behind
+        self._last_target_m = 0.0
+        self._contact_hold_m: Optional[float] = None
         self.return_start_s: Optional[float] = None
         self.return_duration_s: Optional[float] = None
         self.return_from_m = 0.0
 
     @property
     def state(self) -> str:
+        if self._contact_hold_m is not None:
+            return "holding_after_contact"
         if self.return_start_s is not None:
             return "returning" if self._fraction < 1.0 else "returned"
         return "avoiding" if self._drive_on_target_m is None else "driving_on"
@@ -106,10 +114,23 @@ class MergeBack:
     def summary(self) -> dict:
         return {"state": self.state, "drive_on_start_s": self.drive_on_start_s, "drive_on_count": self.drive_on_count,
                 "return_start_s": self.return_start_s, "return_duration_s": self.return_duration_s,
-                "direct_return": self.direct_return}
+                "direct_return": self.direct_return, "contact_hold": self._contact_hold_m is not None}
 
     def _confirmed(self, since: Optional[float], t_s: float) -> bool:
         return since is not None and t_s - since >= self.clear_confirm_s - 1e-9
+
+    def note_contact(self) -> None:
+        """The car touched the hazard: stop where it is, never resume or return."""
+        if self._contact_hold_m is None:
+            self._contact_hold_m = self._last_target_m
+
+    def update(self, t_s: float, **kwargs) -> Tuple[float, bool]:
+        """(lateral target, hazard mode on); see _update for the arguments."""
+        if self._contact_hold_m is not None:
+            return self._contact_hold_m, True
+        target_m, hazard_on = self._update(t_s, **kwargs)
+        self._last_target_m = target_m
+        return target_m, hazard_on
 
     def _start_return(self, t_s: float, from_m: float) -> None:
         self.return_start_s, self.return_from_m = t_s, from_m
@@ -118,7 +139,7 @@ class MergeBack:
     def _since(self, since: Optional[float], t_s: float, condition: bool) -> Optional[float]:
         return (t_s if since is None else since) if condition else None
 
-    def update(self, t_s: float, *, hazard_behind: bool, target_m: float, path_clear: bool = False,
+    def _update(self, t_s: float, *, hazard_behind: bool, target_m: float, path_clear: bool = False,
                ego_stopped: bool = False, lane_clear: bool = False,
                ego_lateral_m: Optional[float] = None) -> Tuple[float, bool]:
         if self.return_start_s is None:

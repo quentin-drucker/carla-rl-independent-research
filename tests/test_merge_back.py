@@ -174,5 +174,25 @@ class DirectReturnTests(unittest.TestCase):
         self.assertTrue(all(active for *_, active in trace))
 
 
+class AfterContactTests(unittest.TestCase):
+    def test_after_a_contact_it_holds_hazard_mode_and_its_lateral_target(self):
+        mb = MergeBack(clear_confirm_s=0.5)
+        mb.update(0.0, hazard_behind=False, target_m=4.0)
+        mb.note_contact()
+        for k in range(1, 300):  # hazard behind, path clear, stopped: none of it may resume driving
+            out = mb.update(k * DT, hazard_behind=True, path_clear=True, lane_clear=True, ego_stopped=True,
+                            target_m=7.4)
+            self.assertEqual(out, (4.0, True))
+        self.assertEqual(mb.state, "holding_after_contact")
+
+    def test_a_contact_during_the_return_freezes_it_where_it_is(self):
+        mb = MergeBack(clear_confirm_s=0.0, min_return_s=2.0)
+        target = None
+        for k in range(60):
+            target, _ = mb.update(k * DT, hazard_behind=True, target_m=7.4)
+        mb.note_contact()
+        self.assertEqual(mb.update(2.0, hazard_behind=True, target_m=7.4), (target, True))
+
+
 if __name__ == "__main__":
     unittest.main()

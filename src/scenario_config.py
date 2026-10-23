@@ -51,6 +51,10 @@ class ScenarioConfig:
     # How far across the lane the pedestrian walks.
     # "near"       = stops roughly at lane center (partial intrusion).
     # "far"        = crosses all the way to the opposite lane edge.
+    # "far_edge"   = (2026-10-23) keeps walking across the WHOLE road and
+    #                steps 0.5 m off its far edge, instead of stopping in
+    #                the adjacent lane; needs the road's extent (the env
+    #                scans it at the encounter).
     # "stationary" = never walks at all; stands at lane center for the
     #                whole encounter (added 2026-09-27 for testing swerve-
     #                offset sizing against a known, fixed pedestrian
@@ -218,11 +222,15 @@ class ScenarioConfig:
             return cls.from_dict(json.load(f))
 
 
-def crossing_lateral_offsets_m(*, side: str, cross: str, lane_width_m: float):
+EDGE_STEP_OFF_M = 0.5  # "far_edge" walkers end this far beyond the road edge (off the road, not at the curb line)
+
+
+def crossing_lateral_offsets_m(*, side: str, cross: str, lane_width_m: float, road_extent_m=None):
     """(start_lat, end_lat) of the walker, in metres along the encounter
     waypoint's right vector from lane center. Same rule as test3's
     _compute_crossing_endpoints_from_waypoint, shared here so CarlaAEBEnv
-    places pedestrians identically (pure, offline-testable)."""
+    places pedestrians identically (pure, offline-testable).
+    road_extent_m: (left_m, right_m) drivable extent, needed by "far_edge"."""
     start_lat = lane_width_m * 0.85
     if side.lower() == "left":
         start_lat = -start_lat
@@ -233,8 +241,13 @@ def crossing_lateral_offsets_m(*, side: str, cross: str, lane_width_m: float):
         end_lat = 0.0
     elif cross.lower() == "far":
         end_lat = -start_lat
+    elif cross.lower() == "far_edge":
+        if road_extent_m is None:
+            raise ValueError("cross='far_edge' needs road_extent_m")
+        left_m, right_m = road_extent_m
+        end_lat = left_m - EDGE_STEP_OFF_M if start_lat > 0 else right_m + EDGE_STEP_OFF_M
     elif cross.lower() == "stationary":
         start_lat = end_lat = 0.0  # stands at lane center, never walks
     else:
-        raise ValueError("cross must be 'near', 'far', or 'stationary'")
+        raise ValueError("cross must be 'near', 'far', 'far_edge', or 'stationary'")
     return start_lat, end_lat

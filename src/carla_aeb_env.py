@@ -441,6 +441,15 @@ class CarlaAEBEnv(gymnasium.Env):
                     sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m,
                     path_clear=clear_to(self._merge_back.aim_m(target_m)), lane_clear=clear_to(0.0),
                     ego_stopped=ego_speed_mps <= DRIVE_ON_SPEED_MPS, ego_lateral_m=steer_obs["ego_lateral_m"])
+                if self._merge_back.state == "holding_after_contact":
+                    brake_override = 1.0  # after a contact: stop and hold
+                elif not self._hazard_on and self._merge_back_hazard_was_on:
+                    # Merge-back took over this tick: release the brake NOW. Without this, lane_follow
+                    # debounces the clear for 0.2 s and ramps the brake down at 1/s, which stopped a
+                    # car still rolling past the hazard (Quentin's demo, clip 3, 2026-10-23).
+                    self._speed_state["brake_prev"] = 0.0
+                    self._speed_state["hazard_clear_ticks"] = 10 ** 6  # skip the debounce
+                self._merge_back_hazard_was_on = self._hazard_on
             steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._hazard_on)
             if not self._hazard_on:
                 brake_override = None  # before onset / after merge-back starts the policy has no effect
@@ -639,6 +648,7 @@ class CarlaAEBEnv(gymnasium.Env):
         self._frame_origin, self._frame_right = frame["origin_xyz"][:2], frame["right_xy"]
         self._commitment = self._new_commitment()
         self._merge_back = MergeBack() if self._merge_back_enabled else None
+        self._merge_back_hazard_was_on = True
         self._hazard_on = False
         self._min_clearance_m = None
         self._went_off_road = False
@@ -685,6 +695,8 @@ class CarlaAEBEnv(gymnasium.Env):
                               target_m, u_action):
         """Reward, termination, observation and info for one steering-mode tick."""
         contact = collision_signals.geometric_contact
+        if contact and self._merge_back is not None:
+            self._merge_back.note_contact()
         tf = self._vehicle.get_transform()
         on_road, _ = footprint_drivable(self._map, tf.location.x, tf.location.y, tf.rotation.yaw, tf.location.z)
         off_road = self._triggered and on_road is False
@@ -819,8 +831,12 @@ class CarlaAEBEnv(gymnasium.Env):
 
         # Place pedestrian
         encounter_wp = self._get_route_waypoint_at_distance(route_wps, cfg.encounter_distance_m)
+        road_extent = None
+        if cfg.walker_cross.lower() == "far_edge":  # walks across the whole road: scan its extent
+            road, _ = passage_at_location(carla_map, encounter_wp.transform.location)
+            road_extent = (road.road_left_m, road.road_right_m)
         self._walker_start_loc, self._walker_end_loc = self._compute_crossing_endpoints(
-            encounter_wp, side=cfg.walker_side, cross=cfg.walker_cross
+            encounter_wp, side=cfg.walker_side, cross=cfg.walker_cross, road_extent_m=road_extent
         )
 
         spawn_yaw_deg = math.degrees(math.atan2(
@@ -982,14 +998,15 @@ class CarlaAEBEnv(gymnasium.Env):
         return route_wps[-1]
 
     @staticmethod
-    def _compute_crossing_endpoints(encounter_wp, *, side, cross):
+    def _compute_crossing_endpoints(encounter_wp, *, side, cross, road_extent_m=None):
         """Build walker start/end locations relative to an encounter waypoint."""
         lane_center = encounter_wp.transform.location
         right       = encounter_wp.transform.get_right_vector()
         # Same rule as test3, including "stationary" (stands at lane center).
         # Unknown side/cross values now raise instead of silently meaning
         # "right"/"far"; near/far placement is unchanged.
-        start_lat, end_lat = crossing_lateral_offsets_m(side=side, cross=cross, lane_width_m=LANE_WIDTH_M)
+        start_lat, end_lat = crossing_lateral_offsets_m(side=side, cross=cross, lane_width_m=LANE_WIDTH_M,
+                                                        road_extent_m=road_extent_m)
 
         start_loc = carla.Location(
             x=lane_center.x + right.x * start_lat,

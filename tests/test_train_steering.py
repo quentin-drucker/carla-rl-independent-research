@@ -27,5 +27,15 @@ class SampleScenarioTests(unittest.TestCase):
         self.assertTrue(all(0.5 <= c.trigger_ttc_s <= 1.6 and c.walker_script is not None for c in cfgs))
 
 
+class ArgsTests(unittest.TestCase):
+    def test_right_only_by_default_and_both_sides_on_request(self):
+        from train_steering import _parse_args
+        self.assertEqual(_parse_args(["--commit", "per_tick"]).u_min, 0.0)
+        self.assertEqual(_parse_args(["--commit", "per_tick", "--u-min", "-1"]).u_min, -1.0)
+        import eval_policy_encounters as e
+        a = e._parse_args(["--suite", "test26", "--steer-commit", "per_tick", "--fixed-u", "-1", "-0.5", "--u-min", "-1"])
+        self.assertEqual((a.u_min, a.fixed_u), (-1.0, [-1.0, -0.5]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -86,6 +86,7 @@ def _parse_args(argv=None):
     p.add_argument("--lock-delay-s", type=float, default=0.0, help="lock_at_onset locks this long after onset")
     p.add_argument("--road-right-limit-m", type=float, help="cap the passage's right road edge (default: whole road)")
     p.add_argument("--merge-back", action="store_true", help="return to the lane once the hazard is clear behind the car")
+    p.add_argument("--u-min", type=float, default=0.0, help="lowest steering u: 0 = right only (default), -1 = both sides")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--relaunch-carla", action="store_true",
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and continue")
@@ -231,7 +232,7 @@ def main(argv=None):
             "created_at_iso": datetime.datetime.now().isoformat(), "git_commit": _git("rev-parse", "HEAD"),
             "git_branch": _git("rev-parse", "--abbrev-ref", "HEAD"), "git_tracked_changes": dirty,
             "git_dirty": bool(dirty), "physics_backend": BACKEND_DEFAULT, "steer_commit": args.commit,
-            "u_bounds": [0.0, 1.0], "total_steps": args.steps, "seed": args.seed,
+            "u_bounds": [args.u_min, 1.0], "total_steps": args.steps, "seed": args.seed,
             "checkpoint_every": args.checkpoint_every, "mph_range": MPH_RANGE, "ttc_range_s": list(args.ttc_range),
             "scenario": "steer_brake_baseline.baseline_scenario_config (Town04)", "walkers": args.walker,
             "walker_speed_mps": args.walker_speed, "walker_change_s": args.walker_change_s,
@@ -262,7 +263,7 @@ def main(argv=None):
         # .get(): Week 5 manifests predate these keys and mean the stationary defaults.
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
                           road_right_limit_m=manifest.get("road_right_limit_m"),
-                          merge_back=manifest.get("merge_back", False))
+                          merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]))
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),

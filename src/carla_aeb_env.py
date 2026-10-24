@@ -97,6 +97,7 @@ from walker_script import WalkerScript
 from merge_back import DRIVE_ON_SPEED_MPS, MergeBack, hazard_behind_ego, path_clear_of_hazard
 from pedestrian_contact import DEFAULT_PEDESTRIAN_RADIUS_M
 from rl_steering import (
+    contact_is_pedestrians,
     STEERING_STATE_DIM,
     SteeringCommitment,
     SteeringRewardConfig,
@@ -694,9 +695,13 @@ class CarlaAEBEnv(gymnasium.Env):
                               ttc_s, brake_cmd_now, drive_mode, collision_signals, ped_xy, passage_now, steer_obs,
                               target_m, u_action):
         """Reward, termination, observation and info for one steering-mode tick."""
-        contact = collision_signals.geometric_contact
-        if contact and self._merge_back is not None:
+        contact_any = collision_signals.geometric_contact
+        if contact_any and self._merge_back is not None:
             self._merge_back.note_contact()
+        v = self._walker.get_velocity()
+        pedestrian_caused = contact_any and contact_is_pedestrians(
+            ego_speed_mps=ego_speed_mps, pedestrian_speed_mps=math.hypot(v.x, v.y))
+        contact = contact_any and not (pedestrian_caused and self._steering_reward.pedestrian_contact_free)
         tf = self._vehicle.get_transform()
         on_road, _ = footprint_drivable(self._map, tf.location.x, tf.location.y, tf.rotation.yaw, tf.location.z)
         off_road = self._triggered and on_road is False
@@ -732,7 +737,8 @@ class CarlaAEBEnv(gymnasium.Env):
             "ttc_s": ttc_s, "jerk_mps3": self._jerk, "drive_mode": drive_mode,
             "tick": self._tick, "sim_time_s": sim_time_s,
             **collision_signals.to_info(),
-            "collision": contact,  # steering mode: the oriented-footprint check decides
+            "collision": contact,  # steering mode: the oriented-footprint check decides (the car's contacts)
+            "contact_any": contact_any, "contact_pedestrian_caused": pedestrian_caused,
             "ego_speed_mps": ego_speed_mps, "pedestrian_x_m": ped_xy[0], "pedestrian_y_m": ped_xy[1],
             "triggered": self._triggered, "trigger_time_s": self._trigger_time_s,
             "full_stop_achieved": self._full_stop_achieved, "ped_crossed": False, "post_trigger_timeout": False,

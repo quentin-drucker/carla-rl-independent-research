@@ -2609,6 +2609,24 @@ observed): **45 complete swerve -> (drive on) -> back in the lane at cruise spee
 contact or road departure after any return**; 8 contacts, all followed by stop-and-hold; 1
 waits.
 
+**Why lock_at_onset failed the pedestrian from the right, and the first 3-seed comparison (2026-10-23/24).**
+- **Diagnosis.** A scripted reference with the same 0.5 s lock delay (full brake + u = 0 / 0.5 / 1
+  locked 0.5 s after onset) is safe in 44 of 60 right-start cases, against 59 when swerving from onset:
+  **15-16 of lock_at_onset's 24 right-side failures were caused by the lock delay itself** (the walker
+  is still standing at onset, so a route locked then is blind; one locked after waiting cannot avoid
+  30-50 mph at 0.6-0.9 s). The other ~8 were undertraining: the 50k policy was still improving (and
+  regressed at the very end) with only ~32 critical episodes of one route decision each. Not the cause:
+  the constant-speed pedestrian prediction (correlation +0.03 with the locked u).
+- **Reward fix.** Training no longer penalizes contacts the pedestrian causes (car <= 0.5 m/s,
+  pedestrian moving), matching protocol v4 (`pedestrian_contact_free`); a slow creep into a standing
+  pedestrian still counts.
+- **3 seeds x 150k** (road-edge walkers, merge-back), safe (v4) of 120: **lock_at_onset 103 / 101 /
+  103 (fair ceiling 104), per_tick 111 / 110 / 114** (best per-case scripted choice from onset 120;
+  single best fixed 114). lock_at_onset now reaches its ceiling; per_tick's remaining misses are the
+  same in every seed (pedestrian from the right at 0.5-0.6 s: it swerves where staying in lane is
+  right). **per_tick is safer by ~9 cases on average, and most of that gap is the 0.5 s lock delay,
+  not re-deciding itself.** Evidence status: CONFIRMED, 3 seeds, one deterministic episode per case.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

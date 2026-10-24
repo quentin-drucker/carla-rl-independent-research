@@ -53,20 +53,51 @@ WALKER_CASES = {  # name -> (walker_side, walker_cross); MASTER "Phase 2 design 
     "right_far": ("right", "far"),   # walks left across the lane: the car can pass behind them on the right
     "left_far": ("left", "far"),     # walks right across the lane, into the car's escape side
     "left_near": ("left", "near"),   # walks to the lane center and stops there
+    # Quentin 2026-10-23: crossing pedestrians keep walking across the whole road and off its far edge.
+    "right_edge": ("right", "far_edge"),
+    "left_edge": ("left", "far_edge"),
 }
 
 
+DEFAULT_WALKER_CHANGE_S = 0.6  # after the 0.5 s lock delay, so a locked route is chosen before the change
+
+
+def _walk(to_frac, v, max_s=None):
+    return {"kind": "walk", "to_frac": to_frac, "speed_mps": v, **({} if max_s is None else {"max_s": max_s})}
+
+
+# Week 7 (walker_script.py): pedestrians that change behavior after onset. All start
+# on the right (+2.55 m) and are identical until the change time c, so a route
+# locked before c cannot tell the members of a pair apart. name -> phases(v, c).
+DYNAMIC_WALKER_CASES = {
+    "right_cross": lambda v, c: [_walk(-1, v)],                      # keeps crossing (control)
+    "right_turn_back": lambda v, c: [_walk(-1, v, c), _walk(1, v)],  # turns back to where they started
+    "right_stop": lambda v, c: [_walk(-1, v, c)],                    # stops where they are
+    "right_stand": lambda v, c: [],                                  # never moves (control)
+    "right_late_start": lambda v, c: [{"kind": "wait", "s": c}, _walk(-1, v)],
+}
+DYNAMIC_WALKER_PAIRS = (("right_cross", "right_turn_back"), ("right_cross", "right_stop"),
+                        ("right_stand", "right_late_start"))
+
+
 def baseline_scenario_config(mph: float, ttc: float, *, run_id: str = "", walker: str = "stationary",
-                             walker_speed_mps: float = None):
+                             walker_speed_mps: float = None, walker_change_s: float = None):
     """The scenario every Phase 2 controller is scored on: test26's scripted
     baselines, the steering environment's parity gate, and learned-policy
     evaluation (eval_policy_encounters --suite test26). The default is the
     stationary pedestrian; `walker` picks a WALKER_CASES entry, where the
-    pedestrian starts walking at onset."""
+    pedestrian starts walking at onset, or a DYNAMIC_WALKER_CASES entry, whose
+    behavior changes walker_change_s after onset."""
     from scenario_config import ScenarioConfig
 
-    side, cross = WALKER_CASES[walker]
     extra = {} if walker_speed_mps is None else {"walker_speed_mps": float(walker_speed_mps)}
+    if walker in DYNAMIC_WALKER_CASES:
+        side, cross = "right", "far"
+        change = DEFAULT_WALKER_CHANGE_S if walker_change_s is None else float(walker_change_s)
+        extra["walker_script"] = DYNAMIC_WALKER_CASES[walker](
+            extra.get("walker_speed_mps", ScenarioConfig.walker_speed_mps), change)
+    else:
+        side, cross = WALKER_CASES[walker]
     return ScenarioConfig(
         walker_cross=cross, walker_side=side, trigger_ttc_s=ttc, **extra,
         target_mph=mph, encounter_distance_m=ENCOUNTER_DISTANCE_M,

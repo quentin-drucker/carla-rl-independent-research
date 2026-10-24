@@ -13,6 +13,7 @@ from encounter_metrics import (  # noqa: E402
     OUTCOME_INCOMPLETE,
     OUTCOME_NO_ONSET,
     OUTCOME_PASSED_CLEAR,
+    OUTCOME_PEDESTRIAN_INTO_STOPPED_EGO,
     OUTCOME_STOPPED_CLEAR,
     OUTCOME_UNRESOLVED,
     EncounterProtocol,
@@ -187,7 +188,7 @@ class SafetyAndDynamicsTests(unittest.TestCase):
         m = compute_encounter_metrics(_trace(N_FULL, speed_fn=_brake_speed),
                                       onset_time_s=ONSET_S, protocol=PROTOCOL)
         self.assertEqual(m.protocol["horizon_s"], 4.0)
-        self.assertEqual(m.to_dict()["protocol"]["protocol_version"], 3)
+        self.assertEqual(m.to_dict()["protocol"]["protocol_version"], 4)
         with self.assertRaises(ValueError):
             EncounterProtocol(horizon_s=0.0)
 
@@ -238,8 +239,56 @@ class CommitmentMetricTests(unittest.TestCase):
         m = self._metrics(lambda t: 1.5 if int((t - ONSET_S) / 0.5) % 2 == 0 else -1.5)
         self.assertEqual(m.requested_offset_reversals_moving, m.requested_offset_reversals)
 
-    def test_protocol_version_is_3(self):
-        self.assertEqual(self._metrics(lambda t: 0.0).protocol["protocol_version"], 3)
+    def test_protocol_version_is_4(self):
+        self.assertEqual(self._metrics(lambda t: 0.0).protocol["protocol_version"], 4)
+
+
+def _moving_pedestrian(ticks, ped_fn):
+    """The same ego trace with the pedestrian at ped_fn(t) -> (x, y)."""
+    import dataclasses
+    return [dataclasses.replace(r, pedestrian_x_m=ped_fn(r.sim_time_s)[0], pedestrian_y_m=ped_fn(r.sim_time_s)[1])
+            for r in ticks]
+
+
+class ContactCauseTests(unittest.TestCase):
+    """Protocol v4: a pedestrian walking into an already-stopped car is reported
+    separately; every v3 field keeps its meaning."""
+
+    def test_pedestrian_walking_into_a_stopped_car_is_not_an_ego_hit(self):
+        ego = _trace(N_FULL, speed_fn=_brake_speed, ped=(500.0, 0.0))
+        x_stop = ego[-1].pos_x_m
+        # Stands 4 m to the side until t = 3.0 s (the car has stopped by 2.9 s), then walks into its side.
+        ticks = _moving_pedestrian(ego, lambda t: (x_stop, 4.0 - 1.5 * max(0.0, t - 3.0)))
+        m = compute_encounter_metrics(ticks, onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertEqual((m.outcome, m.safe_success), (OUTCOME_CONTACT, False))  # v3 unchanged
+        self.assertEqual(m.contact_cause, "pedestrian")
+        self.assertEqual(m.outcome_v4, OUTCOME_PEDESTRIAN_INTO_STOPPED_EGO)
+        self.assertTrue(m.ego_safe_success)
+        self.assertLessEqual(m.contact_speed_mps, 0.5)
+
+    def test_slow_creep_into_a_standing_pedestrian_is_still_an_ego_hit(self):
+        ped = (10.0 + EGO_HALF_LENGTH_M + 0.3 + 0.75, 0.0)  # contact after ~2.5 s at 0.3 m/s
+        m = compute_encounter_metrics(_trace(N_FULL, speed_fn=lambda t: 0.3, ped=ped),
+                                      onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertEqual(m.outcome, OUTCOME_CONTACT)
+        self.assertAlmostEqual(m.contact_speed_mps, 0.3)
+        self.assertEqual((m.contact_cause, m.outcome_v4, m.ego_safe_success), ("ego", OUTCOME_CONTACT, False))
+
+    def test_a_moving_car_hitting_a_walking_pedestrian_is_an_ego_hit(self):
+        ego = _trace(N_FULL, speed_fn=lambda t: 15.0, ped=(500.0, 0.0))
+        ticks = _moving_pedestrian(ego, lambda t: (50.0, 2.0 - 1.5 * max(0.0, t - ONSET_S)))
+        m = compute_encounter_metrics(ticks, onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertEqual((m.outcome, m.contact_cause, m.ego_safe_success), (OUTCOME_CONTACT, "ego", False))
+
+    def test_pedestrian_into_a_car_still_rolling_above_the_threshold_is_an_ego_hit(self):
+        ego = _trace(N_FULL, speed_fn=lambda t: 1.0, ped=(500.0, 0.0))
+        ticks = _moving_pedestrian(ego, lambda t: (ego[0].pos_x_m + 1.0 * t, 4.0 - 1.5 * max(0.0, t - 3.0)))
+        m = compute_encounter_metrics(ticks, onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertEqual((m.outcome, m.contact_cause), (OUTCOME_CONTACT, "ego"))
+
+    def test_no_contact_leaves_v4_equal_to_v3(self):
+        m = compute_encounter_metrics(_trace(N_FULL, speed_fn=_brake_speed), onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertEqual((m.contact_cause, m.outcome_v4, m.ego_safe_success), (None, m.outcome, m.safe_success))
 
 
 if __name__ == "__main__":

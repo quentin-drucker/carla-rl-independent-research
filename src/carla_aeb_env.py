@@ -93,6 +93,9 @@ from rl_reward_design import build_state_vector, compute_reward, STATE_DIM
 from map_drivability import footprint_drivable
 from passage import Obstacle, passage_from_extent, predicted_lateral_at_arrival
 from passage_carla import passage_at_location
+from walker_script import WalkerScript
+from merge_back import DRIVE_ON_SPEED_MPS, MergeBack, hazard_behind_ego, path_clear_of_hazard
+from pedestrian_contact import DEFAULT_PEDESTRIAN_RADIUS_M
 from rl_steering import (
     STEERING_STATE_DIM,
     SteeringCommitment,
@@ -173,7 +176,8 @@ class CarlaAEBEnv(gymnasium.Env):
     def __init__(self, cfg: ScenarioConfig = None, config_fn=None,
                  collision_signal: str = COLLISION_SIGNAL_LEGACY,
                  steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
-                 steering_reward: SteeringRewardConfig = None):
+                 steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
+                 merge_back: bool = False):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -210,6 +214,15 @@ class CarlaAEBEnv(gymnasium.Env):
                  instead of at onset (0 = at onset). For a walking
                  pedestrian, who has no speed yet on the onset tick.
             steering_reward: SteeringRewardConfig; None = its defaults.
+            road_right_limit_m: caps the passage's right road edge at this
+                 route-relative lateral (e.g. 4.5 = the adjacent lane's far
+                 edge, so u = 1 aims at the adjacent lane, not three lanes
+                 over). None (default) = the whole drivable road.
+            merge_back: Option A merge-back (merge_back.py): once the
+                 hazard is confirmed clear behind the car, hazard mode ends
+                 (cruise resumes) and the lateral target returns smoothly to
+                 the original lane; the policy has no effect from then on.
+                 False (default) = swerve out and hold, as before.
         """
         super().__init__()
 
@@ -234,6 +247,8 @@ class CarlaAEBEnv(gymnasium.Env):
         if steer_commit is not None:
             self._u_min, self._u_max = u_bounds
             self._lock_delay_ticks = int(round(lock_delay_s / FIXED_DT))
+            self._road_right_limit_m = road_right_limit_m
+            self._merge_back_enabled = merge_back
             self._new_commitment()  # fail fast on a bad mode or delay
             self._steering_reward = steering_reward or SteeringRewardConfig()
             self.observation_space = Box(low=-1.0, high=1.0, shape=(STEERING_STATE_DIM,), dtype=np.float32)
@@ -255,6 +270,7 @@ class CarlaAEBEnv(gymnasium.Env):
         # Per-tick state (initialized in _setup_episode) --------------------
         self._speed_state      = {}
         self._crossing_state   = None
+        self._walker_script    = None
         self._tick             = 0
 
         # LiDAR frame cache
@@ -377,7 +393,9 @@ class CarlaAEBEnv(gymnasium.Env):
             if self._trigger_time_s is not None and (sim_time_s - self._trigger_time_s) >= cfg.walker_post_trigger_delay_s:
                 self._crossing_motion_started = True
 
-        if self._crossing_motion_started:
+        if self._crossing_motion_started and self._walker_script is not None:
+            self._step_walker_script(sim_time_s - self._trigger_time_s)
+        elif self._crossing_motion_started:
             update_scripted_crossing(self._walker, self._crossing_state, fixed_dt=FIXED_DT)
 
         # Refresh debug markers each tick so they expire the moment this episode
@@ -410,9 +428,31 @@ class CarlaAEBEnv(gymnasium.Env):
         if self._steer_commit is not None:
             passage_now, steer_obs = self._steering_measurements(ego_speed_mps)
             target_m = self._commitment.target_offset_m(u_action, passage_now, triggered=self._triggered)
-            steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._triggered)
-            if not self._triggered:
-                brake_override = None  # before onset the policy has no effect: same control path as test26
+            self._hazard_on = self._triggered
+            if self._merge_back is not None and self._triggered:
+                ped = self._walker.get_location()
+                _, ped_lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (ped.x, ped.y))
+                def clear_to(aim_m):  # the strip from where the car is to aim_m
+                    return path_clear_of_hazard(
+                        path_lo_m=steer_obs["ego_lateral_m"], path_hi_m=aim_m, hazard_lateral_m=ped_lateral,
+                        hazard_lateral_speed_mps=steer_obs["pedestrian_lateral_speed_mps"],
+                        hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M)
+                target_m, self._hazard_on = self._merge_back.update(
+                    sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m,
+                    path_clear=clear_to(self._merge_back.aim_m(target_m)), lane_clear=clear_to(0.0),
+                    ego_stopped=ego_speed_mps <= DRIVE_ON_SPEED_MPS, ego_lateral_m=steer_obs["ego_lateral_m"])
+                if self._merge_back.state == "holding_after_contact":
+                    brake_override = 1.0  # after a contact: stop and hold
+                elif not self._hazard_on and self._merge_back_hazard_was_on:
+                    # Merge-back took over this tick: release the brake NOW. Without this, lane_follow
+                    # debounces the clear for 0.2 s and ramps the brake down at 1/s, which stopped a
+                    # car still rolling past the hazard (Quentin's demo, clip 3, 2026-10-23).
+                    self._speed_state["brake_prev"] = 0.0
+                    self._speed_state["hazard_clear_ticks"] = 10 ** 6  # skip the debounce
+                self._merge_back_hazard_was_on = self._hazard_on
+            steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._hazard_on)
+            if not self._hazard_on:
+                brake_override = None  # before onset / after merge-back starts the policy has no effect
 
         # --- Controller step with RL brake override ------------------------
         telemetry = lane_follow_step(
@@ -601,9 +641,15 @@ class CarlaAEBEnv(gymnasium.Env):
         as the pedestrian's predicted position changes."""
         self._map = carla_map
         road, frame = passage_at_location(carla_map, encounter_loc)  # no obstacles: just the road extent
-        self._road_extent = (road.road_left_m, road.road_right_m)
+        right = road.road_right_m
+        if right is not None and self._road_right_limit_m is not None:
+            right = min(right, self._road_right_limit_m)
+        self._road_extent = (road.road_left_m, right)
         self._frame_origin, self._frame_right = frame["origin_xyz"][:2], frame["right_xy"]
         self._commitment = self._new_commitment()
+        self._merge_back = MergeBack() if self._merge_back_enabled else None
+        self._merge_back_hazard_was_on = True
+        self._hazard_on = False
         self._min_clearance_m = None
         self._went_off_road = False
         self._prev_u_applied = 0.0
@@ -629,6 +675,16 @@ class CarlaAEBEnv(gymnasium.Env):
             distance_to_pedestrian_line_m=distance, ego_lateral_m=ego_lateral,
             heading_error_rad=heading_error_rad(tf.rotation.yaw, self._frame_right))
 
+    @property
+    def merge_back_summary(self):
+        """This episode's merge-back states and times (merge_back.py), or None when off."""
+        return None if getattr(self, "_merge_back", None) is None else self._merge_back.summary()
+
+    def _hazard_behind_ego(self):
+        tf, ped = self._vehicle.get_transform(), self._walker.get_location()
+        return hazard_behind_ego(ego_x_m=tf.location.x, ego_y_m=tf.location.y, ego_yaw_deg=tf.rotation.yaw,
+                                 hazard_x_m=ped.x, hazard_y_m=ped.y, hazard_half_length_m=DEFAULT_PEDESTRIAN_RADIUS_M)
+
     def _steering_obs(self, base_obs, passage_now, steer_obs):
         return np.array(build_steering_observation(
             [float(v) for v in base_obs], passage=self._commitment.observed_passage(passage_now),
@@ -639,6 +695,8 @@ class CarlaAEBEnv(gymnasium.Env):
                               target_m, u_action):
         """Reward, termination, observation and info for one steering-mode tick."""
         contact = collision_signals.geometric_contact
+        if contact and self._merge_back is not None:
+            self._merge_back.note_contact()
         tf = self._vehicle.get_transform()
         on_road, _ = footprint_drivable(self._map, tf.location.x, tf.location.y, tf.rotation.yaw, tf.location.z)
         off_road = self._triggered and on_road is False
@@ -655,7 +713,7 @@ class CarlaAEBEnv(gymnasium.Env):
             contact_this_tick=contact, ego_speed_mps=ego_speed_mps, off_road_this_tick=off_road,
             window_ended=window_ended, min_clearance_m=self._min_clearance_m, went_off_road=self._went_off_road,
             jerk_mps3=self._jerk, brake_cmd_this_tick=brake_cmd_now, brake_cmd_prev_tick=self._prev_brake_cmd,
-            lateral_accel_mps2=lateral_accel, hazard_active=self._triggered, fixed_dt=FIXED_DT,
+            lateral_accel_mps2=lateral_accel, hazard_active=self._hazard_on, fixed_dt=FIXED_DT,
             u_this_tick=self._commitment.u_applied, u_prev_tick=self._prev_u_applied,
             config=self._steering_reward,
         )
@@ -686,8 +744,24 @@ class CarlaAEBEnv(gymnasium.Env):
             "off_road": off_road, "went_off_road": self._went_off_road, "footprint_on_road": on_road,
             "min_clearance_m": self._min_clearance_m, "lateral_accel_mps2": lateral_accel,
             "window_ended": window_ended, **steer_obs,
+            "walker_phase": None if self._walker_script is None else self._walker_script.index,
+            "merge_back_state": None if self._merge_back is None else self._merge_back.state,
+            "merge_back_return_start_s": None if self._merge_back is None else self._merge_back.return_start_s,
+            "merge_back_drive_on_start_s": None if self._merge_back is None else self._merge_back.drive_on_start_s,
         }
         return obs, float(reward), terminated, truncated, info
+
+    @property
+    def walker_transitions(self):
+        """The scripted walker's phase changes this episode (walker_script.py), or None."""
+        return None if self._walker_script is None else list(self._walker_script.transitions)
+
+    def _step_walker_script(self, t_since_onset_s):
+        (ox, oy), (rx, ry) = self._walker_line
+        loc = self._walker.get_location()
+        direction, speed = self._walker_script.step(t_since_onset_s, (loc.x - ox) * rx + (loc.y - oy) * ry)
+        self._walker.apply_control(carla.WalkerControl(  # type: ignore[attr-defined]
+            direction=carla.Vector3D(x=rx * direction, y=ry * direction, z=0.0), speed=speed, jump=False))
 
     def close(self):
         """Tear down all CARLA actors and restore async mode."""
@@ -757,8 +831,12 @@ class CarlaAEBEnv(gymnasium.Env):
 
         # Place pedestrian
         encounter_wp = self._get_route_waypoint_at_distance(route_wps, cfg.encounter_distance_m)
+        road_extent = None
+        if cfg.walker_cross.lower() == "far_edge":  # walks across the whole road: scan its extent
+            road, _ = passage_at_location(carla_map, encounter_wp.transform.location)
+            road_extent = (road.road_left_m, road.road_right_m)
         self._walker_start_loc, self._walker_end_loc = self._compute_crossing_endpoints(
-            encounter_wp, side=cfg.walker_side, cross=cfg.walker_cross
+            encounter_wp, side=cfg.walker_side, cross=cfg.walker_cross, road_extent_m=road_extent
         )
 
         spawn_yaw_deg = math.degrees(math.atan2(
@@ -775,6 +853,13 @@ class CarlaAEBEnv(gymnasium.Env):
             end_loc=self._walker_end_loc,
             speed_mps=cfg.walker_speed_mps,
         )
+        self._walker_script = None
+        if cfg.walker_script is not None:  # Week 7: behavior that changes after onset
+            start_lat, _ = crossing_lateral_offsets_m(side=cfg.walker_side, cross=cfg.walker_cross,
+                                                      lane_width_m=LANE_WIDTH_M)
+            self._walker_script = WalkerScript(cfg.walker_script, start_lateral_m=start_lat)
+            center, right = encounter_wp.transform.location, encounter_wp.transform.get_right_vector()
+            self._walker_line = ((center.x, center.y), (right.x, right.y))
 
         # Controller state dict (mirrors test3's speed_state)
         self._speed_state = {
@@ -913,14 +998,15 @@ class CarlaAEBEnv(gymnasium.Env):
         return route_wps[-1]
 
     @staticmethod
-    def _compute_crossing_endpoints(encounter_wp, *, side, cross):
+    def _compute_crossing_endpoints(encounter_wp, *, side, cross, road_extent_m=None):
         """Build walker start/end locations relative to an encounter waypoint."""
         lane_center = encounter_wp.transform.location
         right       = encounter_wp.transform.get_right_vector()
         # Same rule as test3, including "stationary" (stands at lane center).
         # Unknown side/cross values now raise instead of silently meaning
         # "right"/"far"; near/far placement is unchanged.
-        start_lat, end_lat = crossing_lateral_offsets_m(side=side, cross=cross, lane_width_m=LANE_WIDTH_M)
+        start_lat, end_lat = crossing_lateral_offsets_m(side=side, cross=cross, lane_width_m=LANE_WIDTH_M,
+                                                        road_extent_m=road_extent_m)
 
         start_loc = carla.Location(
             x=lane_center.x + right.x * start_lat,

@@ -208,6 +208,8 @@ SUMMARY_COLUMNS = [
     # Steering mode (Phase 2); None for a braking-only policy. The first two are set by the evaluator.
     "steer_commit", "fixed_u", "first_contact_time_s", "requested_side_reversals", "requested_offset_reversals",
     "requested_side_reversals_moving", "requested_offset_reversals_moving",
+    # Encounter protocol v4 (2026-10-21): a pedestrian walking into an already-stopped car.
+    "contact_cause", "outcome_v4", "ego_safe_success",
 ]
 
 

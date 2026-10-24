@@ -7,7 +7,10 @@ plan step 5). One run trains ONE commitment version; run it once with
 Training scenarios (MASTER, "Phase 2 design decisions" 7): the test26
 stationary pedestrian (steer_brake_baseline.baseline_scenario_config) with
 speed uniform in 30-50 mph and onset TTC uniform in 0.3-1.5 s, sampled per
-episode from a seeded generator.
+episode from a seeded generator. Week 7: --walker samples uniformly from
+the given pedestrian cases (e.g. the dynamic pair right_cross /
+right_turn_back), with --ttc-range, --lock-delay-s and --road-right-limit-m;
+the defaults reproduce the Week 5 setup.
 
 The approach to the pedestrian is fast-forwarded: the environment ignores
 the policy before onset, so those ticks are stepped inside reset() with a
@@ -57,7 +60,7 @@ MPH_RANGE = (30.0, 50.0)
 TTC_RANGE_S = (0.3, 1.5)
 HAND_OVER_LEAD_S = 1.0
 SAC_KWARGS = dict(buffer_size=100_000, batch_size=512, learning_rate=3e-4, tau=0.005, ent_coef="auto")  # = train_sac v3
-EPISODE_COLUMNS = ["episode", "timesteps", "mph", "ttc_s", "steps", "reward", "contact", "contact_speed_mps",
+EPISODE_COLUMNS = ["episode", "timesteps", "walker", "mph", "ttc_s", "steps", "reward", "contact", "contact_speed_mps",
                    "min_clearance_m", "went_off_road", "u_applied", "final_lateral_m", "final_speed_mps",
                    "missing_passage_ticks", "wall_s"]
 
@@ -75,6 +78,14 @@ def _parse_args(argv=None):
     p.add_argument("--steps", type=int, default=50_000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--checkpoint-every", type=int, default=5_000)
+    p.add_argument("--walker", nargs="+", default=["stationary"],
+                   help="pedestrian cases sampled uniformly (steer_brake_baseline WALKER_CASES / DYNAMIC_WALKER_CASES)")
+    p.add_argument("--walker-speed", type=float, help="walking speed in m/s (default: the scenario default)")
+    p.add_argument("--walker-change-s", type=float, help="change time of a dynamic walker (default: its default)")
+    p.add_argument("--ttc-range", type=float, nargs=2, default=list(TTC_RANGE_S), metavar=("LO", "HI"))
+    p.add_argument("--lock-delay-s", type=float, default=0.0, help="lock_at_onset locks this long after onset")
+    p.add_argument("--road-right-limit-m", type=float, help="cap the passage's right road edge (default: whole road)")
+    p.add_argument("--merge-back", action="store_true", help="return to the lane once the hazard is clear behind the car")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--relaunch-carla", action="store_true",
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and continue")
@@ -88,15 +99,12 @@ class SkipApproach(gymnasium.Wrapper):
     """Fast-forwards the approach inside reset() (see the module docstring)
     and samples a fresh training scenario for every episode."""
 
-    def __init__(self, env, rng):
+    def __init__(self, env, rng, scenario=None):
         super().__init__(env)
-        self.rng = rng
+        self.rng, self.scenario = rng, scenario or {}
 
     def reset(self, **kwargs):
-        from steer_brake_baseline import baseline_scenario_config
-
-        mph, ttc = self.rng.uniform(*MPH_RANGE), self.rng.uniform(*TTC_RANGE_S)
-        self.env.unwrapped.cfg = baseline_scenario_config(mph, ttc, run_id=f"train_{mph:.1f}mph_ttc{ttc:.2f}")
+        self.env.unwrapped.cfg = sample_scenario(self.rng, **self.scenario)
         obs, info = self.env.reset(**kwargs)
         base = self.env.unwrapped
         while not policy_should_act(dist_travelled_m=base._dist_m, encounter_distance_m=base.cfg.encounter_distance_m,
@@ -112,8 +120,21 @@ class SkipApproach(gymnasium.Wrapper):
         # before callbacks run, so env.cfg is already the next one by then.
         obs, reward, terminated, truncated, info = self.env.step(action)
         cfg = self.env.unwrapped.cfg
-        info.update(scenario_mph=cfg.target_mph, scenario_ttc_s=cfg.trigger_ttc_s)
+        info.update(scenario_mph=cfg.target_mph, scenario_ttc_s=cfg.trigger_ttc_s, scenario_run_id=cfg.run_id)
         return obs, reward, terminated, truncated, info
+
+
+def sample_scenario(rng, *, walkers=("stationary",), ttc_range=TTC_RANGE_S, walker_speed_mps=None,
+                    walker_change_s=None):
+    """One training scenario. With the defaults this draws exactly what Week 5 drew
+    (mph, then TTC), so old seeds reproduce; a walker is drawn only if there is a choice."""
+    from steer_brake_baseline import baseline_scenario_config
+
+    mph, ttc = rng.uniform(*MPH_RANGE), rng.uniform(*ttc_range)
+    walker = walkers[0] if len(walkers) == 1 else rng.choice(list(walkers))
+    tag = "" if walker == "stationary" else f"_{walker}"
+    return baseline_scenario_config(mph, ttc, walker=walker, walker_speed_mps=walker_speed_mps,
+                                    walker_change_s=walker_change_s, run_id=f"train_{mph:.1f}mph_ttc{ttc:.2f}{tag}")
 
 
 def _make_callbacks(run_dir, log, start_time, checkpoint_every):
@@ -136,7 +157,9 @@ def _make_callbacks(run_dir, log, start_time, checkpoint_every):
             self.n_episodes += 1
             self.recent = (self.recent + [self.ep_reward])[-20:]
             row = {
-                "episode": self.n_episodes, "timesteps": self.num_timesteps, "mph": round(info["scenario_mph"], 2),
+                "episode": self.n_episodes, "timesteps": self.num_timesteps,
+                "walker": info["scenario_run_id"].split("_", 3)[3] if info["scenario_run_id"].count("_") >= 3 else "stationary",
+                "mph": round(info["scenario_mph"], 2),
                 "ttc_s": round(info["scenario_ttc_s"], 3), "steps": self.ep_steps, "reward": round(self.ep_reward, 3),
                 "contact": info["collision"], "contact_speed_mps": round(info["ego_speed_mps"], 3) if info["collision"] else None,
                 "min_clearance_m": info["min_clearance_m"], "went_off_road": info["went_off_road"],
@@ -209,8 +232,11 @@ def main(argv=None):
             "git_branch": _git("rev-parse", "--abbrev-ref", "HEAD"), "git_tracked_changes": dirty,
             "git_dirty": bool(dirty), "physics_backend": BACKEND_DEFAULT, "steer_commit": args.commit,
             "u_bounds": [0.0, 1.0], "total_steps": args.steps, "seed": args.seed,
-            "checkpoint_every": args.checkpoint_every, "mph_range": MPH_RANGE, "ttc_range_s": TTC_RANGE_S,
-            "scenario": "steer_brake_baseline.baseline_scenario_config (stationary pedestrian, Town04)",
+            "checkpoint_every": args.checkpoint_every, "mph_range": MPH_RANGE, "ttc_range_s": list(args.ttc_range),
+            "scenario": "steer_brake_baseline.baseline_scenario_config (Town04)", "walkers": args.walker,
+            "walker_speed_mps": args.walker_speed, "walker_change_s": args.walker_change_s,
+            "lock_delay_s": args.lock_delay_s, "road_right_limit_m": args.road_right_limit_m,
+            "merge_back": args.merge_back,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -233,8 +259,15 @@ def main(argv=None):
     def make_env(timesteps_done):
         # Reseeding from the step count makes a resumed run deterministic too, though not
         # identical to an uninterrupted one.
-        env = CarlaAEBEnv(steer_commit=commit)
-        return SkipApproach(env, random.Random(seed * 1_000_003 + timesteps_done))
+        # .get(): Week 5 manifests predate these keys and mean the stationary defaults.
+        env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
+                          road_right_limit_m=manifest.get("road_right_limit_m"),
+                          merge_back=manifest.get("merge_back", False))
+        scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
+                        ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
+                        walker_speed_mps=manifest.get("walker_speed_mps"),
+                        walker_change_s=manifest.get("walker_change_s"))
+        return SkipApproach(env, random.Random(seed * 1_000_003 + timesteps_done), scenario)
 
     env, model, attempts = None, None, 0
     while True:

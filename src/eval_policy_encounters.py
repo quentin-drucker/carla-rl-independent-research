@@ -108,14 +108,25 @@ def _parse_args(argv=None):
     p.add_argument("--fixed-u", type=float, nargs="+",
                    help="no model: a constant [--fixed-brake, u] action, one episode per u (needs --steer-commit)")
     p.add_argument("--fixed-brake", type=float, default=1.0)
-    p.add_argument("--scripted-aim", choices=("clear_predicted",),
-                   help="no model: --fixed-brake with rl_steering.clear_predicted_u as the aim (needs --steer-commit)")
+    p.add_argument("--scripted-aim", choices=tuple(SCRIPTED_AIMS),
+                   help="no model: --fixed-brake with a hand-written aim rule from rl_steering (needs --steer-commit)")
     p.add_argument("--walker", nargs="+", default=["stationary"],
-                   help="pedestrian cases for --suite test26 (steer_brake_baseline.WALKER_CASES)")
+                   help="pedestrian cases for --suite test26 (steer_brake_baseline.WALKER_CASES or "
+                        "DYNAMIC_WALKER_CASES)")
     p.add_argument("--walker-speed", type=float, nargs="+", default=[None],
                    help="walking speeds in m/s for --suite test26 (default: the scenario default)")
+    p.add_argument("--walker-change-s", type=float, nargs="+", default=[None],
+                   help="seconds after onset at which a DYNAMIC_WALKER_CASES pedestrian changes behavior "
+                        "(default: steer_brake_baseline.DEFAULT_WALKER_CHANGE_S)")
     p.add_argument("--lock-delay-s", type=float, default=0.0,
                    help="lock_at_onset locks this long after onset (walking pedestrians: 0.2)")
+    p.add_argument("--road-right-limit-m", type=float,
+                   help="cap the passage's right road edge (4.5 = adjacent lane only); default: whole road")
+    p.add_argument("--merge-back", action="store_true",
+                   help="return to the original lane once the hazard is clear behind the car (merge_back.py)")
+    p.add_argument("--observe-after-s", type=float, default=0.0,
+                   help="keep simulating this long after the scoring window (e.g. to watch a merge-back finish); "
+                        "metrics still use only the window")
     p.add_argument("--parity-with", metavar="TEST26_SWEEP",
                    help="compare each fixed-action episode with the scripted test26 run of the same case")
     p.add_argument("--sweep-csv", help="sweep_summary.csv for --suite sweep")
@@ -136,6 +147,9 @@ def _parse_args(argv=None):
         p.error("--parity-with needs --suite test26, --fixed-u, full brake and the stationary pedestrian "
                 "(test26 always brakes fully)")
     return args
+
+
+SCRIPTED_AIMS = {"clear_predicted": "clear_predicted_u", "pass_behind": "pass_behind_u"}  # name -> rl_steering function
 
 
 class _FixedAction:
@@ -165,15 +179,20 @@ def _build_configs(args):
         configs = load_sweep_configs(args.sweep_csv)
         source = {"sweep_csv": os.path.abspath(args.sweep_csv), "sweep_csv_sha256": file_sha256(args.sweep_csv)}
     elif args.suite == "test26":
-        from steer_brake_baseline import baseline_scenario_config
+        from steer_brake_baseline import DYNAMIC_WALKER_CASES, baseline_scenario_config
         configs = [baseline_scenario_config(
-                       mph, ttc, walker=walker, walker_speed_mps=speed,
+                       mph, ttc, walker=walker, walker_speed_mps=speed, walker_change_s=change,
                        # the stationary name is what --parity-with looks up
                        run_id=f"{mph:g}mph_ttc{ttc:g}" + ("" if walker == "stationary" else f"_{walker}")
-                       + ("" if speed is None else f"_{speed:g}mps"))
-                   for walker in args.walker for speed in args.walker_speed for mph in args.mph for ttc in args.ttc]
+                       + ("" if speed is None else f"_{speed:g}mps") + ("" if change is None else f"_chg{change:g}s"))
+                   for walker in args.walker for speed in args.walker_speed for change in args.walker_change_s
+                   for mph in args.mph for ttc in args.ttc]
         source = {"builder": "steer_brake_baseline.baseline_scenario_config", "mph": args.mph, "ttc": args.ttc,
-                  "walker": args.walker, "walker_speed_mps": args.walker_speed}
+                  "walker": args.walker, "walker_speed_mps": args.walker_speed,
+                  "walker_change_s": args.walker_change_s,
+                  "dynamic_walker": sorted(set(args.walker) & set(DYNAMIC_WALKER_CASES)),
+                  "walker_script_note": "each episode.json config holds its exact walker_script phases; "
+                                        "walker_transitions holds the measured phase changes"}
     else:
         from train_sac import sample_config  # imports the env module; deferred
         random.seed(args.seed)
@@ -185,14 +204,15 @@ def _build_configs(args):
     return configs, source
 
 
-def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch):
+def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch, observe_after_s=0.0):
     from avoidability import compute_avoidability
     from carla_aeb_env import FIXED_DT, POST_TRIGGER_TIMEOUT_S
     from map_drivability import footprint_drivable  # the same rule as test26
     from trajectory_recording import TrajectoryRecorder
 
     original_sim_seconds = cfg.sim_seconds
-    sim_seconds_used = extended_sim_seconds(original_sim_seconds, PROTOCOL.horizon_s, POST_TRIGGER_TIMEOUT_S)
+    sim_seconds_used = extended_sim_seconds(original_sim_seconds, PROTOCOL.horizon_s + observe_after_s,
+                                            POST_TRIGGER_TIMEOUT_S)
     cfg.sim_seconds = sim_seconds_used
     env.cfg = cfg
     obs, _ = env.reset()
@@ -240,8 +260,10 @@ def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch):
                       "terminated": terminated, "truncated": truncated,
                       "action": json.dumps(np.asarray(action, dtype=float).ravel().tolist())})
 
+        # Observing past the window: the env's own window-end truncation is ignored once the hazard has started.
         decision = window_decision(sim_time_s=info["sim_time_s"], trigger_time_s=info["trigger_time_s"],
-                                   horizon_s=PROTOCOL.horizon_s, truncated=truncated, fixed_dt_s=FIXED_DT,
+                                   horizon_s=PROTOCOL.horizon_s + observe_after_s,
+                                   truncated=truncated and not (observe_after_s and info["triggered"]), fixed_dt_s=FIXED_DT,
                                    legacy_ended=legacy.ended)
         if decision.stop:
             break
@@ -273,6 +295,8 @@ def _run_episode(env, model, cfg, *, episode, ep_dir, carla_map, watch):
             "legacy_label": legacy.label, "legacy_end_reason": legacy.end_reason, "legacy_end_tick": legacy.end_tick,
             "signal_tick_counts": counts, "drivability_check": None if carla_map is None else "seam_tolerant",
             "avoidability": {k: (v if v != float("inf") else "inf") for k, v in avoid.items()},
+            "walker_transitions": env.walker_transitions, "merge_back": env.merge_back_summary,
+            "observe_after_s": observe_after_s,
         }, f, indent=2)
 
     row = summary_row(episode=episode, cfg=cfg, metrics=metrics.to_dict(), stop_reason=decision.reason,
@@ -293,16 +317,18 @@ def main(argv=None):
         model, model_path = None, f"fixed_action:brake={args.fixed_brake:g},u={args.fixed_u}"
         episodes = [(cfg, u, _FixedAction(args.fixed_brake, u)) for cfg in configs for u in args.fixed_u]
     elif args.scripted_aim:
-        from rl_steering import clear_predicted_u
+        import rl_steering
+        rule = getattr(rl_steering, SCRIPTED_AIMS[args.scripted_aim])
         model, model_path = None, f"scripted_aim:{args.scripted_aim},brake={args.fixed_brake:g}"
-        episodes = [(cfg, None, _ScriptedAim(args.fixed_brake, clear_predicted_u)) for cfg in configs]
+        episodes = [(cfg, None, _ScriptedAim(args.fixed_brake, rule)) for cfg in configs]
     else:
         from stable_baselines3 import SAC
         model_path = resolve_model_path(args.model, search_dir=SRC_DIR)
         model = SAC.load(model_path)
         episodes = [(cfg, None, model) for cfg in configs]
     env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit,
-                      lock_delay_s=args.lock_delay_s)
+                      lock_delay_s=args.lock_delay_s, road_right_limit_m=args.road_right_limit_m,
+                      merge_back=args.merge_back)
     try:
         if model is not None and model.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {model.observation_space.shape} != env "
@@ -326,6 +352,8 @@ def main(argv=None):
             "model_observation_shape": list(env.observation_space.shape),
             "model_action_shape": list(env.action_space.shape),
             "steer_commit": args.steer_commit, "lock_delay_s": args.lock_delay_s,
+            "road_right_limit_m": args.road_right_limit_m, "merge_back": args.merge_back,
+            "observe_after_s": args.observe_after_s,
             "fixed_brake": args.fixed_brake if (args.fixed_u or args.scripted_aim) else None,
             "fixed_u": args.fixed_u, "scripted_aim": args.scripted_aim, "parity_with": args.parity_with,
             "physics_backend": BACKEND_DEFAULT,
@@ -350,7 +378,7 @@ def main(argv=None):
             print(f"\n[eval] ===== episode {i}/{len(episodes)}: {cfg.walker_cross} {cfg.walker_side} "
                   f"{cfg.target_mph:.1f} mph ttc={cfg.trigger_ttc_s} fixed_u={fixed_u} =====")
             metrics, row = _run_episode(env, policy, cfg, episode=i, ep_dir=os.path.join(out_dir, f"ep_{i:04d}"),
-                                        carla_map=carla_map, watch=args.watch)
+                                        carla_map=carla_map, watch=args.watch, observe_after_s=args.observe_after_s)
             row.update(steer_commit=args.steer_commit, fixed_u=fixed_u)
             for line in summarize_for_console(metrics):
                 print("    " + line)

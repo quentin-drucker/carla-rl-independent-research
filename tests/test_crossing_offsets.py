@@ -36,6 +36,16 @@ class CrossingOffsetTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             crossing_lateral_offsets_m(side="left", cross="halfway", lane_width_m=LANE)
 
+    def test_far_edge_walks_across_the_whole_road_and_off_it(self):
+        # Town04 at the test pedestrian: road from -5.25 m (left) to +8.80 m (right).
+        road = (-5.25, 8.80)
+        self.assertEqual(crossing_lateral_offsets_m(side="right", cross="far_edge", lane_width_m=LANE,
+                                                    road_extent_m=road), (2.55, -5.75))
+        self.assertEqual(crossing_lateral_offsets_m(side="left", cross="far_edge", lane_width_m=LANE,
+                                                    road_extent_m=road), (-2.55, 9.30))
+        with self.assertRaises(ValueError):  # needs the road's extent
+            crossing_lateral_offsets_m(side="left", cross="far_edge", lane_width_m=LANE)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2520,6 +2520,95 @@ commitment counts taken only while the car is moving):
 
 # Tentative and Inconclusive Findings
 
+## Week 7 (Phase 2): pedestrians that change behavior after onset, and the replanning gate (added 2026-10-22)
+
+**Question:** when the pedestrian's behavior changes after the hazard starts, can a policy
+that re-decides every tick (`per_tick`) be safer than one that commits once
+(`lock_at_onset`)? Week 5 could not separate them because the right move was always
+decidable at onset. Rule adopted before any training: **train only if a scripted controller
+that reacts after the change beats every onset-fixed maneuver somewhere** (the "gate").
+
+**Scenario design** (`src/walker_script.py`, `steer_brake_baseline.DYNAMIC_WALKER_CASES`):
+the pedestrian starts on the right (+2.55 m) and members of a pair are identical until a
+change at 0.6 s (after the 0.5 s lock delay): keeps crossing vs turns back; stands vs starts
+late. Every phase change is recorded per episode (`walker_transitions` in episode.json).
+
+**Method:** 60 cases (30-50 mph x onset TTC 0.5-1.6 s), 1.8 m/s, seven controllers per
+pedestrian: full brake with u = 0 / 0.5 / 1, coast with u = 0 / 1 (all fixed from onset), a
+scripted per-tick replanner ("pass behind the pedestrian", `rl_steering.pass_behind_u`), and
+the same rule locked 0.5 s after onset. Scored with encounter protocol v4 (decision 11) and
+v3. `src/analyze_replanning_gate.py`. Evidence: the 12 folders listed in
+`src/runs/steering_train/w7_table.log` (2026-10-21 22:17 - 2026-10-22 03:45, 2520 episodes).
+
+**Result: the gate failed for every design tried, under v4 and v3 alike; no policy was trained.**
+
+| Design | Cases where no single onset-fixed option is safe for both members | Replanner wins |
+|---|---|---|
+| Whole road, keeps crossing vs turns back | 0 of 60 | 0 |
+| Whole road, stands vs starts late | 0 of 60 | 0 |
+| Passage capped at the adjacent lane (`--road-right-limit-m 4.5`), crossing vs turn-back | 0 of 60 | 0 |
+
+- **In every case that some fixed option can save (60/60, 60/60, 46/46), one maneuver chosen
+  at onset is safe for both members of the pair.** Which one depends on speed and warning
+  time, both known at onset, so committing once costs nothing in principle.
+- Why: a pedestrian who turns back at 0.6 s has moved ~0.5 m and never enters the ego lane
+  (staying in lane is safe in 60/60 turn-back cases), and full braking stops the car within
+  about 1.5-2 s, too soon for a walker to create two mutually exclusive threats. With the
+  whole road, full brake plus the maximum right swerve (~7.4 m) is safe for both members in
+  53/60 (turn-back pair) and 50/60 (late-start pair); in CARLA the hard swerve also scrubs
+  speed.
+- An offline screen of Week 5 trajectories against scripted pedestrian paths predicted this
+  before the CARLA runs: the only apparent separations came from pedestrians walking into a
+  car that had already stopped.
+- **Secondary finding: re-deciding does rescue a commit-once RULE whose onset guess is
+  misled.** Same scripted rule, per-tick vs locked at 0.5 s: whole road 5 vs 5 cases where
+  only one is safe (a tie; per-tick's wins come from not waiting for the lock, not from
+  revising); late start 7 vs 1 (genuine revision); capped turn-back 15 vs 0 (14 turn-back
+  cases with 3 re-aims each: the locked rule commits right on the first leftward step and
+  meets the returning pedestrian). It never beats the best per-case fixed choice.
+- Reading for the research question: per-tick revision insures against a wrong onset
+  decision; it is not needed when a correct onset decision exists. For learned policies the
+  open question is whether `lock_at_onset` reliably learns the right per-case choice (Week 5
+  found blind spots in 2 of 3 seeds at 1.0 m).
+- **Evidence status: CONFIRMED for these scripted controllers, one deterministic episode per
+  case; the replanner is a simple rule (it fails where a fixed option is safe in 26 / 9 / 3
+  case-members) but no separating case exists for any replanner to win.**
+- Next scenario designs must make two threats mutually exclusive inside the ~1.5-2 s before
+  the car stops: opening left swerves so the pedestrian's later direction decides the safe
+  side (needs a scripted left-swerve safety check first), a pedestrian who commits into the
+  lane before turning back, or a faster pedestrian.
+
+**Follow-up (2026-10-22): first policies trained on walking pedestrians, and merge-back.**
+Quentin deferred the mid-run behavior changes until a model can swerve around a hazard and
+merge back reliably. Matched 50k pair, seed 0, steady crossings both ways (right_far,
+left_far, 1.8 m/s), TTC 0.5-1.6 s, lock delay 0.5 s; same 60-case grid x 2 directions
+(evidence folders in `src/runs/steering_train/w7_walk.log`):
+- Full brake + u = 1 is safe in 114/120; every case is avoidable by some scripted option.
+- **per_tick: 110/120 (v4).** Its 10 misses are all the pedestrian from the right with
+  0.5-0.6 s of warning, where staying in lane is right and it swerved into them.
+- **lock_at_onset: 94/120; 25 avoidable misses from the right at all speeds, TTC 0.6-1.1 s,
+  locking a partial swerve into the pedestrian.** Not diagnosed; 50k steps may be too few for
+  a policy that makes one route decision per episode.
+- **Merge-back (Option A, decision 12) works when the car passes the hazard still moving**
+  (10 of 54 scripted checks: back to 0.00 m and cruise speed, no road departure, avoidance
+  outcomes unchanged in all 36 comparable cases). **With full braking the car usually stops
+  before passing (44 of 54), and then waits beside the hazard,** because "clear" means
+  "behind the car". A rule for when a stopped car may drive on is needed next.
+
+**Road-edge crossings, stop after contact, immediate brake release (2026-10-23).** From
+Quentin's visual check: crossing pedestrians now walk across the whole road and off its far
+edge (`right_edge` / `left_edge`; `right_far` / `left_far` unchanged); after any contact the
+car stops and holds; the brake is released at once when merge-back takes over (a car still
+rolling past the pedestrian had come to a stop during the controller's slow brake release).
+Retrained 50k pair (seed 0, merge-back): safe (v4) of 120: brake u = 1 114, per_tick 106,
+lock_at_onset 96 (same failure patterns as before; single-seed variation). The waiting cases
+almost disappear (per_tick 44 -> 0 at the window end), but the pedestrian from the left now
+walks into the lanes the car swerved into, so "walked into the stopped car" contacts rise to
+12-16 per controller (safe under v4, not v3). Scripted merge-back check (54 cases, 16 s
+observed): **45 complete swerve -> (drive on) -> back in the lane at cruise speed, with no
+contact or road departure after any return**; 8 contacts, all followed by stop-and-hold; 1
+waits.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.
@@ -3439,6 +3528,65 @@ folders named in `src/runs/steering_train/walk_<tag>.log`):**
   after onset (a pedestrian who stops, turns back, or starts late).
 - **Evidence status: CONFIRMED for these scripted options; one episode per scenario,
   deterministic.**
+
+### 11. Pedestrians whose behavior changes, and encounter protocol v4 (2026-10-21)
+
+- **Scripted behavior changes** (`walker_script.py`): walk/wait phases, each ending at a
+  lateral position or after a time, so a turn-back can be a threshold or a delay; also stop,
+  late start, pause/restart. Members of a test pair are identical until the change, which
+  comes after the lock delay, so a locked route is chosen before it. Defaults leave every
+  earlier scenario unchanged.
+- **Lock delay 0.5 s and training TTC 0.5-1.6 s for walking pedestrians**, as proposed by the
+  Week 5 walking sweep (available in `train_steering.py`; not yet used for training).
+- **Protocol v4: a pedestrian walking into an already-stopped car is reported separately.**
+  `contact_cause` is "pedestrian" when the car is at or below 0.5 m/s at first contact and
+  the pedestrian's own motion closed more of the gap over the previous 0.5 s than the car's;
+  otherwise "ego". A slow creep into a standing pedestrian therefore stays the car's hit.
+  New `outcome_v4` / `ego_safe_success`; **every v3 field (outcome, safe_success) is
+  unchanged**, so Week 5 tables reproduce. Limit: only the first contact is classified.
+- `--road-right-limit-m` caps the passage (e.g. 4.5 = adjacent lane only). Default: the
+  whole road, as before. Whether the passage should be capped is still open with
+  Prof. Izmirli.
+
+### 12. Merge-back to the original lane: Option A (Quentin, 2026-10-22)
+
+The learned policy decides only the avoidance (brake and u). Once the hazard is confirmed
+clear behind the car (0.5 s past the rear bumper by its own half-length plus 1.0 m), the
+classical controller takes over: hazard mode ends (cruise resumes through lane_follow's
+RECOVER -> CRUISE) and the lateral target returns to the route center along a smoothstep
+at no more than 1.5 m/s (at least 2 s). Hazard-generic, so a parked car can reuse it
+(`src/merge_back.py`, `--merge-back`, default off). The policy is charged no comfort terms
+for the return.
+
+**Drive on after stopping (Quentin, 2026-10-22).** A car that stopped (<= 0.5 m/s) beside
+or before the hazard drives on along its swerve path once that path is clear: the strip from
+where the car is to where it aims, body edge to hazard edge >= 1.0 m now and over the next
+2 s at the hazard's current lateral speed (confirmed 0.5 s). Hazard mode ends and the swerve
+offset is held until the hazard is behind the car; then the return above. If the path is
+blocked again while driving on, hazard mode returns (brake, policy in control). Principle:
+the path the car is currently on is the path monitored for hazards; later a second hazard on
+the swerve or return path should trigger the same logic, branching into a new swerve if
+needed. A moving car keeps policy control, so the rule never overrides an avoidance.
+Live check (54 scripted episodes): 44 complete swerve -> drive on -> return to 0.00 m at
+cruise speed with no road departure or contact; safety unchanged (50/54); the other 10 wait
+because a pedestrian who finished crossing stands beside the swerve path while the lane is
+clear (a direct return to the lane is the next refinement).
+
+**Direct return and its live check (2026-10-22).** Added: a stopped car whose swerve path is
+blocked but whose path back to the lane center is clear returns to the lane from its actual
+position (the swerve path is preferred when both are clear). Live re-check of the same 54
+cases: unchanged (44 complete, 10 wait, 52/54 safe under v4). **Correction: in the 10 waiting
+cases the pedestrian stands between the car and its lane, in 7 of them 0-0.4 m from the car's
+side; driving on or returning would both pass a person within the 1 m margin, so waiting is
+correct.** The cause is that the scripted "far" crossing ends inside the adjacent lane
+(+/-2.55 m) and the pedestrian stands there for good, in the lane the car swerved into;
+letting crossings continue to the curb is the proposed fix.
+
+**Merge-back training (2026-10-22).** The same walking 50k pair retrained with `--merge-back`:
+per_tick 112/120 safe (v4), lock_at_onset 92/120 (still 32/60 for the pedestrian from the
+right); scripted references identical to the runs without merge-back (brake u = 1 114/120).
+Merge-back costs no safety. Many returns are still in progress when the 8 s scoring window
+ends; the cars still in "avoiding" are almost all the waiting case above.
 
 ## Questions revealed by reconstruction
 

@@ -2595,6 +2595,20 @@ left_far, 1.8 m/s), TTC 0.5-1.6 s, lock delay 0.5 s; same 60-case grid x 2 direc
   before passing (44 of 54), and then waits beside the hazard,** because "clear" means
   "behind the car". A rule for when a stopped car may drive on is needed next.
 
+**Road-edge crossings, stop after contact, immediate brake release (2026-10-23).** From
+Quentin's visual check: crossing pedestrians now walk across the whole road and off its far
+edge (`right_edge` / `left_edge`; `right_far` / `left_far` unchanged); after any contact the
+car stops and holds; the brake is released at once when merge-back takes over (a car still
+rolling past the pedestrian had come to a stop during the controller's slow brake release).
+Retrained 50k pair (seed 0, merge-back): safe (v4) of 120: brake u = 1 114, per_tick 106,
+lock_at_onset 96 (same failure patterns as before; single-seed variation). The waiting cases
+almost disappear (per_tick 44 -> 0 at the window end), but the pedestrian from the left now
+walks into the lanes the car swerved into, so "walked into the stopped car" contacts rise to
+12-16 per controller (safe under v4, not v3). Scripted merge-back check (54 cases, 16 s
+observed): **45 complete swerve -> (drive on) -> back in the lane at cruise speed, with no
+contact or road departure after any return**; 8 contacts, all followed by stop-and-hold; 1
+waits.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

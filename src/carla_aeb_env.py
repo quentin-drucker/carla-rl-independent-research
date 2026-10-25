@@ -178,7 +178,8 @@ class CarlaAEBEnv(gymnasium.Env):
                  collision_signal: str = COLLISION_SIGNAL_LEGACY,
                  steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
                  steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
-                 merge_back: bool = False):
+                 merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
+                 same_direction_passage: bool = False):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -224,7 +225,15 @@ class CarlaAEBEnv(gymnasium.Env):
                  (cruise resumes) and the lateral target returns smoothly to
                  the original lane; the policy has no effect from then on.
                  False (default) = swerve out and hold, as before.
+            map_name / route_builder / same_direction_passage: city circuit
+                 (run_circuit.py). route_builder(world) -> (ego spawn
+                 Transform, route waypoints); None = the Town04 test route.
+                 same_direction_passage: the passage never extends into
+                 oncoming lanes. next_encounter() starts the next hazard
+                 further along the same route without respawning the car.
         """
+        self._map_name, self._route_builder = map_name, route_builder
+        self._same_direction_passage = same_direction_passage
         super().__init__()
 
         self._collision_signal = validate_collision_signal_mode(collision_signal)
@@ -641,7 +650,8 @@ class CarlaAEBEnv(gymnasium.Env):
         line is scanned once here; the passage is rebuilt from it every tick
         as the pedestrian's predicted position changes."""
         self._map = carla_map
-        road, frame = passage_at_location(carla_map, encounter_loc)  # no obstacles: just the road extent
+        road, frame = passage_at_location(carla_map, encounter_loc,  # no obstacles: just the road extent
+                                          same_direction_only=self._same_direction_passage)
         right = road.road_right_m
         if right is not None and self._road_right_limit_m is not None:
             right = min(right, self._road_right_limit_m)
@@ -790,7 +800,7 @@ class CarlaAEBEnv(gymnasium.Env):
             host="localhost",
             port=2000,
             timeout_s=10.0,
-            target_map=TARGET_MAP,
+            target_map=self._map_name,
         )
         enable_sync_mode(self._world, fixed_dt=FIXED_DT)
         print("[CarlaAEBEnv] connected. Sync mode enabled.")
@@ -814,7 +824,12 @@ class CarlaAEBEnv(gymnasium.Env):
         self._world.set_weather(preset)
 
         # Spawn ego + sensors
-        spawn_points, ego_tf, bp_lib = prepare_spawn_context(self._world, SPAWN_INDEX=EGO_SPAWN_INDEX)
+        if self._route_builder is None:
+            spawn_points, ego_tf, bp_lib = prepare_spawn_context(self._world, SPAWN_INDEX=EGO_SPAWN_INDEX)
+            route_wps = None
+        else:
+            ego_tf, route_wps = self._route_builder(self._world)
+            bp_lib = self._world.get_blueprint_library()
         self._vehicle = spawn_ego_vehicle(self._world, bp_lib=bp_lib, spawn_tf=ego_tf)
 
         if cfg.road_friction is not None:
@@ -828,15 +843,70 @@ class CarlaAEBEnv(gymnasium.Env):
         self._collision_sensor, self._collision_flag = self._attach_collision_sensor(bp_lib)
 
         # Build route
-        end_loc = spawn_points[END_MARKER_SPAWN_INDEX].location
         carla_map = self._world.get_map()
-        grp = GlobalRoutePlanner(carla_map, 2.0)
-        route = grp.trace_route(ego_tf.location, end_loc)
-        route_wps = [wp for (wp, _) in route]
+        if route_wps is None:
+            end_loc = spawn_points[END_MARKER_SPAWN_INDEX].location
+            grp = GlobalRoutePlanner(carla_map, 2.0)
+            route_wps = [wp for (wp, _) in grp.trace_route(ego_tf.location, end_loc)]
+        self._route_wps = route_wps
         route_points_world = [wp.transform.location for wp in route_wps]
 
+        # Controller state dict (mirrors test3's speed_state)
+        self._speed_state = {
+            "i_term": 0.0,
+            "kp": 0.50,
+            "ki": 0.10,
+            "brake_prev": 0.0,
+            "max_cone_yaw_deg": MAX_CONE_YAW_DEG,
+            "cone_half_angle_deg": CONE_HALF_ANGLE_DEG,
+            "cone_draw_length_m": CONE_DRAW_LENGTH_M,
+            "drive_mode": "CRUISE",
+            "hazard_clear_ticks": 0,
+            "cone_max_lateral_m": CONE_MAX_LATERAL_M,
+            "throttle_prev": 0.0,
+            "brake_prev_cruise": 0.0,
+            "lidar_actor": self._lidar,
+            "route_points_world": route_points_world,
+            "noodle_enable": NOODLE_ENABLE,
+            "noodle_step_m": NOODLE_STEP_M,
+            "noodle_half_width_m": NOODLE_HALF_WIDTH_M,
+            "noodle_max_dist_m": NOODLE_MAX_DIST_M,
+            "noodle_x_min_m": NOODLE_X_MIN_M,
+        }
+
+        # Reset all per-tick state
+        self._tick                    = 0
+        self._dist_m                  = 0.0
+        self._prev_loc                = None
+        self._last_lidar_frame        = None
+        self._last_lidar_tick         = -1
+        self._prev_telemetry          = None
+        self._speed_lp                = 0.0
+        self._prev_speed_mps          = 0.0
+        self._prev_accel_mps2         = 0.0
+        self._jerk                    = 0.0
+
+        self._setup_encounter()
+
+        # Tick once to let CARLA settle the newly spawned actors
+        self._world.tick()
+
+    def next_encounter(self, cfg):
+        """Circuit mode: remove the current hazard and set up the next one, at
+        cfg.encounter_distance_m along the SAME route (distance driven since the
+        episode started), without respawning the car."""
+        destroy_scripted_walker(self._walker)
+        self._walker = None
+        self.cfg = cfg
+        self._setup_encounter()
+
+    def _setup_encounter(self):
+        """The pedestrian and the per-encounter state for self.cfg."""
+        cfg = self.cfg
+        carla_map = self._world.get_map()
+
         # Place pedestrian
-        encounter_wp = self._get_route_waypoint_at_distance(route_wps, cfg.encounter_distance_m)
+        encounter_wp = self._get_route_waypoint_at_distance(self._route_wps, cfg.encounter_distance_m)
         road_extent = None
         if cfg.walker_cross.lower() == "far_edge":  # walks across the whole road: scan its extent
             road, _ = passage_at_location(carla_map, encounter_wp.transform.location)
@@ -867,52 +937,15 @@ class CarlaAEBEnv(gymnasium.Env):
             center, right = encounter_wp.transform.location, encounter_wp.transform.get_right_vector()
             self._walker_line = ((center.x, center.y), (right.x, right.y))
 
-        # Controller state dict (mirrors test3's speed_state)
-        self._speed_state = {
-            "i_term": 0.0,
-            "kp": 0.50,
-            "ki": 0.10,
-            "brake_prev": 0.0,
-            "max_cone_yaw_deg": MAX_CONE_YAW_DEG,
-            "cone_half_angle_deg": CONE_HALF_ANGLE_DEG,
-            "cone_draw_length_m": CONE_DRAW_LENGTH_M,
-            "drive_mode": "CRUISE",
-            "hazard_clear_ticks": 0,
-            "cone_max_lateral_m": CONE_MAX_LATERAL_M,
-            "throttle_prev": 0.0,
-            "brake_prev_cruise": 0.0,
-            "lidar_actor": self._lidar,
-            "route_points_world": route_points_world,
-            "noodle_enable": NOODLE_ENABLE,
-            "noodle_step_m": NOODLE_STEP_M,
-            "noodle_half_width_m": NOODLE_HALF_WIDTH_M,
-            "noodle_max_dist_m": NOODLE_MAX_DIST_M,
-            "noodle_x_min_m": NOODLE_X_MIN_M,
-        }
-
-        # Reset all per-tick state
-        self._tick                    = 0
-        self._dist_m                  = 0.0
-        self._prev_loc                = None
         self._triggered               = False
         self._trigger_time_s          = None
         self._crossing_motion_started = False
-        self._last_lidar_frame        = None
-        self._last_lidar_tick         = -1
-        self._prev_telemetry          = None
         self._prev_brake_cmd          = 0.0
-        self._speed_lp                = 0.0
-        self._prev_speed_mps          = 0.0
-        self._prev_accel_mps2         = 0.0
-        self._jerk                    = 0.0
         self._full_stop_achieved      = False
         self._hazard_engaged_once     = False
 
         if self._steer_commit is not None:
             self._setup_steering(carla_map, encounter_wp.transform.location)
-
-        # Tick once to let CARLA settle the newly spawned actors
-        self._world.tick()
 
     def _get_obs(self):
         """Return the current observation as a float32 numpy array."""

@@ -47,7 +47,7 @@ def draw_corridor(debug, segments, *, z, life_time):
 
 
 def passage_at_location(carla_map, location, obstacles_xy=(), *, obstacle_laterals_m=(), obstacle_radius_m=None,
-                        **passage_kwargs):
+                        same_direction_only=False, **passage_kwargs):
     """Passage across the road at `location`. obstacles_xy: world (x, y)
     points (e.g. the pedestrian); they are converted to lateral offsets in
     the same frame. obstacle_laterals_m: obstacles given directly as lateral
@@ -57,13 +57,24 @@ def passage_at_location(carla_map, location, obstacles_xy=(), *, obstacle_latera
     For a pedestrian that is not on the ego's lane center, `location` must be
     the point on the ego's route at the pedestrian's line, not the
     pedestrian's own position: the frame snaps to the nearest lane center, so
-    a pedestrian in the next lane would shift every offset by a lane width."""
+    a pedestrian in the next lane would shift every offset by a lane width.
+
+    same_direction_only: driving lanes that run the OTHER way count as not
+    drivable, so the passage never extends into oncoming traffic (city circuit)."""
     origin, (rx, ry) = passage_frame(carla_map, location)
+    fx, fy = ry, -rx  # forward: right is forward rotated +90 deg (CARLA is left-handed)
 
     def probe(lateral_m):
         point = carla.Location(x=origin.x + rx * lateral_m, y=origin.y + ry * lateral_m, z=origin.z)
         status = classify_point_drivability_seam_tolerant(carla_map, point)[0]
-        return _STATUS_TO_PROBE.get(status)  # "unknown" -> None
+        drivable = _STATUS_TO_PROBE.get(status)  # "unknown" -> None
+        if drivable and same_direction_only:
+            wp = carla_map.get_waypoint(point, project_to_road=False, lane_type=carla.LaneType.Driving)
+            if wp is not None:
+                f = wp.transform.get_forward_vector()
+                if f.x * fx + f.y * fy < 0.0:
+                    return False
+        return drivable
 
     laterals = [(ox - origin.x) * rx + (oy - origin.y) * ry for ox, oy in obstacles_xy] + list(obstacle_laterals_m)
     obstacles = [Obstacle(lat) if obstacle_radius_m is None else Obstacle(lat, obstacle_radius_m) for lat in laterals]

@@ -2638,6 +2638,31 @@ less stable (large seed spread). City-map probe for a circuit: room to swerve is
 only (Town05: right 30 %, left 86 % of straight samples), so side choice is needed in a city; Town05 has
 the fewest curves (10 %) and is the recommended circuit map.
 
+## Week 8 (started 2026-10-24/25): the city circuit and training at many locations
+
+**Goal (Quentin, 2026-10-24):** the final deliverable is a car that drives laps of a city and handles
+pedestrians (later cars) that appear at random, several per lap. Final presentation ~Dec 14.
+
+**Circuit** (`src/run_circuit.py`, `src/circuit.py`): laps of a 2.7 km Town05 loop through 4 far-apart
+spawn points; pedestrians (right_edge / left_edge / stationary, onset TTC 0.6-1.5 s) at seeded random
+straight, non-junction spots >= 300 m apart; each encounter handled by the policy plus merge-back, then
+the car drives on; every encounter scored with the eval protocol (v4, 8 s window). The env gained
+opt-in circuit options (map, route builder, `next_encounter`, same-direction-only passage, onset by
+straight-line distance to the hazard line, spawn at cruise speed); a regression check reproduced earlier
+results exactly. Fixed on the way: the classical lane-follower never slowed for curves (now a curve
+speed limit), and the route planner's lane changes are hidden 7 m sideways jumps (headings now from
+waypoint positions). Town03 does not work yet: the lane-follower loses the route in its complex junctions.
+
+**Results on the Town05 circuit (16 hazards: two plans of 8):**
+- A per_tick policy trained at the single Town04 highway spot: 4 of 8 (scripted full-left 6 of 8):
+  **it does not transfer to new city geometry.**
+- **Trained at many Town05 straight spots (150k, 3 seeds): per_tick 13 / 12 / 14 of 16**, above every
+  fixed scripted maneuver (best: full brake + full left, 12) and level with or above the best scripted
+  choice picked per hazard in hindsight (13); on 3 hazards where every scripted option fails it succeeds
+  in 1-3 of 3 seeds. lock_at_onset (1 seed): 10 of 16.
+- Caveats: the circuit streets are the training streets (new hazard positions and draws); few hazards;
+  many encounters end with the car waiting beside a pedestrian until the encounter times out.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

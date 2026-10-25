@@ -179,7 +179,7 @@ class CarlaAEBEnv(gymnasium.Env):
                  steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
                  steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
                  merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
-                 same_direction_passage: bool = False):
+                 same_direction_passage: bool = False, trigger_by_line_distance: bool = False):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -231,9 +231,13 @@ class CarlaAEBEnv(gymnasium.Env):
                  same_direction_passage: the passage never extends into
                  oncoming lanes. next_encounter() starts the next hazard
                  further along the same route without respawning the car.
+                 trigger_by_line_distance (steering mode): onset when the
+                 straight-line distance to the hazard's line falls to
+                 speed x TTC (distance driven drifts over a long circuit).
         """
         self._map_name, self._route_builder = map_name, route_builder
         self._same_direction_passage = same_direction_passage
+        self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
         super().__init__()
 
         self._collision_signal = validate_collision_signal_mode(collision_signal)
@@ -393,8 +397,15 @@ class CarlaAEBEnv(gymnasium.Env):
 
         lead_dist_m    = ego_speed_mps * lead_time_s
         trigger_dist_m = max(0.0, cfg.encounter_distance_m - lead_dist_m)
+        reached = self._dist_m >= trigger_dist_m
+        if self._trigger_by_line_distance:
+            # Circuit: distance driven drifts from route length over kilometres, so fire on the straight-line
+            # distance to the hazard's line; route progress only gates out parallel streets on the loop.
+            along, lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (loc_now.x, loc_now.y))
+            reached = (self._dist_m >= cfg.encounter_distance_m - 150.0 and abs(lateral) < 10.0
+                       and -along <= lead_dist_m)
 
-        if (not self._triggered) and (self._dist_m >= trigger_dist_m) and (sim_time_s >= cfg.trigger_delay_s):
+        if (not self._triggered) and reached and (sim_time_s >= cfg.trigger_delay_s):
             self._triggered      = True
             self._trigger_time_s = sim_time_s
             trigger_scripted_crossing(self._world, self._crossing_state, debug_life_s=WALKER_DEBUG_LIFE_S)

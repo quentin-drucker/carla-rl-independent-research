@@ -57,3 +57,6 @@ worklog/*
 # OS artifacts
 Thumbs.db
 .DS_Store
+
+# City-circuit runs (run_circuit.py): per-hazard traces, regenerable.
+src/runs/circuit/

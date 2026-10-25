@@ -179,7 +179,8 @@ class CarlaAEBEnv(gymnasium.Env):
                  steer_commit: str = None, u_bounds=(0.0, 1.0), lock_delay_s: float = 0.0,
                  steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
                  merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
-                 same_direction_passage: bool = False, trigger_by_line_distance: bool = False):
+                 same_direction_passage: bool = False, trigger_by_line_distance: bool = False,
+                 start_at_cruise_speed: bool = False):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -238,6 +239,7 @@ class CarlaAEBEnv(gymnasium.Env):
         self._map_name, self._route_builder = map_name, route_builder
         self._same_direction_passage = same_direction_passage
         self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
+        self._start_at_cruise_speed = start_at_cruise_speed  # spawn moving at the cruise speed (short approaches)
         super().__init__()
 
         self._collision_signal = validate_collision_signal_mode(collision_signal)
@@ -901,6 +903,10 @@ class CarlaAEBEnv(gymnasium.Env):
 
         # Tick once to let CARLA settle the newly spawned actors
         self._world.tick()
+        if self._start_at_cruise_speed:  # multi-location training: short city approaches
+            fwd = self._vehicle.get_transform().get_forward_vector()
+            v = self._target_speed_mps
+            self._vehicle.set_target_velocity(carla.Vector3D(x=fwd.x * v, y=fwd.y * v, z=0.0))
 
     def next_encounter(self, cfg):
         """Circuit mode: remove the current hazard and set up the next one, at

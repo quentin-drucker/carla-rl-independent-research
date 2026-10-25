@@ -92,3 +92,26 @@ def encounter_done(t_since_onset_s: float, merge_back_state: Optional[str], *, w
     if t_since_onset_s >= max_s:
         return True
     return t_since_onset_s >= window_s and merge_back_state in (None, "returned", "holding_after_contact")
+
+
+def training_spots(route_s: Sequence[float], ok: Sequence[bool], *, approach_m: float = 160.0, after_m: float = 30.0,
+                   exclude_s: Sequence[float] = (), exclude_m: float = 60.0) -> List[int]:
+    """Route indices usable as a TRAINING hazard: every point from approach_m
+    (+20 m to reach speed) before it to after_m beyond it is straight and
+    outside junctions (the training env has no curve speed limit), and it is
+    more than exclude_m from every held-out evaluation hazard."""
+    n = len(route_s)
+    bad_prefix = [0]
+    for good in ok:
+        bad_prefix.append(bad_prefix[-1] + (not good))
+    spots, lo, hi = [], 0, 0
+    for i in range(n):
+        while lo < n and route_s[lo] < route_s[i] - approach_m - 20.0:
+            lo += 1
+        while hi < n and route_s[hi] <= route_s[i] + after_m:
+            hi += 1
+        if route_s[i] - route_s[0] < approach_m + 20.0 or hi >= n:
+            continue
+        if bad_prefix[hi] - bad_prefix[lo] == 0 and all(abs(route_s[i] - e) >= exclude_m for e in exclude_s):
+            spots.append(i)
+    return spots

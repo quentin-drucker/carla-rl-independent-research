@@ -7,7 +7,8 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from circuit import curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard, straight_flags  # noqa: E402
+from circuit import (curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard,  # noqa: E402
+                     straight_flags, training_spots)
 
 
 class StraightFlagsTests(unittest.TestCase):
@@ -83,6 +84,18 @@ class CurveSpeedTests(unittest.TestCase):
         self.assertLess(inside, near)
         self.assertLess(near, 15.6)
         self.assertAlmostEqual(inside, (3.0 * 12.7) ** 0.5, delta=0.8)          # sqrt(a_lat * R)
+
+
+class TrainingSpotsTests(unittest.TestCase):
+    def test_spots_need_a_straight_approach_and_avoid_the_evaluation_hazards(self):
+        s = [2.0 * k for k in range(1000)]                    # a 2 km loop
+        ok = [not (300 <= k <= 320) for k in range(1000)]     # a curve at 600-640 m
+        spots = training_spots(s, ok, approach_m=160.0, after_m=30.0, exclude_s=[1400.0], exclude_m=60.0)
+        hazard_s = [s[i] for i in spots]
+        self.assertTrue(all(h >= 180.0 for h in hazard_s))                        # room for the approach
+        self.assertFalse(any(600.0 - 30.0 < h < 640.0 + 180.0 for h in hazard_s))  # no curve within approach/exit
+        self.assertFalse(any(abs(h - 1400.0) < 60.0 for h in hazard_s))            # evaluation hazard held out
+        self.assertTrue(any(1000.0 < h < 1300.0 for h in hazard_s))
 
 
 if __name__ == "__main__":

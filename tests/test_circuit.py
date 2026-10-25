@@ -7,7 +7,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from circuit import encounter_done, place_hazards, sample_hazard, straight_flags  # noqa: E402
+from circuit import curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard, straight_flags  # noqa: E402
 
 
 class StraightFlagsTests(unittest.TestCase):
@@ -65,6 +65,24 @@ class EncounterDoneTests(unittest.TestCase):
         self.assertFalse(encounter_done(9.0, "returning"))      # still merging back
         self.assertTrue(encounter_done(9.0, "holding_after_contact"))  # contact: nothing more to wait for
         self.assertTrue(encounter_done(20.0, "avoiding"))       # waiting beside a pedestrian: give up
+
+
+class CurveSpeedTests(unittest.TestCase):
+    """A 90 degree corner of radius ~12.7 m starting 100 m ahead (2 m spacing)."""
+    S = [2.0 * k for k in range(200)]
+
+    def test_straight_road_keeps_the_cruise_speed(self):
+        self.assertEqual(curve_speed_limit_mps(self.S, [0.0] * 200, 0, v_max_mps=15.6), 15.6)
+
+    def test_slows_before_and_in_a_corner_and_not_far_from_it(self):
+        yaw = [0.0] * 50 + [9.0 * k for k in range(1, 11)] + [90.0] * 140   # 90 deg over 20 m: R ~ 12.7 m
+        far = curve_speed_limit_mps(self.S, yaw, 0, v_max_mps=15.6)            # corner 100 m ahead: beyond lookahead
+        near = curve_speed_limit_mps(self.S, yaw, 40, v_max_mps=15.6)          # 20 m before it
+        inside = curve_speed_limit_mps(self.S, yaw, 52, v_max_mps=15.6)
+        self.assertEqual(far, 15.6)
+        self.assertLess(inside, near)
+        self.assertLess(near, 15.6)
+        self.assertAlmostEqual(inside, (3.0 * 12.7) ** 0.5, delta=0.8)          # sqrt(a_lat * R)
 
 
 if __name__ == "__main__":

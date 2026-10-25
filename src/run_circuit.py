@@ -120,6 +120,7 @@ def plan_hazards(route_wps, args):
 def main(argv=None):
     args = _parse_args(argv)
     from carla_aeb_env import FIXED_DT, CarlaAEBEnv
+    from math_utils import get_speed_mps
     from map_drivability import footprint_drivable
     from steer_brake_baseline import baseline_scenario_config
     from trajectory_recording import TrajectoryRecorder
@@ -175,6 +176,10 @@ def main(argv=None):
             route_i = min(range(route_i, min(route_i + 60, len(route_xy))),
                           key=lambda k: (route_xy[k][0] - ego.x) ** 2 + (route_xy[k][1] - ego.y) ** 2)
             env._target_speed_mps = curve_speed_limit_mps(route_s, route_yaws, route_i, v_max_mps=args.mph * 0.44704)
+            if env._tick % int(20.0 / FIXED_DT) == 0:
+                print(f"[circuit] t {env._tick * FIXED_DT:6.0f} s | route {route_s[route_i]:7.0f} / {route_len:.0f} m | "
+                      f"driven {env._dist_m:7.0f} m | speed {get_speed_mps(env._vehicle):5.1f} m/s | next hazard "
+                      f"{plan[hz][0] if hz < len(plan) else '-'} m", flush=True)
             action, _ = policy.predict(obs, deterministic=True)
             obs, _, _, _, info = env.step(np.asarray(action))
             if spec is not None:

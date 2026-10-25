@@ -84,14 +84,11 @@ def loop_route(world, laps):
     return stops[0], lap * laps
 
 
-def plan_hazards(route_wps, args):
-    """([(route_m, ScenarioConfig)] for the whole run, route distances, route yaws)."""
-    from steer_brake_baseline import baseline_scenario_config
-
-    s, total = [0.0], 0.0
+def route_geometry(route_wps):
+    """(distance along the route, heading in deg, straight flag) per waypoint."""
+    s = [0.0]
     for a, b in zip(route_wps, route_wps[1:]):
-        total += a.transform.location.distance(b.transform.location)
-        s.append(total)
+        s.append(s[-1] + a.transform.location.distance(b.transform.location))
     # Headings from the waypoints' POSITIONS: the planner's lane changes jump ~7 m sideways within ~10 m while
     # each waypoint's own yaw still reads "straight" (the first city lap crashed into one at full speed).
     yaws = []
@@ -99,7 +96,14 @@ def plan_hazards(route_wps, args):
         dx, dy = b.transform.location.x - a.transform.location.x, b.transform.location.y - a.transform.location.y
         yaws.append(math.degrees(math.atan2(dy, dx)) if dx * dx + dy * dy > 1e-4 else (yaws[-1] if yaws else 0.0))
     yaws.append(yaws[-1])
-    ok = straight_flags(yaws, [wp.is_junction for wp in route_wps])
+    return s, yaws, straight_flags(yaws, [wp.is_junction for wp in route_wps])
+
+
+def plan_hazards(route_wps, args):
+    """([(route_m, ScenarioConfig)] for the whole run, route distances, route yaws)."""
+    from steer_brake_baseline import baseline_scenario_config
+
+    s, yaws, ok = route_geometry(route_wps)
     rng = random.Random(args.seed)
     positions = place_hazards(s, ok, n=args.laps * args.hazards_per_lap, min_gap_m=args.min_gap_m, start_m=200.0,
                               end_margin_m=150.0, rng=rng)

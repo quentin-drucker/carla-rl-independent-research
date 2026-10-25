@@ -15,6 +15,7 @@ after which the car keeps driving to the next one.
 Offline-tested in tests/test_circuit.py.
 """
 
+import math
 import random
 from typing import List, Optional, Sequence
 
@@ -57,6 +58,31 @@ def place_hazards(route_s: Sequence[float], ok: Sequence[bool], *, n: int, min_g
 
 def sample_hazard(rng: random.Random) -> dict:
     return {"walker": rng.choice(WALKERS), "ttc_s": rng.uniform(*TTC_RANGE_S)}
+
+
+def curve_speed_limit_mps(route_s: Sequence[float], route_yaws_deg: Sequence[float], i_now: int, *,
+                          v_max_mps: float, lookahead_m: float = 60.0, a_lat_mps2: float = 3.0,
+                          a_dec_mps2: float = 2.5, span_m: float = 10.0) -> float:
+    """Cruise speed allowed now at route point i_now: the classical
+    lane-follower does not slow for curves (Town04's highway never needed it;
+    the first city lap ran wide at a corner at 35 mph and wedged). For every
+    curve within lookahead_m: v_curve = sqrt(a_lat / curvature), reachable by
+    braking at a_dec over the distance to it."""
+    s0, v = route_s[i_now], v_max_mps
+    n = len(route_s)
+    for j in range(i_now, n):
+        if route_s[j] - s0 > lookahead_m:
+            break
+        k = j
+        while k + 1 < n and route_s[k] - route_s[j] < span_m:
+            k += 1
+        ds = route_s[k] - route_s[j]
+        if ds <= 0.0:
+            continue
+        kappa = math.radians(_turn_deg(route_yaws_deg[k], route_yaws_deg[j])) / ds
+        if kappa > 1e-4:
+            v = min(v, math.sqrt(a_lat_mps2 / kappa + 2.0 * a_dec_mps2 * (route_s[j] - s0)))
+    return v
 
 
 def encounter_done(t_since_onset_s: float, merge_back_state: Optional[str], *, window_s: float = 8.0,

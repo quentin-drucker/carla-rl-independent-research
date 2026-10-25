@@ -25,13 +25,14 @@ import argparse
 import csv
 import datetime
 import json
+import math
 import os
 import random
 import sys
 
 import numpy as np
 
-from circuit import encounter_done, place_hazards, sample_hazard, straight_flags
+from circuit import curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard, straight_flags
 from encounter_metrics import compute_encounter_metrics
 from eval_policy_encounters import PROTOCOL, _FixedAction, _git, _versions
 from physics_backend import BACKEND_DEFAULT, create_run_dir
@@ -84,14 +85,21 @@ def loop_route(world, laps):
 
 
 def plan_hazards(route_wps, args):
-    """[(route_m, ScenarioConfig)] for the whole run."""
+    """([(route_m, ScenarioConfig)] for the whole run, route distances, route yaws)."""
     from steer_brake_baseline import baseline_scenario_config
 
     s, total = [0.0], 0.0
     for a, b in zip(route_wps, route_wps[1:]):
         total += a.transform.location.distance(b.transform.location)
         s.append(total)
-    ok = straight_flags([wp.transform.rotation.yaw for wp in route_wps], [wp.is_junction for wp in route_wps])
+    # Headings from the waypoints' POSITIONS: the planner's lane changes jump ~7 m sideways within ~10 m while
+    # each waypoint's own yaw still reads "straight" (the first city lap crashed into one at full speed).
+    yaws = []
+    for a, b in zip(route_wps, route_wps[1:]):
+        dx, dy = b.transform.location.x - a.transform.location.x, b.transform.location.y - a.transform.location.y
+        yaws.append(math.degrees(math.atan2(dy, dx)) if dx * dx + dy * dy > 1e-4 else (yaws[-1] if yaws else 0.0))
+    yaws.append(yaws[-1])
+    ok = straight_flags(yaws, [wp.is_junction for wp in route_wps])
     rng = random.Random(args.seed)
     positions = place_hazards(s, ok, n=args.laps * args.hazards_per_lap, min_gap_m=args.min_gap_m, start_m=200.0,
                               end_margin_m=150.0, rng=rng)
@@ -102,7 +110,7 @@ def plan_hazards(route_wps, args):
                                        run_id=f"hz{i:02d}_{h['walker']}_ttc{h['ttc_s']:.2f}")
         cfg.encounter_distance_m, cfg.sim_seconds = pos, 1e6  # the episode is the whole circuit
         plan.append((pos, cfg))
-    return plan, total
+    return plan, s, yaws
 
 
 def main(argv=None):
@@ -117,7 +125,8 @@ def main(argv=None):
                       map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True)
     route = loop_route(env._world, args.laps)
     env._route_builder = lambda world: route
-    plan, route_len = plan_hazards(route[1], args)
+    plan, route_s, route_yaws = plan_hazards(route[1], args)
+    route_len = route_s[-1]
     if not plan:
         raise SystemExit("no straight, non-junction stretch long enough for a hazard on this route")
     lap_len = route_len / args.laps
@@ -154,9 +163,14 @@ def main(argv=None):
         if args.watch:
             from spectator import SpectatorController
             spec = SpectatorController(env._world, env._vehicle, debug_draw=False)
-        max_ticks = int((route_len / (args.mph * 0.44704) + 25.0 * len(plan) + 60.0) / FIXED_DT)
-        stopped_ticks, end_reason = 0, "max_ticks"
+        max_ticks = int((1.6 * route_len / (args.mph * 0.44704) + 25.0 * len(plan) + 60.0) / FIXED_DT)
+        stopped_ticks, end_reason, route_i = 0, "max_ticks", 0
+        route_xy = [(wp.transform.location.x, wp.transform.location.y) for wp in route[1]]
         for _ in range(max_ticks):
+            ego = env._vehicle.get_location()
+            route_i = min(range(route_i, min(route_i + 60, len(route_xy))),
+                          key=lambda k: (route_xy[k][0] - ego.x) ** 2 + (route_xy[k][1] - ego.y) ** 2)
+            env._target_speed_mps = curve_speed_limit_mps(route_s, route_yaws, route_i, v_max_mps=args.mph * 0.44704)
             action, _ = policy.predict(obs, deterministic=True)
             obs, _, _, _, info = env.step(np.asarray(action))
             if spec is not None:
@@ -179,6 +193,11 @@ def main(argv=None):
             stopped_ticks = stopped_ticks + 1 if info["ego_speed_mps"] < 0.3 and not info["triggered"] else 0
             if stopped_ticks * FIXED_DT > 60.0:
                 end_reason = "stuck: stopped for 60 s outside an encounter"
+                recorder.write(os.path.join(out_dir, "stuck_trace.csv"))
+                with open(os.path.join(out_dir, "stuck_state.json"), "x") as f:
+                    json.dump({k: v for k, v in env._speed_state.items() if isinstance(v, (int, float, str, bool))}
+                              | {"telemetry": {k: v for k, v in (env._last_telemetry or {}).items()
+                                               if isinstance(v, (int, float, str, bool))}}, f, indent=2)
                 break
     finally:
         if spec is not None:

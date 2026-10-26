@@ -6,7 +6,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from merge_back import MergeBack, hazard_behind_ego, path_clear_of_hazard  # noqa: E402
+from merge_back import MergeBack, hazard_ahead_of_ego, hazard_behind_ego, path_clear_of_hazard  # noqa: E402
 from pedestrian_contact import EGO_HALF_LENGTH_M  # noqa: E402
 
 DT = 0.02
@@ -97,6 +97,33 @@ class PathClearTests(unittest.TestCase):
         self.assertTrue(path_clear_of_hazard(hazard_lateral_speed_mps=0.0, **kw))
         self.assertFalse(path_clear_of_hazard(hazard_lateral_speed_mps=1.8, **kw))   # reaches ~4.6 m in 2 s
         self.assertTrue(path_clear_of_hazard(hazard_lateral_speed_mps=-1.8, **kw))
+
+
+class BesideTheCarTests(unittest.TestCase):
+    """2026-10-26: a person standing right beside the stopped car no longer blocks
+    every path. Car body half-width 1.08 m + pedestrian 0.3 m: centers 1.88 m apart
+    = a 0.5 m gap."""
+
+    def test_holding_the_lane_past_a_person_beside_the_car_needs_only_no_contact(self):
+        kw = dict(path_lo_m=-3.9, path_hi_m=-3.9, hazard_lateral_m=-5.78, hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3)
+        self.assertTrue(path_clear_of_hazard(hazard_ahead=False, **kw))   # beside or behind: driving on keeps the gap
+        self.assertFalse(path_clear_of_hazard(hazard_ahead=True, **kw))   # ahead: the full 1 m margin still applies
+
+    def test_moving_away_from_a_person_needs_only_no_contact(self):
+        kw = dict(path_lo_m=-3.9, hazard_lateral_m=-5.78, hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3)
+        self.assertTrue(path_clear_of_hazard(path_hi_m=0.0, **kw))       # back to the lane, away from them
+        self.assertFalse(path_clear_of_hazard(path_hi_m=-7.0, **kw))     # toward them
+
+    def test_too_close_or_walking_into_the_car_still_blocks(self):
+        self.assertFalse(path_clear_of_hazard(path_lo_m=-3.9, path_hi_m=0.0, hazard_lateral_m=-5.4,  # 0.12 m gap
+                                              hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3))
+        self.assertFalse(path_clear_of_hazard(path_lo_m=-3.9, path_hi_m=-3.9, hazard_lateral_m=-5.78, hazard_ahead=False,
+                                              hazard_lateral_speed_mps=1.0, hazard_radius_m=0.3))  # walking toward the car
+
+    def test_ahead_means_past_the_front_bumper_plus_the_hazard(self):
+        kw = dict(ego_x_m=0.0, ego_y_m=0.0, ego_yaw_deg=0.0, hazard_y_m=3.0, hazard_half_length_m=0.3)
+        self.assertFalse(hazard_ahead_of_ego(hazard_x_m=1.0, **kw))   # beside the car
+        self.assertTrue(hazard_ahead_of_ego(hazard_x_m=4.0, **kw))
 
 
 class DriveOnTests(unittest.TestCase):

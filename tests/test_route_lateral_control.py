@@ -54,6 +54,16 @@ class RouteLateralControlTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             route_unit_right_xy(route, 0)
 
+    def test_window_keeps_the_car_on_its_own_leg_of_an_out_and_back_route(self):
+        # East along y=0 for 100 m, then back west along y=-4 (the other lane): Town01's layout.
+        out = [point(2 * i, 0) for i in range(51)]
+        back = [point(100 - 2 * i, -4) for i in range(51)]
+        route = out + back
+        car = point(40, -2.5)  # swerved left on the way out: the return leg is nearer
+        self.assertGreater(closest_route_index_xy(route, car), 50)
+        self.assertEqual(closest_route_index_xy(route, car, near_index=18), 20)
+        self.assertAlmostEqual(signed_lateral_offset_m(route, car, near_index=18), -2.5)
+
 
 if __name__ == "__main__":
     unittest.main()

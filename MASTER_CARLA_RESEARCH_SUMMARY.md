@@ -2663,6 +2663,22 @@ waypoint positions). Town03 does not work yet: the lane-follower loses the route
 - Caveats: the circuit streets are the training streets (new hazard positions and draws); few hazards;
   many encounters end with the car waiting beside a pedestrian until the encounter times out.
 
+**Firmer numbers and a held-out town (2026-10-26 night).** Fixes first: a stopped car may drive on past a
+pedestrian standing beside it, holding its own lateral position (`808bd53`, `ac90472`); a car wedged after
+a contact is put back on the route and counted (`2a4d7de`); the lane-follower searched the whole route
+for its nearest point and snapped onto the opposite leg where a route comes back along the same street
+(Town01), now a window around the last match (`1164dba`).
+- **Town05, 32 hazards (plans 0-3): per_tick 21 / 23 / 24 safe; full brake + full left 24; brake only 12;
+  full right 12; best scripted per hazard 27.** With twice the hazards and no more "safe" waiting, the
+  policy MATCHES the best fixed maneuver, it does not beat it. Off-road clipping at the route planner's
+  lane-change jumps costs every swerving controller 4-6 hazards.
+- **Held-out Town01 (never trained on), 29 hazards: per_tick 8 / 8 / 9; brake only 12, full right 12, full
+  left 13.** Town01 has one lane per direction, and the circuit's passage never uses the oncoming lane, so
+  there is almost no room to swerve (full left asks for 0.6 m): a braking-only town. **The policies keep
+  their Town05 habit of partial braking (~0.4) while planning a swerve, and hit at 5-8 m/s where full
+  braking stops.** Training never showed a road with no room. 13 of 29 Town01 hazards are unavoidable for
+  every controller.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

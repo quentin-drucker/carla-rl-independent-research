@@ -41,6 +41,7 @@ from rl_steering import STEER_COMMIT_MODES
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNS_ROOT = os.path.join(SRC_DIR, "runs", "circuit")
+STUCK_RECOVER_S = 10.0  # stopped this long outside an encounter: put the car back on its route (counted)
 HAZARD_COLUMNS = ["hazard", "lap", "route_m", "walker", "ttc_s", "onset_time_s", "speed_at_onset_mps", "outcome",
                   "outcome_v4", "contact_cause", "ego_safe_success", "safe_success", "contact_speed_mps",
                   "min_clearance_m", "max_abs_route_lateral_m", "drivable_violation_ticks", "merge_back_state",
@@ -169,7 +170,7 @@ def main(argv=None):
             from spectator import SpectatorController
             spec = SpectatorController(env._world, env._vehicle, debug_draw=False)
         max_ticks = int((1.6 * route_len / (args.mph * 0.44704) + 25.0 * len(plan) + 60.0) / FIXED_DT)
-        stopped_ticks, end_reason, route_i = 0, "max_ticks", 0
+        stopped_ticks, end_reason, route_i, recoveries = 0, "max_ticks", 0, []
         route_xy = [(wp.transform.location.x, wp.transform.location.y) for wp in route[1]]
         for _ in range(max_ticks):
             ego = env._vehicle.get_location()
@@ -200,6 +201,19 @@ def main(argv=None):
                 env.next_encounter(plan[hz][1])
                 recorder, drivable, onset_marked = TrajectoryRecorder(dt_s=FIXED_DT), [], False
             stopped_ticks = stopped_ticks + 1 if info["ego_speed_mps"] < 0.3 and not info["triggered"] else 0
+            if stopped_ticks * FIXED_DT > STUCK_RECOVER_S and len(recoveries) < 5:
+                # After a contact the car can end up wedged at the road edge or turned across it, and steering
+                # back from a standstill fails. Put it back on the route and COUNT it (reported as a failure).
+                import carla
+                wp = route[1][route_i].transform
+                env._vehicle.set_transform(carla.Transform(
+                    carla.Location(x=wp.location.x, y=wp.location.y, z=wp.location.z + 0.3), wp.rotation))
+                env._vehicle.set_target_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
+                env._prev_loc = None
+                recoveries.append({"sim_time_s": info["sim_time_s"], "route_m": route_s[route_i], "after_hazard": hz - 1})
+                print(f"[circuit] STUCK {STUCK_RECOVER_S:.0f} s after hazard {hz - 1}: put back on the route at "
+                      f"{route_s[route_i]:.0f} m (recovery {len(recoveries)})", flush=True)
+                stopped_ticks = 0
             if stopped_ticks * FIXED_DT > 60.0:
                 end_reason = "stuck: stopped for 60 s outside an encounter"
                 recorder.write(os.path.join(out_dir, "stuck_trace.csv"))
@@ -212,7 +226,10 @@ def main(argv=None):
         if spec is not None:
             spec.close()
         env.close()
+    with open(os.path.join(out_dir, "stuck_recoveries.json"), "x") as f:
+        json.dump(recoveries, f, indent=2)
     _print_summary(rows, end_reason, len(plan))
+    print(f"[circuit] stuck recoveries (car put back on its route): {len(recoveries)}")
     print(f"[circuit] evidence: {out_dir}")
     return 0 if end_reason == "all hazards done" else 1
 

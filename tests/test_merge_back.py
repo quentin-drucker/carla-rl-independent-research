@@ -147,6 +147,14 @@ class DriveOnTests(unittest.TestCase):
         self.assertAlmostEqual(mb.return_start_s, 5.5)     # behind for 0.5 s
         self.assertEqual(trace[-1][1:], (0.0, False))
 
+    def test_drive_on_holds_where_the_car_stopped_not_the_policys_latest_aim(self):
+        # per_tick re-aims to the lane once stopped; driving on must follow the swerve the car is on.
+        mb = MergeBack(clear_confirm_s=0.5)
+        trace = [mb.update(k * DT, hazard_behind=False, path_clear=True, ego_stopped=True, target_m=-0.29,
+                           ego_lateral_m=-4.77) for k in range(60)]
+        self.assertEqual(mb.state, "driving_on")
+        self.assertEqual(trace[-1], (-4.77, False))
+
     def test_a_moving_car_keeps_policy_control_even_with_a_clear_path(self):
         mb = MergeBack()
         trace = self.run_mb(mb, stopped_fn=lambda t: False, clear_fn=lambda t: True, behind_fn=lambda t: False)

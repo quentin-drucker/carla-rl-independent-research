@@ -210,6 +210,7 @@ def main(argv=None):
                     carla.Location(x=wp.location.x, y=wp.location.y, z=wp.location.z + 0.3), wp.rotation))
                 env._vehicle.set_target_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
                 env._prev_loc = None
+                env._speed_state["route_index"] = route_i  # lane_follow's route search window
                 recoveries.append({"sim_time_s": info["sim_time_s"], "route_m": route_s[route_i], "after_hazard": hz - 1})
                 print(f"[circuit] STUCK {STUCK_RECOVER_S:.0f} s after hazard {hz - 1}: put back on the route at "
                       f"{route_s[route_i]:.0f} m (recovery {len(recoveries)})", flush=True)

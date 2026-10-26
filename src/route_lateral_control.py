@@ -12,14 +12,30 @@ Sign convention:
 import math
 
 
-def closest_route_index_xy(route_points, location):
-    """Return the index of the route point closest to ``location`` in XY."""
+ROUTE_WINDOW_BACK = 10   # route points (~2 m apart) searched behind near_index
+ROUTE_WINDOW_AHEAD = 25  # ... and ahead of it (~50 m: far more than a tick's travel, less than a block)
+
+
+def route_window(n_points, near_index=None):
+    """Indices to search for the closest route point: all of them, or only a
+    window around near_index (the last match). A route that comes back along
+    the same street in the other lane (~4 m away, as on Town01) otherwise snaps
+    the car onto the opposite leg and turns it around (2026-10-26)."""
+    if near_index is None:
+        return range(n_points)
+    return range(max(0, near_index - ROUTE_WINDOW_BACK), min(n_points, near_index + ROUTE_WINDOW_AHEAD))
+
+
+def closest_route_index_xy(route_points, location, near_index=None):
+    """Return the index of the route point closest to ``location`` in XY
+    (within route_window around near_index when given)."""
     if not route_points:
         return None
 
     best_index = None
     best_distance_sq = None
-    for index, point in enumerate(route_points):
+    for index in route_window(len(route_points), near_index):
+        point = route_points[index]
         dx = point.x - location.x
         dy = point.y - location.y
         distance_sq = dx * dx + dy * dy
@@ -73,12 +89,13 @@ def offset_point_xy(route_points, route_point, lateral_offset_m):
     )
 
 
-def signed_lateral_offset_m(route_points, location):
-    """Measure ``location`` relative to the nearest route point.
+def signed_lateral_offset_m(route_points, location, near_index=None):
+    """Measure ``location`` relative to the nearest route point (within
+    route_window around near_index when given).
 
     Positive values are to route-right and negative values are to route-left.
     """
-    anchor_index = closest_route_index_xy(route_points, location)
+    anchor_index = closest_route_index_xy(route_points, location, near_index)
     if anchor_index is None:
         raise ValueError("route_points is empty.")
 

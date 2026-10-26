@@ -138,7 +138,7 @@ class DriveOnTests(unittest.TestCase):
     def test_stopped_and_clear_drives_on_holding_the_swerve_then_returns(self):
         mb = MergeBack(clear_confirm_s=0.5)
         trace = self.run_mb(mb, stopped_fn=lambda t: 2.0 <= t < 3.0, clear_fn=lambda t: t >= 2.0,
-                            behind_fn=lambda t: t >= 5.0)
+                            behind_fn=lambda t: t >= 5.0, seconds=14.0)
         at = {round(t, 2): (target, active) for t, target, active in trace}
         self.assertEqual(at[2.0], (7.4, True))             # stopped, clear not yet confirmed
         self.assertEqual(at[2.6], (7.4, False))            # drives on: hazard mode off, swerve path held

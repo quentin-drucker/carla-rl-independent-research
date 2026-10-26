@@ -94,7 +94,7 @@ from map_drivability import footprint_drivable
 from passage import Obstacle, passage_from_extent, predicted_lateral_at_arrival
 from passage_carla import passage_at_location
 from walker_script import WalkerScript
-from merge_back import DRIVE_ON_SPEED_MPS, MergeBack, hazard_behind_ego, path_clear_of_hazard
+from merge_back import DRIVE_ON_SPEED_MPS, MergeBack, hazard_ahead_of_ego, hazard_behind_ego, path_clear_of_hazard
 from pedestrian_contact import DEFAULT_PEDESTRIAN_RADIUS_M
 from rl_steering import (
     contact_is_pedestrians,
@@ -455,11 +455,16 @@ class CarlaAEBEnv(gymnasium.Env):
             if self._merge_back is not None and self._triggered:
                 ped = self._walker.get_location()
                 _, ped_lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (ped.x, ped.y))
-                def clear_to(aim_m):  # the strip from where the car is to aim_m
+                tf = self._vehicle.get_transform()
+                ped_ahead = hazard_ahead_of_ego(ego_x_m=tf.location.x, ego_y_m=tf.location.y,
+                                                ego_yaw_deg=tf.rotation.yaw, hazard_x_m=ped.x, hazard_y_m=ped.y,
+                                                hazard_half_length_m=DEFAULT_PEDESTRIAN_RADIUS_M)
+
+                def clear_to(aim_m):  # from where the car is to aim_m
                     return path_clear_of_hazard(
                         path_lo_m=steer_obs["ego_lateral_m"], path_hi_m=aim_m, hazard_lateral_m=ped_lateral,
                         hazard_lateral_speed_mps=steer_obs["pedestrian_lateral_speed_mps"],
-                        hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M)
+                        hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M, hazard_ahead=ped_ahead)
                 target_m, self._hazard_on = self._merge_back.update(
                     sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m,
                     path_clear=clear_to(self._merge_back.aim_m(target_m)), lane_clear=clear_to(0.0),

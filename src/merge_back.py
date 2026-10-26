@@ -53,22 +53,50 @@ def hazard_behind_ego(*, ego_x_m: float, ego_y_m: float, ego_yaw_deg: float, haz
                       hazard_half_length_m: float, margin_m: float = DEFAULT_CLEAR_MARGIN_M) -> bool:
     """True once the hazard's nearest point is more than margin_m behind the
     ego's rear bumper, measured along the ego's heading."""
+    return _along_m(ego_x_m, ego_y_m, ego_yaw_deg, hazard_x_m, hazard_y_m) < -(
+        EGO_HALF_LENGTH_M + hazard_half_length_m + margin_m)
+
+
+def hazard_ahead_of_ego(*, ego_x_m: float, ego_y_m: float, ego_yaw_deg: float, hazard_x_m: float, hazard_y_m: float,
+                        hazard_half_length_m: float) -> bool:
+    """True while the hazard is (partly) in front of the ego's front bumper;
+    False once it is beside or behind the car."""
+    return _along_m(ego_x_m, ego_y_m, ego_yaw_deg, hazard_x_m, hazard_y_m) > EGO_HALF_LENGTH_M + hazard_half_length_m
+
+
+def _along_m(ego_x_m, ego_y_m, ego_yaw_deg, hazard_x_m, hazard_y_m) -> float:
     fx, fy = yaw_deg_to_forward_xy(ego_yaw_deg)
-    along = (hazard_x_m - ego_x_m) * fx + (hazard_y_m - ego_y_m) * fy
-    return along < -(EGO_HALF_LENGTH_M + hazard_half_length_m + margin_m)
+    return (hazard_x_m - ego_x_m) * fx + (hazard_y_m - ego_y_m) * fy
+
+
+NO_CONTACT_GAP_M = 0.3  # body edge to hazard edge: "not touching" when moving away or passing alongside
 
 
 def path_clear_of_hazard(*, path_lo_m: float, path_hi_m: float, hazard_lateral_m: float,
-                         hazard_lateral_speed_mps: float, hazard_radius_m: float,
+                         hazard_lateral_speed_mps: float, hazard_radius_m: float, hazard_ahead: bool = True,
                          margin_m: float = DEFAULT_CLEAR_MARGIN_M, horizon_s: float = 2.0, step_s: float = 0.25) -> bool:
-    """True if a hazard stays more than margin_m (body edge to hazard edge) from
-    the lateral strip the ego's center sweeps between path_lo_m and path_hi_m
-    (route-relative, +right), now and at constant lateral speed for horizon_s."""
-    lo, hi = min(path_lo_m, path_hi_m), max(path_lo_m, path_hi_m)
+    """True if a hazard stays clear of the path from the ego's current lateral
+    position (path_lo_m) to its aim (path_hi_m) (route-relative, +right), now and
+    at constant lateral speed for horizon_s. Clear means more than margin_m (body
+    edge to hazard edge) from the strip the ego's center sweeps, except where the
+    car's motion cannot close the gap, which only needs NO_CONTACT_GAP_M
+    (2026-10-26: a person standing beside the stopped car blocked every path and
+    the car waited until the encounter timed out):
+      - the hazard is on the side the car moves AWAY from;
+      - the car holds its lateral position and the hazard is beside or behind it
+        (hazard_ahead False): driving straight on keeps the side gap."""
+    ego, aim = path_lo_m, path_hi_m
+    direction = 0 if abs(aim - ego) < 0.3 else (1 if aim > ego else -1)
+    lo, hi = min(ego, aim), max(ego, aim)
     reach = EGO_HALF_WIDTH_M + hazard_radius_m + margin_m
+    touch = EGO_HALF_WIDTH_M + hazard_radius_m + NO_CONTACT_GAP_M
     for k in range(int(round(horizon_s / step_s)) + 1):
         lateral = hazard_lateral_m + hazard_lateral_speed_mps * k * step_s
-        if lo - reach < lateral < hi + reach:
+        receding = (direction != 0 and (lateral - ego) * direction < 0) or (direction == 0 and not hazard_ahead)
+        if receding:
+            if abs(lateral - ego) <= touch:
+                return False
+        elif lo - reach < lateral < hi + reach:
             return False
     return True
 

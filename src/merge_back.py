@@ -187,9 +187,11 @@ class MergeBack:
                 self._lane_clear_since_s = self._since(self._lane_clear_since_s, t_s,
                                                        ego_stopped and lane_clear and not path_clear)
                 if self._confirmed(self._path_clear_since_s, t_s):
-                    self._drive_on_target_m, self.drive_on_start_s = target_m, t_s
+                    # hold the swerve the car is on (per_tick re-aims to the lane once stopped)
+                    held_m = target_m if ego_lateral_m is None else ego_lateral_m
+                    self._drive_on_target_m, self.drive_on_start_s = held_m, t_s
                     self.drive_on_count += 1
-                    return target_m, False
+                    return held_m, False
                 if not self._confirmed(self._lane_clear_since_s, t_s):
                     return target_m, True
                 self.direct_return = True

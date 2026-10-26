@@ -467,7 +467,7 @@ class CarlaAEBEnv(gymnasium.Env):
                         hazard_radius_m=DEFAULT_PEDESTRIAN_RADIUS_M, hazard_ahead=ped_ahead)
                 target_m, self._hazard_on = self._merge_back.update(
                     sim_time_s - self._trigger_time_s, hazard_behind=self._hazard_behind_ego(), target_m=target_m,
-                    path_clear=clear_to(self._merge_back.aim_m(target_m)), lane_clear=clear_to(0.0),
+                    path_clear=clear_to(self._merge_back.aim_m(steer_obs["ego_lateral_m"])), lane_clear=clear_to(0.0),
                     ego_stopped=ego_speed_mps <= DRIVE_ON_SPEED_MPS, ego_lateral_m=steer_obs["ego_lateral_m"])
                 if self._merge_back.state == "holding_after_contact":
                     brake_override = 1.0  # after a contact: stop and hold

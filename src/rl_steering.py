@@ -275,6 +275,10 @@ class SteeringRewardConfig:
     # (the car's dynamics hide the wheel buzz from the other comfort terms).
     window_s: float = 8.0
     # The scoring window (encounter_metrics); used only to check the ordering.
+    pedestrian_contact_free: bool = True
+    # 2026-10-23: a contact the PEDESTRIAN causes (car at rest, pedestrian moving: contact_is_pedestrians)
+    # is neither penalized nor episode-ending, matching encounter protocol v4. Before, it cost -300
+    # although the evaluation does not count it (Option B investigation).
 
     def __post_init__(self):
         if self.enough_clearance_m <= 0.0:
@@ -324,6 +328,16 @@ def compute_steering_reward(
         "r_total": r_safety + r_comfort, "r_safety": r_safety, "r_comfort": r_comfort,
         "r_contact": r_contact, "r_off_road": r_off_road, "r_clearance": r_clearance,
     }
+
+
+def contact_is_pedestrians(*, ego_speed_mps: float, pedestrian_speed_mps: float,
+                           stopped_mps: float = 0.5, moving_mps: float = 0.3) -> bool:
+    """Per-tick stand-in for encounter protocol v4's contact_cause: the car is at
+    rest (<= stopped_mps, as v4) and the pedestrian is moving. A slow creep into a
+    standing pedestrian stays the car's contact.
+    ponytail: v4 compares who closed the gap over 0.5 s; this uses current speeds
+    only. Switch to the closing comparison if the two ever disagree on a run."""
+    return ego_speed_mps <= stopped_mps and pedestrian_speed_mps > moving_mps
 
 
 # =============================================================================

@@ -60,10 +60,11 @@ MPH_RANGE = (30.0, 50.0)
 TTC_RANGE_S = (0.3, 1.5)
 HAND_OVER_LEAD_S = 1.0
 CIRCUIT_APPROACH_M = 80.0  # Town05 has few straight runs over ~110 m; episodes start at cruise speed instead
+EPISODES_PER_MAP = 20  # several --circuit-map towns: CARLA holds one world, so rotate in blocks (a load takes ~20 s)
 SAC_KWARGS = dict(buffer_size=100_000, batch_size=512, learning_rate=3e-4, tau=0.005, ent_coef="auto")  # = train_sac v3
 EPISODE_COLUMNS = ["episode", "timesteps", "walker", "mph", "ttc_s", "steps", "reward", "contact", "contact_speed_mps",
                    "min_clearance_m", "went_off_road", "u_applied", "final_lateral_m", "final_speed_mps",
-                   "missing_passage_ticks", "wall_s"]
+                   "missing_passage_ticks", "wall_s", "map"]
 
 
 def _git(*args):
@@ -88,14 +89,17 @@ def _parse_args(argv=None):
     p.add_argument("--road-right-limit-m", type=float, help="cap the passage's right road edge (default: whole road)")
     p.add_argument("--merge-back", action="store_true", help="return to the lane once the hazard is clear behind the car")
     p.add_argument("--u-min", type=float, default=0.0, help="lowest steering u: 0 = right only (default), -1 = both sides")
-    p.add_argument("--circuit-map", help="train at random straight spots of this town's circuit loop (run_circuit.py); "
-                                         "default: the Town04 test spot")
+    p.add_argument("--circuit-map", nargs="+", help="train at random straight spots of these towns' circuit loops "
+                   "(run_circuit.py), rotating towns every EPISODES_PER_MAP episodes; default: the Town04 test spot")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
+    p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     p.add_argument("--relaunch-carla", action="store_true",
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and continue")
     args = p.parse_args(argv)
     if not (args.commit or args.resume):
         p.error("give --commit for a new run, or --resume")
+    if args.relaunch_carla and args.port != 2000:
+        p.error("--relaunch-carla restarts the port-2000 server only (and kills every CARLA process)")
     return args
 
 
@@ -124,8 +128,29 @@ class SkipApproach(gymnasium.Wrapper):
         # before callbacks run, so env.cfg is already the next one by then.
         obs, reward, terminated, truncated, info = self.env.step(action)
         cfg = self.env.unwrapped.cfg
-        info.update(scenario_mph=cfg.target_mph, scenario_ttc_s=cfg.trigger_ttc_s, scenario_run_id=cfg.run_id)
+        info.update(scenario_mph=cfg.target_mph, scenario_ttc_s=cfg.trigger_ttc_s, scenario_run_id=cfg.run_id,
+                    scenario_map=self.env.unwrapped._map_name)
         return obs, reward, terminated, truncated, info
+
+
+class RotateMaps(gymnasium.Wrapper):
+    """Multi-town training: before every EPISODES_PER_MAP-th episode, load the
+    next town (round robin) with its own circuit spot builder."""
+
+    def __init__(self, env, builders, every=EPISODES_PER_MAP):
+        super().__init__(env)
+        self.builders, self.every, self.episodes = builders, every, 0
+
+    def reset(self, **kwargs):
+        if self.episodes % self.every == 0:
+            base, names = self.env.unwrapped, list(self.builders)
+            name = names[(self.episodes // self.every) % len(names)]
+            if name != base._map_name:
+                base._cleanup_actors()
+                base._map_name, base._route_builder = name, self.builders[name]
+                base._connect()
+        self.episodes += 1
+        return self.env.reset(**kwargs)
 
 
 def sample_scenario(rng, *, walkers=("stationary",), ttc_range=TTC_RANGE_S, walker_speed_mps=None,
@@ -203,7 +228,7 @@ def _make_callbacks(run_dir, log, start_time, checkpoint_every):
                 "min_clearance_m": info["min_clearance_m"], "went_off_road": info["went_off_road"],
                 "u_applied": round(info["u_applied"], 3), "final_lateral_m": round(info["ego_lateral_m"], 3),
                 "final_speed_mps": round(info["ego_speed_mps"], 3), "missing_passage_ticks": info["missing_passage_ticks"],
-                "wall_s": round(time.time() - start_time, 1),
+                "wall_s": round(time.time() - start_time, 1), "map": info.get("scenario_map"),
             }
             _append_csv(os.path.join(run_dir, "episodes.csv"), row)
             clr = "-" if row["min_clearance_m"] is None else f"{row['min_clearance_m']:.2f} m"
@@ -298,18 +323,24 @@ def main(argv=None):
         # Reseeding from the step count makes a resumed run deterministic too, though not
         # identical to an uninterrupted one.
         # .get(): Week 5 manifests predate these keys and mean the stationary defaults.
-        circuit = {}
-        if manifest.get("circuit_map"):
-            circuit = dict(map_name=manifest["circuit_map"], same_direction_passage=True, start_at_cruise_speed=True,
-                           route_builder=circuit_spot_builder(random.Random(seed * 7919 + timesteps_done)))
+        circuit, maps = {}, manifest.get("circuit_map") or []
+        maps = [maps] if isinstance(maps, str) else maps  # Week 8 manifests hold one town as a string
+        if maps:
+            spot_rng = random.Random(seed * 7919 + timesteps_done)
+            builders = {m: circuit_spot_builder(spot_rng) for m in maps}
+            circuit = dict(map_name=maps[0], same_direction_passage=True, start_at_cruise_speed=True,
+                           route_builder=builders[maps[0]])
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
                           road_right_limit_m=manifest.get("road_right_limit_m"),
-                          merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]), **circuit)
+                          merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]),
+                          port=args.port, **circuit)
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),
                         walker_change_s=manifest.get("walker_change_s"),
                         encounter_distance_m=CIRCUIT_APPROACH_M if manifest.get("circuit_map") else None)
+        if len(maps) > 1:
+            env = RotateMaps(env, builders)
         return SkipApproach(env, random.Random(seed * 1_000_003 + timesteps_done), scenario)
 
     env, model, attempts = None, None, 0

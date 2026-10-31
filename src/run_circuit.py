@@ -15,6 +15,7 @@ limited to same-direction lanes (no swerving into oncoming traffic).
 Usage (CARLA running; from src/ in the venv):
     python -u -X utf8 run_circuit.py --model runs/steering_train/<run>/final_model.zip --steer-commit per_tick --u-min -1
     python -u -X utf8 run_circuit.py --fixed-u 1 --steer-commit per_tick        # scripted: full brake + full right swerve
+    python -u -X utf8 run_circuit.py --scripted-aim wider_side --steer-commit per_tick  # rule: full brake, wider side or none
     add --watch to follow the car with the spectator camera (visible CARLA)
 
 Evidence (git-ignored): src/runs/circuit/<timestamp>_circuit_default/
@@ -37,7 +38,7 @@ import numpy as np
 
 from circuit import curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard, straight_flags
 from encounter_metrics import compute_encounter_metrics
-from eval_policy_encounters import PROTOCOL, _FixedAction, _git, _versions
+from eval_policy_encounters import PROTOCOL, SCRIPTED_AIMS, _FixedAction, _git, _ScriptedAim, _versions
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from rl_eval_protocol import file_sha256, resolve_model_path, trace_telemetry
 from rl_reward_design import STATE_SPEC
@@ -65,13 +66,16 @@ def _parse_args(argv=None):
     p.add_argument("--model", help="SAC model ZIP")
     p.add_argument("--fixed-u", type=float, help="no model: a constant [--fixed-brake, u] action")
     p.add_argument("--fixed-brake", type=float, default=1.0)
+    p.add_argument("--scripted-aim", choices=tuple(SCRIPTED_AIMS),
+                   help="no model: --fixed-brake with a hand-written aim rule from rl_steering (e.g. wider_side)")
     p.add_argument("--steer-commit", choices=STEER_COMMIT_MODES, default="per_tick")
     p.add_argument("--lock-delay-s", type=float, default=0.5)
     p.add_argument("--u-min", type=float, default=-1.0, help="-1 = both sides (default), 0 = right only")
     p.add_argument("--watch", action="store_true", help="follow the ego with the spectator camera")
+    p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     args = p.parse_args(argv)
-    if (args.model is None) == (args.fixed_u is None):
-        p.error("give exactly one of --model and --fixed-u")
+    if sum(x is not None for x in (args.model, args.fixed_u, args.scripted_aim)) != 1:
+        p.error("give exactly one of --model, --fixed-u and --scripted-aim")
     return args
 
 
@@ -134,7 +138,7 @@ def main(argv=None):
 
     env = CarlaAEBEnv(cfg=baseline_scenario_config(args.mph, 1.0), steer_commit=args.steer_commit,
                       lock_delay_s=args.lock_delay_s, merge_back=True, u_bounds=(args.u_min, 1.0),
-                      map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True)
+                      map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port)
     route = loop_route(env._world, args.laps)
     env._route_builder = lambda world: route
     plan, route_s, route_yaws = plan_hazards(route[1], args)
@@ -149,6 +153,10 @@ def main(argv=None):
         policy = SAC.load(model_path)
         if policy.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {policy.observation_space.shape} != env {env.observation_space.shape}")
+    elif args.scripted_aim:
+        import rl_steering
+        model_path = f"scripted_aim:{args.scripted_aim},brake={args.fixed_brake:g}"
+        policy = _ScriptedAim(args.fixed_brake, getattr(rl_steering, SCRIPTED_AIMS[args.scripted_aim]))
     else:
         model_path, policy = f"fixed_action:brake={args.fixed_brake:g},u={args.fixed_u:g}", _FixedAction(args.fixed_brake, args.fixed_u)
 

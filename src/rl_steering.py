@@ -238,6 +238,17 @@ def pass_behind_u(observation: Sequence[float]) -> float:
     return 1.0 if abs(predicted_m) < reach_m else 0.0
 
 
+def wider_side_u(observation: Sequence[float]) -> float:
+    """Week 8 rule baseline (run with full brake, per_tick): swerve fully to
+    the side where the passage has more room (left on a tie), or stay in the
+    lane if it has no room on either side. Reads only what the policy sees."""
+    left = -observation[STATE_DIM + STEERING_STATE_NAMES.index("passage_left_edge_norm")]
+    right = observation[STATE_DIM + STEERING_STATE_NAMES.index("passage_right_edge_norm")]
+    if left <= 0.0 and right <= 0.0:
+        return 0.0
+    return -1.0 if left >= right else 1.0
+
+
 # =============================================================================
 # Reward
 # =============================================================================

@@ -37,5 +37,40 @@ class ArgsTests(unittest.TestCase):
         self.assertEqual((a.u_min, a.fixed_u), (-1.0, [-1.0, -0.5]))
 
 
+class RotateMapsTests(unittest.TestCase):
+    def test_loads_the_next_town_every_block_of_episodes(self):
+        import gymnasium
+        from train_steering import RotateMaps
+
+        class _Env(gymnasium.Env):  # records the town of every episode, like CarlaAEBEnv's _map_name
+            observation_space = action_space = gymnasium.spaces.Discrete(1)
+
+            def __init__(self):
+                self._map_name, self._route_builder, self.loads, self.episodes = "Town05_Opt", "b05", 0, []
+
+            def _cleanup_actors(self):
+                pass
+
+            def _connect(self):
+                self.loads += 1
+
+            def reset(self, **kwargs):
+                self.episodes.append((self._map_name, self._route_builder))
+                return 0, {}
+
+        env = _Env()
+        rotating = RotateMaps(env, {"Town05_Opt": "b05", "Town01_Opt": "b01"}, every=2)
+        for _ in range(6):
+            rotating.reset()
+        self.assertEqual([m for m, _ in env.episodes], ["Town05_Opt"] * 2 + ["Town01_Opt"] * 2 + ["Town05_Opt"] * 2)
+        self.assertEqual(env.episodes[2], ("Town01_Opt", "b01"))  # each town keeps its own spot builder
+        self.assertEqual(env.loads, 2)  # no reload when the first town is already loaded
+
+    def test_several_towns_on_the_command_line(self):
+        from train_steering import _parse_args
+        a = _parse_args(["--commit", "per_tick", "--circuit-map", "Town05_Opt", "Town01_Opt"])
+        self.assertEqual(a.circuit_map, ["Town05_Opt", "Town01_Opt"])
+
+
 if __name__ == "__main__":
     unittest.main()

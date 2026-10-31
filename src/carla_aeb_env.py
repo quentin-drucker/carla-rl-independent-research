@@ -180,7 +180,7 @@ class CarlaAEBEnv(gymnasium.Env):
                  steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
                  merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
                  same_direction_passage: bool = False, trigger_by_line_distance: bool = False,
-                 start_at_cruise_speed: bool = False):
+                 start_at_cruise_speed: bool = False, port: int = 2000):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -237,6 +237,7 @@ class CarlaAEBEnv(gymnasium.Env):
                  speed x TTC (distance driven drifts over a long circuit).
         """
         self._map_name, self._route_builder = map_name, route_builder
+        self._port = port  # a second CARLA server (-carla-rpc-port) runs a second job in parallel
         self._same_direction_passage = same_direction_passage
         self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
         self._start_at_cruise_speed = start_at_cruise_speed  # spawn moving at the cruise speed (short approaches)
@@ -816,7 +817,7 @@ class CarlaAEBEnv(gymnasium.Env):
         print("[CarlaAEBEnv] connecting to CARLA...")
         self._client, self._world = connect_and_load_world(
             host="localhost",
-            port=2000,
+            port=self._port,
             timeout_s=10.0,
             target_map=self._map_name,
         )

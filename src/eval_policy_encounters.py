@@ -151,7 +151,8 @@ def _parse_args(argv=None):
     return args
 
 
-SCRIPTED_AIMS = {"clear_predicted": "clear_predicted_u", "pass_behind": "pass_behind_u"}  # name -> rl_steering function
+SCRIPTED_AIMS = {"clear_predicted": "clear_predicted_u", "pass_behind": "pass_behind_u",  # name -> rl_steering function
+                 "wider_side": "wider_side_u"}
 
 
 class _FixedAction:

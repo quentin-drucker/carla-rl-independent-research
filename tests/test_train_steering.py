@@ -72,5 +72,35 @@ class RotateMapsTests(unittest.TestCase):
         self.assertEqual(a.circuit_map, ["Town05_Opt", "Town01_Opt"])
 
 
+class WalkerSpawnRetryTests(unittest.TestCase):
+    """reset() redraws a random training spot whose walker cannot spawn (a Town01 spot stopped two runs)."""
+
+    def _env(self, fails, route_builder=object()):
+        from carla_aeb_env import CarlaAEBEnv
+        env = CarlaAEBEnv.__new__(CarlaAEBEnv)
+        env._config_fn, env._route_builder, env.setups = None, route_builder, 0
+
+        def setup():
+            env.setups += 1
+            if env.setups <= fails:
+                raise RuntimeError("[CarlaAEBEnv] Failed to spawn walker.")
+        env._cleanup_actors, env._setup_episode, env._get_obs = (lambda: None), setup, (lambda: "obs")
+        return env
+
+    def test_blocked_spot_is_redrawn(self):
+        env = self._env(fails=2)
+        self.assertEqual(env.reset()[0], "obs")
+        self.assertEqual(env.setups, 3)
+
+    def test_gives_up_after_the_attempt_limit_or_on_a_fixed_route(self):
+        from carla_aeb_env import WALKER_SPAWN_ATTEMPTS
+        with self.assertRaises(RuntimeError):
+            self._env(fails=WALKER_SPAWN_ATTEMPTS).reset()
+        env = self._env(fails=1, route_builder=None)
+        with self.assertRaises(RuntimeError):
+            env.reset()
+        self.assertEqual(env.setups, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

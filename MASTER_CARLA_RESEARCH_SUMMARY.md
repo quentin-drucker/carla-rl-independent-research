@@ -2609,6 +2609,35 @@ observed): **45 complete swerve -> (drive on) -> back in the lane at cruise spee
 contact or road departure after any return**; 8 contacts, all followed by stop-and-hold; 1
 waits.
 
+**Why lock_at_onset failed the pedestrian from the right, and the first 3-seed comparison (2026-10-23/24).**
+- **Diagnosis.** A scripted reference with the same 0.5 s lock delay (full brake + u = 0 / 0.5 / 1
+  locked 0.5 s after onset) is safe in 44 of 60 right-start cases, against 59 when swerving from onset:
+  **15-16 of lock_at_onset's 24 right-side failures were caused by the lock delay itself** (the walker
+  is still standing at onset, so a route locked then is blind; one locked after waiting cannot avoid
+  30-50 mph at 0.6-0.9 s). The other ~8 were undertraining: the 50k policy was still improving (and
+  regressed at the very end) with only ~32 critical episodes of one route decision each. Not the cause:
+  the constant-speed pedestrian prediction (correlation +0.03 with the locked u).
+- **Reward fix.** Training no longer penalizes contacts the pedestrian causes (car <= 0.5 m/s,
+  pedestrian moving), matching protocol v4 (`pedestrian_contact_free`); a slow creep into a standing
+  pedestrian still counts.
+- **3 seeds x 150k** (road-edge walkers, merge-back), safe (v4) of 120: **lock_at_onset 103 / 101 /
+  103 (fair ceiling 104), per_tick 111 / 110 / 114** (best per-case scripted choice from onset 120;
+  single best fixed 114). lock_at_onset now reaches its ceiling; per_tick's remaining misses are the
+  same in every seed (pedestrian from the right at 0.5-0.6 s: it swerves where staying in lane is
+  right). **per_tick is safer by ~9 cases on average, and most of that gap is the 0.5 s lock delay,
+  not re-deciding itself.** Evidence status: CONFIRMED, 3 seeds, one deterministic episode per case.
+
+**Left/right swerves (2026-10-24).** `--u-min -1` lets the policy choose the side. Scripted check: 0
+road departures in 300 left-swerve runs; for the pedestrian from the right a full left swerve is safe
+in 60/60 (right: 54/60), from the left the right side stays better (60 vs 45). At the Town04 test spot
+the lane to the left is a same-direction lane. A 50k pair looked very strong for per_tick (118/120,
+seed 0) but **3 seeds x 150k did not replicate it: per_tick 105 / 115 / 114 (mean 111.3, same as
+right-only 111.7), lock_at_onset 102 / 118 / 108 (mean 109.3, up from 102.3)**. Choosing a side
+raises lock_at_onset's ceiling (a left swerve escapes even after the lock delay) but makes training
+less stable (large seed spread). City-map probe for a circuit: room to swerve is often on one side
+only (Town05: right 30 %, left 86 % of straight samples), so side choice is needed in a city; Town05 has
+the fewest curves (10 %) and is the recommended circuit map.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

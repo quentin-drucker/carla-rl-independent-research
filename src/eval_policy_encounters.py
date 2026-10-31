@@ -122,6 +122,8 @@ def _parse_args(argv=None):
                    help="lock_at_onset locks this long after onset (walking pedestrians: 0.2)")
     p.add_argument("--road-right-limit-m", type=float,
                    help="cap the passage's right road edge (4.5 = adjacent lane only); default: whole road")
+    p.add_argument("--u-min", type=float, default=0.0,
+                   help="lowest steering u: 0 = right swerves only (default), -1 = left swerves too")
     p.add_argument("--merge-back", action="store_true",
                    help="return to the original lane once the hazard is clear behind the car (merge_back.py)")
     p.add_argument("--observe-after-s", type=float, default=0.0,
@@ -328,6 +330,7 @@ def main(argv=None):
         episodes = [(cfg, None, model) for cfg in configs]
     env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit,
                       lock_delay_s=args.lock_delay_s, road_right_limit_m=args.road_right_limit_m,
+                      u_bounds=(args.u_min, 1.0),
                       merge_back=args.merge_back)
     try:
         if model is not None and model.observation_space.shape != env.observation_space.shape:
@@ -353,6 +356,7 @@ def main(argv=None):
             "model_action_shape": list(env.action_space.shape),
             "steer_commit": args.steer_commit, "lock_delay_s": args.lock_delay_s,
             "road_right_limit_m": args.road_right_limit_m, "merge_back": args.merge_back,
+            "u_bounds": [args.u_min, 1.0],
             "observe_after_s": args.observe_after_s,
             "fixed_brake": args.fixed_brake if (args.fixed_u or args.scripted_aim) else None,
             "fixed_u": args.fixed_u, "scripted_aim": args.scripted_aim, "parity_with": args.parity_with,

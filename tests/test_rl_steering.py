@@ -18,6 +18,7 @@ from rl_steering import (  # noqa: E402
     build_steering_observation,
     clear_predicted_u,
     compute_steering_reward,
+    contact_is_pedestrians,
     frame_coordinates_m,
     heading_error_rad,
     pass_behind_u,
@@ -201,6 +202,11 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(u(2.55, 0.0), 0.0)    # standing beside the lane: hold the lane
         self.assertEqual(u(0.5, 0.1), 1.0)     # standing in the car's path: go around on the right
         self.assertEqual(u(-2.55, 0.2), 1.0)   # standing off to the left, car already right of them
+
+    def test_contact_is_the_pedestrians_only_when_the_car_is_stopped_and_they_move(self):
+        self.assertTrue(contact_is_pedestrians(ego_speed_mps=0.0, pedestrian_speed_mps=1.8))   # walked into a stopped car
+        self.assertFalse(contact_is_pedestrians(ego_speed_mps=0.3, pedestrian_speed_mps=0.0))  # slow creep into a standing person
+        self.assertFalse(contact_is_pedestrians(ego_speed_mps=4.0, pedestrian_speed_mps=1.8))  # moving car
 
     def test_wrong_base_length_rejected(self):
         with self.assertRaises(ValueError):

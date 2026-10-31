@@ -117,6 +117,7 @@ EGO_SPAWN_INDEX       = 242
 END_MARKER_SPAWN_INDEX = 168
 
 FIXED_DT              = 0.02    # 50 Hz
+WALKER_SPAWN_ATTEMPTS = 5       # reset() redraws a random training spot whose walker cannot spawn
 
 LOOKAHEAD_M           = 6
 STEER_GAIN            = 1.5
@@ -343,8 +344,15 @@ class CarlaAEBEnv(gymnasium.Env):
         if self._config_fn is not None:
             self.cfg = self._config_fn()
 
-        self._cleanup_actors()
-        self._setup_episode()
+        for attempt in range(WALKER_SPAWN_ATTEMPTS):
+            self._cleanup_actors()
+            try:
+                self._setup_episode()
+                break
+            except RuntimeError as exc:  # random training spots: a blocked walker spot just means draw another
+                if ("Failed to spawn walker" not in str(exc) or self._route_builder is None
+                        or attempt == WALKER_SPAWN_ATTEMPTS - 1):
+                    raise
 
         obs = self._get_obs()
         return obs, {}

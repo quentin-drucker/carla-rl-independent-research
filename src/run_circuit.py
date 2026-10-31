@@ -18,7 +18,10 @@ Usage (CARLA running; from src/ in the venv):
     add --watch to follow the car with the spectator camera (visible CARLA)
 
 Evidence (git-ignored): src/runs/circuit/<timestamp>_circuit_default/
-    manifest.json, hazards.csv, hz_NN/{trace.csv, metrics.json, hazard.json}
+    manifest.json, hazards.csv, skipped_hazards.json, stuck_recoveries.json,
+    hz_NN/{trace.csv, metrics.json, hazard.json, policy_ticks.csv}
+policy_ticks.csv: per tick, the 14 inputs the action was chosen from, the action [brake, u] and the
+twin critics' Q(inputs, action) (blank for --fixed-u), to explain what the model sees and does.
 """
 
 import argparse
@@ -37,7 +40,8 @@ from encounter_metrics import compute_encounter_metrics
 from eval_policy_encounters import PROTOCOL, _FixedAction, _git, _versions
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from rl_eval_protocol import file_sha256, resolve_model_path, trace_telemetry
-from rl_steering import STEER_COMMIT_MODES
+from rl_reward_design import STATE_SPEC
+from rl_steering import STEER_COMMIT_MODES, STEERING_STATE_NAMES
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNS_ROOT = os.path.join(SRC_DIR, "runs", "circuit")
@@ -46,6 +50,8 @@ HAZARD_COLUMNS = ["hazard", "lap", "route_m", "walker", "ttc_s", "onset_time_s",
                   "outcome_v4", "contact_cause", "ego_safe_success", "safe_success", "contact_speed_mps",
                   "min_clearance_m", "max_abs_route_lateral_m", "drivable_violation_ticks", "merge_back_state",
                   "drive_on_count", "encounter_s", "end_lateral_m", "end_speed_mps"]
+POLICY_TICK_COLUMNS = (["tick", "sim_time_s", "triggered"] + [s["name"] for s in STATE_SPEC] + list(STEERING_STATE_NAMES)
+                       + ["action_brake", "action_u", "critic_q1", "critic_q2"])
 
 
 def _parse_args(argv=None):
@@ -162,6 +168,7 @@ def main(argv=None):
 
     env.cfg = plan[0][1]
     rows, hz, recorder, drivable, onset_marked = [], 0, TrajectoryRecorder(dt_s=FIXED_DT), [], False
+    policy_rows, skipped = [], []
     spec = None
     try:
         obs, _ = env.reset()
@@ -182,7 +189,10 @@ def main(argv=None):
                       f"driven {env._dist_m:7.0f} m | speed {get_speed_mps(env._vehicle):5.1f} m/s | next hazard "
                       f"{plan[hz][0] if hz < len(plan) else '-'} m", flush=True)
             action, _ = policy.predict(obs, deterministic=True)
+            inputs, q = obs, critic_values(policy, obs, action)
             obs, _, _, _, info = env.step(np.asarray(action))
+            policy_rows.append([info["tick"], info["sim_time_s"], info["triggered"], *np.asarray(inputs).tolist(),
+                                *np.asarray(action).tolist(), *q])
             if spec is not None:
                 spec.tick(fixed_dt=FIXED_DT)
             marker = "onset" if info["triggered"] and not onset_marked else None
@@ -193,13 +203,13 @@ def main(argv=None):
                 drivable.append(footprint_drivable(carla_map, rec.pos_x_m, rec.pos_y_m, rec.yaw_deg, rec.pos_z_m)[0])
             if info["triggered"] and encounter_done(info["sim_time_s"] - info["trigger_time_s"], info.get("merge_back_state")):
                 rows.append(_finish(out_dir, hz, plan[hz], recorder, drivable, info, env, lap_len))
+                _write_csv(os.path.join(out_dir, f"hz_{hz:02d}", "policy_ticks.csv"), POLICY_TICK_COLUMNS, policy_rows)
                 _write_rows(out_dir, rows)
-                hz += 1
+                hz = next_spawnable_hazard(env, plan, hz + 1, skipped)
                 if hz == len(plan):
                     end_reason = "all hazards done"
                     break
-                env.next_encounter(plan[hz][1])
-                recorder, drivable, onset_marked = TrajectoryRecorder(dt_s=FIXED_DT), [], False
+                recorder, drivable, onset_marked, policy_rows = TrajectoryRecorder(dt_s=FIXED_DT), [], False, []
             stopped_ticks = stopped_ticks + 1 if info["ego_speed_mps"] < 0.3 and not info["triggered"] else 0
             if stopped_ticks * FIXED_DT > STUCK_RECOVER_S and len(recoveries) < 5:
                 # After a contact the car can end up wedged at the road edge or turned across it, and steering
@@ -229,7 +239,10 @@ def main(argv=None):
         env.close()
     with open(os.path.join(out_dir, "stuck_recoveries.json"), "x") as f:
         json.dump(recoveries, f, indent=2)
+    with open(os.path.join(out_dir, "skipped_hazards.json"), "x") as f:
+        json.dump(skipped, f, indent=2)
     _print_summary(rows, end_reason, len(plan))
+    print(f"[circuit] hazards skipped (pedestrian could not spawn): {len(skipped)}")
     print(f"[circuit] stuck recoveries (car put back on its route): {len(recoveries)}")
     print(f"[circuit] evidence: {out_dir}")
     return 0 if end_reason == "all hazards done" else 1
@@ -258,6 +271,44 @@ def _finish(out_dir, index, plan_item, recorder, drivable, info, env, lap_len):
           f"{d['outcome_v4']:28s} clr {d['min_clearance_m'] if d['min_clearance_m'] is None else round(d['min_clearance_m'], 2)} "
           f"| merge-back {mb.get('state')} | {row['encounter_s']:.1f} s")
     return {c: row.get(c) for c in HAZARD_COLUMNS}
+
+
+def next_spawnable_hazard(env, plan, hz, skipped):
+    """Set up plan[hz], or the first later hazard whose pedestrian spawns; returns
+    its index (len(plan) if none). A blocked spawn spot is skipped and logged in
+    `skipped`, not counted as an encounter; the seeded plan is otherwise kept,
+    so every controller faces the same remaining hazards."""
+    while hz < len(plan):
+        try:
+            env.next_encounter(plan[hz][1])
+            return hz
+        except RuntimeError as e:
+            if "Failed to spawn walker" not in str(e):
+                raise
+            skipped.append({"hazard": hz, "route_m": plan[hz][0], "run_id": plan[hz][1].run_id})
+            print(f"[circuit] hazard {hz} at {plan[hz][0]:.0f} m SKIPPED: pedestrian could not spawn", flush=True)
+            hz += 1
+    return hz
+
+
+def critic_values(policy, obs, action):
+    """[Q1, Q2]: the twin critics' estimate of the return of taking `action`
+    from `obs` (SAC trains on min(Q1, Q2)); blank for a scripted controller."""
+    if not hasattr(policy, "critic"):
+        return ["", ""]
+    import torch
+
+    obs_t, _ = policy.policy.obs_to_tensor(obs)
+    act_t = torch.as_tensor(policy.policy.scale_action(np.asarray(action))[None], device=policy.device)  # critics see [-1, 1]
+    with torch.no_grad():
+        return [float(q.item()) for q in policy.critic(obs_t, act_t)]
+
+
+def _write_csv(path, columns, rows):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(columns)
+        w.writerows(rows)
 
 
 def _write_rows(out_dir, rows):

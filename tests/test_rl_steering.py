@@ -23,6 +23,7 @@ from rl_steering import (  # noqa: E402
     heading_error_rad,
     pass_behind_u,
     policy_should_act,
+    wider_side_u,
     split_action,
 )
 
@@ -202,6 +203,25 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(u(2.55, 0.0), 0.0)    # standing beside the lane: hold the lane
         self.assertEqual(u(0.5, 0.1), 1.0)     # standing in the car's path: go around on the right
         self.assertEqual(u(-2.55, 0.2), 1.0)   # standing off to the left, car already right of them
+
+    def test_wider_side_rule_swerves_to_the_roomier_side_or_stays(self):
+        self.assertEqual(wider_side_u(self._obs()), 1.0)  # Town04: 7.42 m right vs 3.87 m left
+        narrow_left = compute_passage(lambda lat: -5.25 <= lat <= 1.0, [Obstacle(0.0)])
+        self.assertEqual(wider_side_u(self._obs(passage=narrow_left)), -1.0)
+        one_lane = compute_passage(lambda lat: -1.75 <= lat <= 1.75, [Obstacle(0.0)])  # Town01: no room either side
+        self.assertEqual(wider_side_u(self._obs(passage=one_lane)), 0.0)
+
+    def test_brake_first_rule_brakes_only_while_full_braking_stops_in_time(self):
+        from rl_steering import brake_alone_stops
+        def obs(speed_mps, line_m):
+            o = list(self._obs(distance_to_pedestrian_line_m=line_m))
+            o[0] = speed_mps / 26.82
+            return o
+        # 15 m/s needs 0.9 + 15.6 + 2.4 + 0.3 + 0.5 = 19.7 m (about 1.3 s of warning)
+        self.assertTrue(brake_alone_stops(obs(15.0, 21.0)))
+        self.assertFalse(brake_alone_stops(obs(15.0, 18.0)))
+        self.assertTrue(brake_alone_stops(obs(5.0, 6.0)))     # slowed down: a short gap is enough again
+        self.assertFalse(brake_alone_stops(obs(15.0, -1.0)))  # already past the line
 
     def test_contact_is_the_pedestrians_only_when_the_car_is_stopped_and_they_move(self):
         self.assertTrue(contact_is_pedestrians(ego_speed_mps=0.0, pedestrian_speed_mps=1.8))   # walked into a stopped car

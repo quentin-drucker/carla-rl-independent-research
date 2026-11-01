@@ -10,7 +10,7 @@ import carla
 # pyright: reportMissingImports=false
 import math
 from math_utils import clamp, wrap_to_pi, yaw_deg_to_rad, get_speed_mps
-from route_lateral_control import offset_point_xy, signed_lateral_offset_m
+from route_lateral_control import offset_point_xy, route_window, signed_lateral_offset_m
 from lidar_utils import (
     lidar_min_distance_ahead,
     lidar_min_distance_in_lane_noodle,
@@ -64,9 +64,10 @@ ACTIVE_PATH_COMMIT_TICKS_REQ = 5
 # -------------------------------------------------
 # Helpers for lane-following control step (called from main loop)
 # -------------------------------------------------
-def _find_closest_route_index(route_points_world, loc):
+def _find_closest_route_index(route_points_world, loc, near_index=None):
     """
-    Return the index of the route point closest to the current vehicle location.
+    Return the index of the route point closest to the current vehicle location
+    (within route_window around near_index, the last match, when given).
     """
     if not route_points_world:
         return None
@@ -74,7 +75,8 @@ def _find_closest_route_index(route_points_world, loc):
     best_i = None
     best_d2 = None
 
-    for i, p in enumerate(route_points_world):
+    for i in route_window(len(route_points_world), near_index):
+        p = route_points_world[i]
         dx = p.x - loc.x
         dy = p.y - loc.y
         dz = p.z - loc.z
@@ -87,14 +89,14 @@ def _find_closest_route_index(route_points_world, loc):
     return best_i
 
 
-def _get_route_target_point(route_points_world, loc, lookahead_m):
+def _get_route_target_point(route_points_world, loc, lookahead_m, near_index=None):
     """
     Pick a target point lookahead_m ahead along the planned route polyline.
     """
     if not route_points_world:
         return None, None
 
-    start_i = _find_closest_route_index(route_points_world, loc)
+    start_i = _find_closest_route_index(route_points_world, loc, near_index)
     if start_i is None:
         return None, None
 
@@ -192,8 +194,9 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
 
     if route_points_world:
         route_center_target_loc, route_closest_i = _get_route_target_point(
-            route_points_world, loc, lookahead_m
+            route_points_world, loc, lookahead_m, speed_state.get("route_index")
         )
+        speed_state["route_index"] = route_closest_i
 
         if route_center_target_loc is None:
             vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
@@ -211,7 +214,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
             z=route_center_target_loc.z,
         )
         signed_route_lateral_offset_m = signed_lateral_offset_m(
-            route_points_world, loc
+            route_points_world, loc, route_closest_i
         )
     else:
         # fallback: old local lane-follow behavior

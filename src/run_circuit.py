@@ -33,13 +33,14 @@ import math
 import os
 import random
 import sys
+import time
 
 import numpy as np
 
 from circuit import (curve_speed_limit_mps, encounter_done, lane_change_offsets, place_hazards, sample_hazard,
                      straight_flags, without_backtracking)
 from encounter_metrics import compute_encounter_metrics
-from eval_policy_encounters import PROTOCOL, SCRIPTED_AIMS, _FixedAction, _git, _ScriptedAim, _versions
+from eval_policy_encounters import PROTOCOL, SCRIPTED_AIMS, _BrakeFirst, _FixedAction, _git, _ScriptedAim, _versions
 from physics_backend import BACKEND_DEFAULT, create_run_dir
 from rl_eval_protocol import file_sha256, resolve_model_path, trace_telemetry
 from rl_reward_design import STATE_SPEC
@@ -74,6 +75,8 @@ def _parse_args(argv=None):
     p.add_argument("--lock-delay-s", type=float, default=0.5)
     p.add_argument("--u-min", type=float, default=-1.0, help="-1 = both sides (default), 0 = right only")
     p.add_argument("--watch", action="store_true", help="follow the ego with the spectator camera")
+    p.add_argument("--brake-first", action="store_true",
+                   help="full brake, no swerve, while braking alone stops in time; the controller otherwise")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     args = p.parse_args(argv)
     if sum(x is not None for x in (args.model, args.fixed_u, args.scripted_aim)) != 1:
@@ -179,9 +182,16 @@ def main(argv=None):
         policy = _ScriptedAim(args.fixed_brake, getattr(rl_steering, SCRIPTED_AIMS[args.scripted_aim]))
     else:
         model_path, policy = f"fixed_action:brake={args.fixed_brake:g},u={args.fixed_u:g}", _FixedAction(args.fixed_brake, args.fixed_u)
+    if args.brake_first:
+        policy = _BrakeFirst(policy)
 
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = create_run_dir(runs_root=RUNS_ROOT, timestamp=stamp, run_family="circuit", backend=BACKEND_DEFAULT)
+    while True:  # a parallel circuit job (second CARLA server) may have taken this second's folder
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            out_dir = create_run_dir(runs_root=RUNS_ROOT, timestamp=stamp, run_family="circuit", backend=BACKEND_DEFAULT)
+            break
+        except FileExistsError:
+            time.sleep(1.0)
     dirty = _git("status", "--porcelain", "--untracked-files=no")
     with open(os.path.join(out_dir, "manifest.json"), "x") as f:
         json.dump({"created_at_iso": datetime.datetime.now().isoformat(), "git_commit": _git("rev-parse", "HEAD"),

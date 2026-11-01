@@ -11,13 +11,15 @@ after which the car keeps driving to the next one.
 - place_hazards: random, spaced hazard positions along the route.
 - sample_hazard: which pedestrian and how much warning (oracle onset TTC).
 - encounter_done: when one encounter is over and the next can be set up.
+- lane_change_offsets, without_backtracking: turn the route planner's lane changes (sideways jumps,
+  points behind the previous one) into a smooth path.
 
 Offline-tested in tests/test_circuit.py.
 """
 
 import math
 import random
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 WALKERS = ("right_edge", "left_edge", "stationary")
 TTC_RANGE_S = (0.6, 1.5)  # inside the trained range (0.5-1.6), away from its edges
@@ -37,6 +39,63 @@ def straight_flags(yaws_deg: Sequence[float], junction: Sequence[bool], *, windo
         lo, hi = max(0, i - window), min(n, i + window + 1)
         out.append(not any(junction[lo:hi]) and all(_turn_deg(yaws_deg[j], yaws_deg[i]) <= max_turn_deg
                                                      for j in range(lo, hi)))
+    return out
+
+
+def lane_change_offsets(xy: Sequence[Sequence[float]], lane_yaws_deg: Sequence[float], junction: Sequence[bool], *,
+                        fixed: Optional[Sequence[bool]] = None, ramp_m: float = 60.0,
+                        min_step_m: float = 0.25) -> List[float]:
+    """Per route point: lateral offset (m, + = right, along the point's lane right vector) that turns the
+    route planner's lane changes into smooth ones. The planner steps 1.5-7 m sideways within a few metres
+    (the car swerved at those spots every lap, Quentin 2026-11-01). Each sideways step outside junctions
+    (a segment's component across its lane heading > min_step_m) is spread over a smoothstep ramp of up to
+    ramp_m centred on it: points before the step move toward the new lane, points after it back toward the
+    old. fixed: points whose offset must stay 0 (hazard zones). Neither a ramp nor its offsets enter those or
+    junctions (finish the turn, then change lanes): a ramp blocked on one side slides to the other, and is
+    shortened only when there is not ramp_m of room between them."""
+    n = len(xy)
+    fixed = fixed or [False] * n
+    s = [0.0]  # distance ALONG the lanes: a jump segment's sideways length would squeeze the ramp
+    for i, (a, b) in enumerate(zip(xy, xy[1:])):
+        y = math.radians(lane_yaws_deg[i])
+        s.append(s[-1] + max(0.0, math.cos(y) * (b[0] - a[0]) + math.sin(y) * (b[1] - a[1])))  # backward: 0
+    out = [0.0] * n
+    for i in range(n - 1):
+        if junction[i] or junction[i + 1]:
+            continue
+        y = math.radians(lane_yaws_deg[i])
+        dx, dy = xy[i + 1][0] - xy[i][0], xy[i + 1][1] - xy[i][1]
+        side = math.cos(y) * dy - math.sin(y) * dx  # CARLA is left-handed: + = right
+        if abs(side) <= min_step_m:
+            continue
+        mid = (s[i] + s[i + 1]) / 2.0
+        lo = next((s[j] for j in range(i, -1, -1) if fixed[j] or junction[j]), -math.inf)
+        hi = next((s[j] for j in range(i + 1, n) if fixed[j] or junction[j]), math.inf)
+        start = max(lo, min(mid - ramp_m / 2.0, hi - ramp_m))  # blocked on one side: slide to the other
+        end = min(hi, start + ramp_m)
+        if end - start < 1e-6:
+            continue
+        for k in range(n):
+            if start < s[k] < end:
+                x = (s[k] - start) / (end - start)
+                out[k] += side * (x * x * (3.0 - 2.0 * x) - (1.0 if k > i else 0.0))
+    return out
+
+
+def without_backtracking(xy: Sequence[Sequence[float]], lane_yaws_deg: Sequence[float], *,
+                         min_ahead_m: float = 0.1) -> List[Tuple[float, float]]:
+    """Same points, except those not at least min_ahead_m ahead (along the lane) of the last point that was:
+    they are replaced by interpolation between their neighbours that are. The planner's lane-change waypoint
+    can sit ~2-4 m BEHIND the previous one, and route legs repeat their joint point, so the path doubled back."""
+    out = [tuple(p) for p in xy]
+    last = 0
+    for i in range(1, len(xy)):
+        y = math.radians(lane_yaws_deg[last])
+        if math.cos(y) * (xy[i][0] - xy[last][0]) + math.sin(y) * (xy[i][1] - xy[last][1]) >= min_ahead_m:
+            for k in range(last + 1, i):
+                t = (k - last) / (i - last)
+                out[k] = (xy[last][0] + t * (xy[i][0] - xy[last][0]), xy[last][1] + t * (xy[i][1] - xy[last][1]))
+            last = i
     return out
 
 

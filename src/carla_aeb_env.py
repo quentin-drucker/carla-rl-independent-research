@@ -238,6 +238,7 @@ class CarlaAEBEnv(gymnasium.Env):
                  speed x TTC (distance driven drifts over a long circuit).
         """
         self._map_name, self._route_builder = map_name, route_builder
+        self._route_points_xyz = None  # circuit: [(x, y, z)] per route waypoint to steer along (smoothed lane changes)
         self._port = port  # a second CARLA server (-carla-rpc-port) runs a second job in parallel
         self._same_direction_passage = same_direction_passage
         self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
@@ -876,7 +877,12 @@ class CarlaAEBEnv(gymnasium.Env):
             grp = GlobalRoutePlanner(carla_map, 2.0)
             route_wps = [wp for (wp, _) in grp.trace_route(ego_tf.location, end_loc)]
         self._route_wps = route_wps
-        route_points_world = [wp.transform.location for wp in route_wps]
+        if self._route_points_xyz is not None:
+            if len(self._route_points_xyz) != len(route_wps):
+                raise ValueError(f"{len(self._route_points_xyz)} route points for {len(route_wps)} route waypoints")
+            route_points_world = [carla.Location(x=x, y=y, z=z) for x, y, z in self._route_points_xyz]
+        else:
+            route_points_world = [wp.transform.location for wp in route_wps]
 
         # Controller state dict (mirrors test3's speed_state)
         self._speed_state = {

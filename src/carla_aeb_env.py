@@ -900,6 +900,10 @@ class CarlaAEBEnv(gymnasium.Env):
             "brake_prev_cruise": 0.0,
             "lidar_actor": self._lidar,
             "route_points_world": route_points_world,
+            # The car starts at the route's first point. Without this the first step searches the whole route,
+            # and a 2-lap circuit holds its start twice: once smoothing moved lap 2's copy, the car drove lap 1
+            # on lap 2's indices and steered for the route's end at the lap seam (Town02, 2026-11-01).
+            "route_index": 0,
             "noodle_enable": NOODLE_ENABLE,
             "noodle_step_m": NOODLE_STEP_M,
             "noodle_half_width_m": NOODLE_HALF_WIDTH_M,

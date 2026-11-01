@@ -2679,6 +2679,51 @@ for its nearest point and snapped onto the opposite leg where a route comes back
   braking stops.** Training never showed a road with no room. 13 of 29 Town01 hazards are unavoidable for
   every controller.
 
+**Narrow-road training and two held-out towns (2026-10-31 / 11-01).** Training rotates towns every 20
+episodes (`--circuit-map Town05_Opt Town01_Opt`, `d87deba`); a rule baseline `wider_side` (full brake, full
+swerve to the side with more passage room, none if neither); the circuit records the policy's 14 inputs, 2
+outputs and both critic values per tick (`32464a3`). 3 seeds x 150k "mixed" (Town05+Town01) and a Town05-only
+control at the same code (last week's models predate the drive-on fixes). 169 circuit runs, 2 laps x 4
+hazards; Town02 (narrow) and Town10HD (wide) never trained on. Safe % per seed:
+
+| Town | mixed s1/s2/s3 | Town05-only s1/s2/s3 | last week | wider-side rule | brake | full left | full right |
+|---|---|---|---|---|---|---|---|
+| Town05 | 66/75/72 | 66/69/69 | 66/72/75 | 72 (0 hits) | 38 | 75 | 38 |
+| Town01 | 45/23/42 | 32/26/23 | 26/28/31 | 45 | 39 | 42 | 39 |
+| Town02 (held out) | 42/17/39 | 31/28/14 | - | 39 | 31 | 36 | 44 |
+| Town10HD (held out) | 17/0/79 | 58/8/46 | - | 88 | 33 | 38 | 88 |
+
+- **Narrow-road training helps modestly on narrow towns (Town01+Town02 pooled 34% vs 25%), no loss on
+  Town05; the gain is the size of the seed spread.** Braking with no room either side rose from 0.19-0.26
+  (last week) to 0.46-0.91.
+- **The two-line wider-side rule ties or beats the mean of every learned family on every town.**
+- **Half the seeds pick a swerve side by habit, not by the room.** Same approach and identical onset inputs
+  on Town10HD (room only on the right); critic Q(full brake, right) - Q(full brake, left) is positive for
+  mixed_s3 / control s1 / s3 (Town10HD 79 / 58 / 46% safe) and negative for mixed_s1 / s2 / control s2
+  (17 / 0 / 8%). Over 123 onset scenes the critic's side agrees with the roomier side 43-45% (chance) for
+  mixed s1/s2, 71-82% for the rest. Eval scenes are left-roomier 62, right 29 (24 on Town10HD); training uses
+  the same straights, so right-roomier training scenes were likely rare (not directly counted).
+- **Policies under-brake when braking would do.** By onset TTC 0.6-0.9 / 0.9-1.2 / 1.2-1.5 s: brake only
+  9 / 4 / 77% safe, wider-side rule 48 / 32 / 91%, policies 39 / 26 / 56% with first-0.5 s brake 0.47 / 0.49 /
+  0.56 (barely scales with the time available).
+- Infrastructure: a blocked walker spawn redraws the training spot (`064a427`) or skips the circuit hazard
+  (`32464a3`); map loads get 60 s (`379ef38`, Town10HD needs > 10 s); `--port` for a second CARLA server.
+
+**What Quentin saw watching laps (2026-11-01), and what explains it.** (1) Swerves with no pedestrian at
+the same spots every lap: the route planner's lane changes (1.5-7 m sideways within a few metres, sometimes a
+waypoint 2-4 m behind the previous one), not the policy (its action is discarded before onset and its inputs
+hold no position); 29 of 30 such stretches on Town10HD sit at a lane-change jump. **Fixed in `1872b3f`:**
+each jump is a smoothstep ramp of up to 60 m kept out of junctions and hazard zones, so every hazard keeps
+its exact spot; mid-road lane changes went from 12-50 deg off the lane to ~5 deg (a full re-score is
+running). A 8-13 deg wobble after some junction exits is unchanged by smoothing: the lane follower coming out
+of turns. (2) One seed swerving right and passing, another left into the pedestrian: the side habit above.
+(3) The car holding speed toward a visible standing pedestrian and swerving at the last moment: the
+oracle-onset protocol (since 2026-10-02) keeps both policy and LiDAR braking off until onset at TTC 0.6-1.5 s,
+while a "stationary" pedestrian stands in the lane the whole approach — a protocol artifact. (4) "Brake when
+there is room to stop" is right: the under-braking above. Proposed order: brake-first rule (stopping
+feasibility; no retraining), side-balanced retrain, stationary pedestrian appearing at onset; reacting before
+onset is a bigger protocol change for Quentin / Izmirli to decide.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

@@ -211,6 +211,18 @@ class ObservationTests(unittest.TestCase):
         one_lane = compute_passage(lambda lat: -1.75 <= lat <= 1.75, [Obstacle(0.0)])  # Town01: no room either side
         self.assertEqual(wider_side_u(self._obs(passage=one_lane)), 0.0)
 
+    def test_brake_first_rule_brakes_only_while_full_braking_stops_in_time(self):
+        from rl_steering import brake_alone_stops
+        def obs(speed_mps, line_m):
+            o = list(self._obs(distance_to_pedestrian_line_m=line_m))
+            o[0] = speed_mps / 26.82
+            return o
+        # 15 m/s needs 0.9 + 15.6 + 2.4 + 0.3 + 0.5 = 19.7 m (about 1.3 s of warning)
+        self.assertTrue(brake_alone_stops(obs(15.0, 21.0)))
+        self.assertFalse(brake_alone_stops(obs(15.0, 18.0)))
+        self.assertTrue(brake_alone_stops(obs(5.0, 6.0)))     # slowed down: a short gap is enough again
+        self.assertFalse(brake_alone_stops(obs(15.0, -1.0)))  # already past the line
+
     def test_contact_is_the_pedestrians_only_when_the_car_is_stopped_and_they_move(self):
         self.assertTrue(contact_is_pedestrians(ego_speed_mps=0.0, pedestrian_speed_mps=1.8))   # walked into a stopped car
         self.assertFalse(contact_is_pedestrians(ego_speed_mps=0.3, pedestrian_speed_mps=0.0))  # slow creep into a standing person

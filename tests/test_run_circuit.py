@@ -68,5 +68,26 @@ class CriticValuesTests(unittest.TestCase):
         self.assertEqual(len(POLICY_TICK_COLUMNS), 3 + 14 + 2 + 2)
 
 
+class BrakeFirstTests(unittest.TestCase):
+    def test_full_brake_while_braking_stops_else_the_wrapped_controller_and_its_attributes(self):
+        from eval_policy_encounters import _BrakeFirst
+        from rl_steering import STEERING_STATE_DIM, STATE_DIM, STEERING_STATE_NAMES
+
+        class Inner:
+            critic = "the inner critic"
+            def predict(self, obs, deterministic=True):
+                return np.array([0.3, -1.0], dtype=np.float32), None
+
+        obs = np.zeros(STEERING_STATE_DIM, dtype=np.float32)
+        obs[0] = 15.0 / 26.82
+        line = STATE_DIM + STEERING_STATE_NAMES.index("distance_to_pedestrian_line_norm")
+        bf = _BrakeFirst(Inner())
+        obs[line] = 30.0 / 80.0
+        self.assertEqual(bf.predict(obs)[0].tolist(), [1.0, 0.0])
+        obs[line] = 12.0 / 80.0
+        self.assertEqual(bf.predict(obs)[0].tolist(), [0.30000001192092896, -1.0])
+        self.assertEqual(bf.critic, "the inner critic")
+
+
 if __name__ == "__main__":
     unittest.main()

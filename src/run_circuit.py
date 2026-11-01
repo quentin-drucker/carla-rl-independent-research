@@ -1,0 +1,367 @@
+"""run_circuit.py
+
+City circuit (Week 8, 2026-10-25): the ego drives laps of a loop route in a
+CARLA town; pedestrians appear at random points ahead of it, several per lap.
+Each one is an encounter handled by the policy (or a scripted action) plus
+merge-back (merge_back.py), after which the car keeps driving to the next.
+Every encounter is scored with the same protocol as eval_policy_encounters.py
+(encounter_metrics v4, 8 s window from the hazard's oracle onset).
+
+Hazards: the walkers of steer_brake_baseline (right_edge / left_edge /
+stationary), onset TTC 0.6-1.5 s, placed only on straight, non-junction
+stretches (circuit.straight_flags) at least --min-gap-m apart. The passage is
+limited to same-direction lanes (no swerving into oncoming traffic).
+
+Usage (CARLA running; from src/ in the venv):
+    python -u -X utf8 run_circuit.py --model runs/steering_train/<run>/final_model.zip --steer-commit per_tick --u-min -1
+    python -u -X utf8 run_circuit.py --fixed-u 1 --steer-commit per_tick        # scripted: full brake + full right swerve
+    python -u -X utf8 run_circuit.py --scripted-aim wider_side --steer-commit per_tick  # rule: full brake, wider side or none
+    add --watch to follow the car with the spectator camera (visible CARLA)
+
+Evidence (git-ignored): src/runs/circuit/<timestamp>_circuit_default/
+    manifest.json, hazards.csv, skipped_hazards.json, stuck_recoveries.json,
+    hz_NN/{trace.csv, metrics.json, hazard.json, policy_ticks.csv}
+policy_ticks.csv: per tick, the 14 inputs the action was chosen from, the action [brake, u] and the
+twin critics' Q(inputs, action) (blank for --fixed-u), to explain what the model sees and does.
+"""
+
+import argparse
+import csv
+import datetime
+import json
+import math
+import os
+import random
+import sys
+import time
+
+import numpy as np
+
+from circuit import (curve_speed_limit_mps, encounter_done, lane_change_offsets, place_hazards, sample_hazard,
+                     straight_flags, without_backtracking)
+from encounter_metrics import compute_encounter_metrics
+from eval_policy_encounters import PROTOCOL, SCRIPTED_AIMS, _BrakeFirst, _FixedAction, _git, _ScriptedAim, _versions
+from physics_backend import BACKEND_DEFAULT, create_run_dir
+from rl_eval_protocol import file_sha256, resolve_model_path, trace_telemetry
+from rl_reward_design import STATE_SPEC
+from rl_steering import STEER_COMMIT_MODES, STEERING_STATE_NAMES
+
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+RUNS_ROOT = os.path.join(SRC_DIR, "runs", "circuit")
+RAMP_CLEAR_BEFORE_M, RAMP_CLEAR_AFTER_M = 30.0, 10.0  # no smoothed lane change here: onset is <= 23 m before a hazard
+STUCK_RECOVER_S = 10.0  # stopped this long outside an encounter: put the car back on its route (counted)
+HAZARD_COLUMNS = ["hazard", "lap", "route_m", "walker", "ttc_s", "onset_time_s", "speed_at_onset_mps", "outcome",
+                  "outcome_v4", "contact_cause", "ego_safe_success", "safe_success", "contact_speed_mps",
+                  "min_clearance_m", "max_abs_route_lateral_m", "drivable_violation_ticks", "merge_back_state",
+                  "drive_on_count", "encounter_s", "end_lateral_m", "end_speed_mps"]
+POLICY_TICK_COLUMNS = (["tick", "sim_time_s", "triggered"] + [s["name"] for s in STATE_SPEC] + list(STEERING_STATE_NAMES)
+                       + ["action_brake", "action_u", "critic_q1", "critic_q2"])
+
+
+def _parse_args(argv=None):
+    p = argparse.ArgumentParser(description="city circuit with random pedestrians (see docstring)")
+    p.add_argument("--map", default="Town05_Opt")
+    p.add_argument("--laps", type=int, default=2)
+    p.add_argument("--hazards-per-lap", type=int, default=4)
+    p.add_argument("--min-gap-m", type=float, default=300.0, help="minimum route distance between hazards")
+    p.add_argument("--mph", type=float, default=35.0, help="cruise speed (the policy was trained at 30-50 mph)")
+    p.add_argument("--seed", type=int, default=0, help="route-independent hazard plan seed")
+    p.add_argument("--model", help="SAC model ZIP")
+    p.add_argument("--fixed-u", type=float, help="no model: a constant [--fixed-brake, u] action")
+    p.add_argument("--fixed-brake", type=float, default=1.0)
+    p.add_argument("--scripted-aim", choices=tuple(SCRIPTED_AIMS),
+                   help="no model: --fixed-brake with a hand-written aim rule from rl_steering (e.g. wider_side)")
+    p.add_argument("--steer-commit", choices=STEER_COMMIT_MODES, default="per_tick")
+    p.add_argument("--lock-delay-s", type=float, default=0.5)
+    p.add_argument("--u-min", type=float, default=-1.0, help="-1 = both sides (default), 0 = right only")
+    p.add_argument("--watch", action="store_true", help="follow the ego with the spectator camera")
+    p.add_argument("--brake-first", action="store_true",
+                   help="full brake, no swerve, while braking alone stops in time; the controller otherwise")
+    p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
+    args = p.parse_args(argv)
+    if sum(x is not None for x in (args.model, args.fixed_u, args.scripted_aim)) != 1:
+        p.error("give exactly one of --model, --fixed-u and --scripted-aim")
+    return args
+
+
+def loop_route(world, laps):
+    """(ego spawn Transform, route waypoints): a loop through 4 far-apart spawn
+    points, repeated `laps` times (city_map_probe.py's route)."""
+    from agents.navigation.global_route_planner import GlobalRoutePlanner
+
+    points = world.get_map().get_spawn_points()
+    stops = [points[0]]
+    while len(stops) < 4:
+        stops.append(max(points, key=lambda p: min(p.location.distance(s.location) for s in stops)))
+    grp = GlobalRoutePlanner(world.get_map(), 2.0)
+    lap = []
+    for a, b in zip(stops, stops[1:] + stops[:1]):
+        lap += [wp for wp, _ in grp.trace_route(a.location, b.location)]
+    return stops[0], lap * laps
+
+
+def route_geometry(route_wps, xy=None):
+    """(distance along the route, heading in deg, straight flag) per waypoint. xy: positions to use
+    instead of the waypoints' own (the smoothed route)."""
+    s = [0.0]  # always along the planner's waypoints, in 3D (hills): hazard positions are measured on it
+    for a, b in zip(route_wps, route_wps[1:]):
+        s.append(s[-1] + a.transform.location.distance(b.transform.location))
+    xy = xy or [(wp.transform.location.x, wp.transform.location.y) for wp in route_wps]
+    # Headings from the waypoints' POSITIONS: the planner's lane changes jump ~7 m sideways within ~10 m while
+    # each waypoint's own yaw still reads "straight" (the first city lap crashed into one at full speed).
+    yaws = []
+    for a, b in zip(xy, xy[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        yaws.append(math.degrees(math.atan2(dy, dx)) if dx * dx + dy * dy > 1e-4 else (yaws[-1] if yaws else 0.0))
+    yaws.append(yaws[-1])
+    return s, yaws, straight_flags(yaws, [wp.is_junction for wp in route_wps])
+
+
+def smoothed_route(route_wps, hazard_route_m=()):
+    """[(x, y, z)] the lane follower steers along: the route with the planner's lane changes spread over a
+    smooth ramp (circuit.lane_change_offsets), kept off each hazard's zone (from RAMP_CLEAR_BEFORE_M before
+    it to RAMP_CLEAR_AFTER_M after) so approach, onset and passing happen on the unchanged lane."""
+    s, _, _ = route_geometry(route_wps)
+    xy = [(wp.transform.location.x, wp.transform.location.y) for wp in route_wps]
+    yaws = [wp.transform.rotation.yaw for wp in route_wps]
+    fixed = [any(h - RAMP_CLEAR_BEFORE_M <= sk <= h + RAMP_CLEAR_AFTER_M for h in hazard_route_m) for sk in s]
+    off = lane_change_offsets(xy, yaws, [wp.is_junction for wp in route_wps], fixed=fixed)
+    moved = without_backtracking([(x - o * math.sin(math.radians(y)), yy + o * math.cos(math.radians(y)))
+                                  for (x, yy), y, o in zip(xy, yaws, off)], yaws)
+    return [(x, y, wp.transform.location.z) for (x, y), wp in zip(moved, route_wps)]
+
+
+def plan_hazards(route_wps, args):
+    """([(route_m, ScenarioConfig)] for the whole run, route distances, smoothed-route yaws, smoothed points)."""
+    from steer_brake_baseline import baseline_scenario_config
+
+    s, _, ok = route_geometry(route_wps)  # hazards from the raw route: the same spots as before smoothing
+    rng = random.Random(args.seed)
+    positions = place_hazards(s, ok, n=args.laps * args.hazards_per_lap, min_gap_m=args.min_gap_m, start_m=200.0,
+                              end_margin_m=150.0, rng=rng)
+    pts = smoothed_route(route_wps, positions)
+    _, yaws, _ = route_geometry(route_wps, [p[:2] for p in pts])
+    plan = []
+    for i, pos in enumerate(positions):
+        h = sample_hazard(rng)
+        cfg = baseline_scenario_config(args.mph, round(h["ttc_s"], 2), walker=h["walker"],
+                                       run_id=f"hz{i:02d}_{h['walker']}_ttc{h['ttc_s']:.2f}")
+        cfg.encounter_distance_m, cfg.sim_seconds = pos, 1e6  # the episode is the whole circuit
+        plan.append((pos, cfg))
+    return plan, s, yaws, pts
+
+
+def main(argv=None):
+    args = _parse_args(argv)
+    from carla_aeb_env import FIXED_DT, CarlaAEBEnv
+    from math_utils import get_speed_mps
+    from map_drivability import footprint_drivable
+    from steer_brake_baseline import baseline_scenario_config
+    from trajectory_recording import TrajectoryRecorder
+
+    env = CarlaAEBEnv(cfg=baseline_scenario_config(args.mph, 1.0), steer_commit=args.steer_commit,
+                      lock_delay_s=args.lock_delay_s, merge_back=True, u_bounds=(args.u_min, 1.0),
+                      map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port)
+    route = loop_route(env._world, args.laps)
+    env._route_builder = lambda world: route
+    plan, route_s, route_yaws, env._route_points_xyz = plan_hazards(route[1], args)
+    route_len = route_s[-1]
+    if not plan:
+        raise SystemExit("no straight, non-junction stretch long enough for a hazard on this route")
+    lap_len = route_len / args.laps
+
+    if args.model:
+        from stable_baselines3 import SAC
+        model_path = resolve_model_path(args.model, search_dir=SRC_DIR)
+        policy = SAC.load(model_path)
+        if policy.observation_space.shape != env.observation_space.shape:
+            raise SystemExit(f"model observation shape {policy.observation_space.shape} != env {env.observation_space.shape}")
+    elif args.scripted_aim:
+        import rl_steering
+        model_path = f"scripted_aim:{args.scripted_aim},brake={args.fixed_brake:g}"
+        policy = _ScriptedAim(args.fixed_brake, getattr(rl_steering, SCRIPTED_AIMS[args.scripted_aim]))
+    else:
+        model_path, policy = f"fixed_action:brake={args.fixed_brake:g},u={args.fixed_u:g}", _FixedAction(args.fixed_brake, args.fixed_u)
+    if args.brake_first:
+        policy = _BrakeFirst(policy)
+
+    while True:  # a parallel circuit job (second CARLA server) may have taken this second's folder
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            out_dir = create_run_dir(runs_root=RUNS_ROOT, timestamp=stamp, run_family="circuit", backend=BACKEND_DEFAULT)
+            break
+        except FileExistsError:
+            time.sleep(1.0)
+    dirty = _git("status", "--porcelain", "--untracked-files=no")
+    with open(os.path.join(out_dir, "manifest.json"), "x") as f:
+        json.dump({"created_at_iso": datetime.datetime.now().isoformat(), "git_commit": _git("rev-parse", "HEAD"),
+                   "git_dirty": bool(dirty), "git_tracked_changes": dirty, "argv": sys.argv, "args": vars(args),
+                   "model_path": model_path, "model_sha256": file_sha256(model_path) if args.model else None,
+                   "map": args.map, "route_m": route_len, "lap_m": lap_len, "physics_backend": BACKEND_DEFAULT,
+                   "protocol": PROTOCOL.__dict__, "merge_back": True, "lane_changes_smoothed": True, "same_direction_passage": True,
+                   "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
+                   "versions": _versions()}, f, indent=2)
+    print(f"[circuit] {args.map}: {args.laps} lap(s) of {lap_len:.0f} m, {len(plan)} hazards | policy {os.path.basename(model_path)}")
+    print(f"[circuit] evidence: {out_dir}")
+
+    env.cfg = plan[0][1]
+    rows, hz, recorder, drivable, onset_marked = [], 0, TrajectoryRecorder(dt_s=FIXED_DT), [], False
+    policy_rows, skipped = [], []
+    spec = None
+    try:
+        obs, _ = env.reset()
+        carla_map = env._world.get_map()
+        if args.watch:
+            from spectator import SpectatorController
+            spec = SpectatorController(env._world, env._vehicle, debug_draw=False)
+        max_ticks = int((1.6 * route_len / (args.mph * 0.44704) + 25.0 * len(plan) + 60.0) / FIXED_DT)
+        stopped_ticks, end_reason, route_i, recoveries = 0, "max_ticks", 0, []
+        route_xy = [(wp.transform.location.x, wp.transform.location.y) for wp in route[1]]
+        for _ in range(max_ticks):
+            ego = env._vehicle.get_location()
+            route_i = min(range(route_i, min(route_i + 60, len(route_xy))),
+                          key=lambda k: (route_xy[k][0] - ego.x) ** 2 + (route_xy[k][1] - ego.y) ** 2)
+            env._target_speed_mps = curve_speed_limit_mps(route_s, route_yaws, route_i, v_max_mps=args.mph * 0.44704)
+            if env._tick % int(20.0 / FIXED_DT) == 0:
+                print(f"[circuit] t {env._tick * FIXED_DT:6.0f} s | route {route_s[route_i]:7.0f} / {route_len:.0f} m | "
+                      f"driven {env._dist_m:7.0f} m | speed {get_speed_mps(env._vehicle):5.1f} m/s | next hazard "
+                      f"{plan[hz][0] if hz < len(plan) else '-'} m", flush=True)
+            action, _ = policy.predict(obs, deterministic=True)
+            inputs, q = obs, critic_values(policy, obs, action)
+            obs, _, _, _, info = env.step(np.asarray(action))
+            policy_rows.append([info["tick"], info["sim_time_s"], info["triggered"], *np.asarray(inputs).tolist(),
+                                *np.asarray(action).tolist(), *q])
+            if spec is not None:
+                spec.tick(fixed_dt=FIXED_DT)
+            marker = "onset" if info["triggered"] and not onset_marked else None
+            onset_marked = onset_marked or info["triggered"]
+            rec = recorder.record(tick_index=info["tick"], sim_time_s=info["sim_time_s"],
+                                  telemetry=trace_telemetry(env._last_telemetry or None, info), event_marker=marker)
+            if rec is not None:
+                drivable.append(footprint_drivable(carla_map, rec.pos_x_m, rec.pos_y_m, rec.yaw_deg, rec.pos_z_m)[0])
+            if info["triggered"] and encounter_done(info["sim_time_s"] - info["trigger_time_s"], info.get("merge_back_state")):
+                rows.append(_finish(out_dir, hz, plan[hz], recorder, drivable, info, env, lap_len))
+                _write_csv(os.path.join(out_dir, f"hz_{hz:02d}", "policy_ticks.csv"), POLICY_TICK_COLUMNS, policy_rows)
+                _write_rows(out_dir, rows)
+                hz = next_spawnable_hazard(env, plan, hz + 1, skipped)
+                if hz == len(plan):
+                    end_reason = "all hazards done"
+                    break
+                recorder, drivable, onset_marked, policy_rows = TrajectoryRecorder(dt_s=FIXED_DT), [], False, []
+            stopped_ticks = stopped_ticks + 1 if info["ego_speed_mps"] < 0.3 and not info["triggered"] else 0
+            if stopped_ticks * FIXED_DT > STUCK_RECOVER_S and len(recoveries) < 5:
+                # After a contact the car can end up wedged at the road edge or turned across it, and steering
+                # back from a standstill fails. Put it back on the route and COUNT it (reported as a failure).
+                import carla
+                wp = route[1][route_i].transform
+                env._vehicle.set_transform(carla.Transform(
+                    carla.Location(x=wp.location.x, y=wp.location.y, z=wp.location.z + 0.3), wp.rotation))
+                env._vehicle.set_target_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
+                env._prev_loc = None
+                env._speed_state["route_index"] = route_i  # lane_follow's route search window
+                recoveries.append({"sim_time_s": info["sim_time_s"], "route_m": route_s[route_i], "after_hazard": hz - 1})
+                print(f"[circuit] STUCK {STUCK_RECOVER_S:.0f} s after hazard {hz - 1}: put back on the route at "
+                      f"{route_s[route_i]:.0f} m (recovery {len(recoveries)})", flush=True)
+                stopped_ticks = 0
+            if stopped_ticks * FIXED_DT > 60.0:
+                end_reason = "stuck: stopped for 60 s outside an encounter"
+                recorder.write(os.path.join(out_dir, "stuck_trace.csv"))
+                with open(os.path.join(out_dir, "stuck_state.json"), "x") as f:
+                    json.dump({k: v for k, v in env._speed_state.items() if isinstance(v, (int, float, str, bool))}
+                              | {"telemetry": {k: v for k, v in (env._last_telemetry or {}).items()
+                                               if isinstance(v, (int, float, str, bool))}}, f, indent=2)
+                break
+    finally:
+        if spec is not None:
+            spec.close()
+        env.close()
+    with open(os.path.join(out_dir, "stuck_recoveries.json"), "x") as f:
+        json.dump(recoveries, f, indent=2)
+    with open(os.path.join(out_dir, "skipped_hazards.json"), "x") as f:
+        json.dump(skipped, f, indent=2)
+    _print_summary(rows, end_reason, len(plan))
+    print(f"[circuit] hazards skipped (pedestrian could not spawn): {len(skipped)}")
+    print(f"[circuit] stuck recoveries (car put back on its route): {len(recoveries)}")
+    print(f"[circuit] evidence: {out_dir}")
+    return 0 if end_reason == "all hazards done" else 1
+
+
+def _finish(out_dir, index, plan_item, recorder, drivable, info, env, lap_len):
+    pos, cfg = plan_item
+    m = compute_encounter_metrics(recorder.ticks, onset_time_s=info["trigger_time_s"], protocol=PROTOCOL,
+                                  footprint_drivable=drivable)
+    mb = env.merge_back_summary or {}
+    hz_dir = os.path.join(out_dir, f"hz_{index:02d}")
+    os.makedirs(hz_dir, exist_ok=False)
+    recorder.write(os.path.join(hz_dir, "trace.csv"))
+    with open(os.path.join(hz_dir, "metrics.json"), "x") as f:
+        json.dump(m.to_dict(), f, indent=2)
+    with open(os.path.join(hz_dir, "hazard.json"), "x") as f:
+        json.dump({"route_m": pos, "config": cfg.to_dict(), "merge_back": mb,
+                   "walker_transitions": env.walker_transitions}, f, indent=2)
+    d = m.to_dict()
+    row = {c: d.get(c) for c in HAZARD_COLUMNS if c in d}
+    row.update(hazard=index, lap=int(pos // lap_len) + 1, route_m=round(pos, 1), walker=cfg.run_id.split("_", 1)[1].rsplit("_", 1)[0],
+               ttc_s=cfg.trigger_ttc_s, merge_back_state=mb.get("state"), drive_on_count=mb.get("drive_on_count"),
+               encounter_s=round(info["sim_time_s"] - info["trigger_time_s"], 2),
+               end_lateral_m=round(info.get("ego_lateral_m") or 0.0, 2), end_speed_mps=round(info["ego_speed_mps"], 2))
+    print(f"[circuit] hazard {index:2d} lap {row['lap']} at {pos:7.1f} m | {row['walker']:10s} ttc {cfg.trigger_ttc_s:.2f} | "
+          f"{d['outcome_v4']:28s} clr {d['min_clearance_m'] if d['min_clearance_m'] is None else round(d['min_clearance_m'], 2)} "
+          f"| merge-back {mb.get('state')} | {row['encounter_s']:.1f} s")
+    return {c: row.get(c) for c in HAZARD_COLUMNS}
+
+
+def next_spawnable_hazard(env, plan, hz, skipped):
+    """Set up plan[hz], or the first later hazard whose pedestrian spawns; returns
+    its index (len(plan) if none). A blocked spawn spot is skipped and logged in
+    `skipped`, not counted as an encounter; the seeded plan is otherwise kept,
+    so every controller faces the same remaining hazards."""
+    while hz < len(plan):
+        try:
+            env.next_encounter(plan[hz][1])
+            return hz
+        except RuntimeError as e:
+            if "Failed to spawn walker" not in str(e):
+                raise
+            skipped.append({"hazard": hz, "route_m": plan[hz][0], "run_id": plan[hz][1].run_id})
+            print(f"[circuit] hazard {hz} at {plan[hz][0]:.0f} m SKIPPED: pedestrian could not spawn", flush=True)
+            hz += 1
+    return hz
+
+
+def critic_values(policy, obs, action):
+    """[Q1, Q2]: the twin critics' estimate of the return of taking `action`
+    from `obs` (SAC trains on min(Q1, Q2)); blank for a scripted controller."""
+    if not hasattr(policy, "critic"):
+        return ["", ""]
+    import torch
+
+    obs_t, _ = policy.policy.obs_to_tensor(obs)
+    act_t = torch.as_tensor(policy.policy.scale_action(np.asarray(action))[None], device=policy.device)  # critics see [-1, 1]
+    with torch.no_grad():
+        return [float(q.item()) for q in policy.critic(obs_t, act_t)]
+
+
+def _write_csv(path, columns, rows):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(columns)
+        w.writerows(rows)
+
+
+def _write_rows(out_dir, rows):
+    with open(os.path.join(out_dir, "hazards.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=HAZARD_COLUMNS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _print_summary(rows, end_reason, n_planned):
+    safe = sum(1 for r in rows if r["ego_safe_success"])
+    back = sum(1 for r in rows if r["merge_back_state"] == "returned")
+    print(f"\n[circuit] SUMMARY: {len(rows)}/{n_planned} hazards encountered ({end_reason}) | safe (v4) {safe} | "
+          f"back in lane {back} | contacts by the car {sum(1 for r in rows if r['contact_cause'] == 'ego')}")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -9,10 +9,13 @@ Goal:
 import carla
 # pyright: reportMissingImports=false
 
+MAP_LOAD_TIMEOUT_S = 60.0
+
 def connect_and_load_world(*, host, port, timeout_s, target_map):
     client = carla.Client(host, port)
-    client.set_timeout(timeout_s)
+    client.set_timeout(max(timeout_s, MAP_LOAD_TIMEOUT_S))  # big maps (Town10HD) take >10 s to load
     world = client.load_world(target_map)
+    client.set_timeout(timeout_s)
     print(f"[carla] Connected | map={world.get_map().name}")
     return client, world
 

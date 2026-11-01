@@ -6,7 +6,7 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from merge_back import MergeBack, hazard_behind_ego, path_clear_of_hazard  # noqa: E402
+from merge_back import MergeBack, hazard_ahead_of_ego, hazard_behind_ego, path_clear_of_hazard  # noqa: E402
 from pedestrian_contact import EGO_HALF_LENGTH_M  # noqa: E402
 
 DT = 0.02
@@ -99,6 +99,33 @@ class PathClearTests(unittest.TestCase):
         self.assertTrue(path_clear_of_hazard(hazard_lateral_speed_mps=-1.8, **kw))
 
 
+class BesideTheCarTests(unittest.TestCase):
+    """2026-10-26: a person standing right beside the stopped car no longer blocks
+    every path. Car body half-width 1.08 m + pedestrian 0.3 m: centers 1.88 m apart
+    = a 0.5 m gap."""
+
+    def test_holding_the_lane_past_a_person_beside_the_car_needs_only_no_contact(self):
+        kw = dict(path_lo_m=-3.9, path_hi_m=-3.9, hazard_lateral_m=-5.78, hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3)
+        self.assertTrue(path_clear_of_hazard(hazard_ahead=False, **kw))   # beside or behind: driving on keeps the gap
+        self.assertFalse(path_clear_of_hazard(hazard_ahead=True, **kw))   # ahead: the full 1 m margin still applies
+
+    def test_moving_away_from_a_person_needs_only_no_contact(self):
+        kw = dict(path_lo_m=-3.9, hazard_lateral_m=-5.78, hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3)
+        self.assertTrue(path_clear_of_hazard(path_hi_m=0.0, **kw))       # back to the lane, away from them
+        self.assertFalse(path_clear_of_hazard(path_hi_m=-7.0, **kw))     # toward them
+
+    def test_too_close_or_walking_into_the_car_still_blocks(self):
+        self.assertFalse(path_clear_of_hazard(path_lo_m=-3.9, path_hi_m=0.0, hazard_lateral_m=-5.4,  # 0.12 m gap
+                                              hazard_lateral_speed_mps=0.0, hazard_radius_m=0.3))
+        self.assertFalse(path_clear_of_hazard(path_lo_m=-3.9, path_hi_m=-3.9, hazard_lateral_m=-5.78, hazard_ahead=False,
+                                              hazard_lateral_speed_mps=1.0, hazard_radius_m=0.3))  # walking toward the car
+
+    def test_ahead_means_past_the_front_bumper_plus_the_hazard(self):
+        kw = dict(ego_x_m=0.0, ego_y_m=0.0, ego_yaw_deg=0.0, hazard_y_m=3.0, hazard_half_length_m=0.3)
+        self.assertFalse(hazard_ahead_of_ego(hazard_x_m=1.0, **kw))   # beside the car
+        self.assertTrue(hazard_ahead_of_ego(hazard_x_m=4.0, **kw))
+
+
 class DriveOnTests(unittest.TestCase):
     """A car that STOPPED beside the hazard drives on along its swerve path once
     that path is clear, then returns once the hazard is behind it."""
@@ -111,7 +138,7 @@ class DriveOnTests(unittest.TestCase):
     def test_stopped_and_clear_drives_on_holding_the_swerve_then_returns(self):
         mb = MergeBack(clear_confirm_s=0.5)
         trace = self.run_mb(mb, stopped_fn=lambda t: 2.0 <= t < 3.0, clear_fn=lambda t: t >= 2.0,
-                            behind_fn=lambda t: t >= 5.0)
+                            behind_fn=lambda t: t >= 5.0, seconds=14.0)
         at = {round(t, 2): (target, active) for t, target, active in trace}
         self.assertEqual(at[2.0], (7.4, True))             # stopped, clear not yet confirmed
         self.assertEqual(at[2.6], (7.4, False))            # drives on: hazard mode off, swerve path held
@@ -119,6 +146,14 @@ class DriveOnTests(unittest.TestCase):
         self.assertAlmostEqual(mb.drive_on_start_s, 2.5)
         self.assertAlmostEqual(mb.return_start_s, 5.5)     # behind for 0.5 s
         self.assertEqual(trace[-1][1:], (0.0, False))
+
+    def test_drive_on_holds_where_the_car_stopped_not_the_policys_latest_aim(self):
+        # per_tick re-aims to the lane once stopped; driving on must follow the swerve the car is on.
+        mb = MergeBack(clear_confirm_s=0.5)
+        trace = [mb.update(k * DT, hazard_behind=False, path_clear=True, ego_stopped=True, target_m=-0.29,
+                           ego_lateral_m=-4.77) for k in range(60)]
+        self.assertEqual(mb.state, "driving_on")
+        self.assertEqual(trace[-1], (-4.77, False))
 
     def test_a_moving_car_keeps_policy_control_even_with_a_clear_path(self):
         mb = MergeBack()

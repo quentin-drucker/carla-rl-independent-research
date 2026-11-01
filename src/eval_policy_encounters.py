@@ -151,7 +151,8 @@ def _parse_args(argv=None):
     return args
 
 
-SCRIPTED_AIMS = {"clear_predicted": "clear_predicted_u", "pass_behind": "pass_behind_u"}  # name -> rl_steering function
+SCRIPTED_AIMS = {"clear_predicted": "clear_predicted_u", "pass_behind": "pass_behind_u",  # name -> rl_steering function
+                 "wider_side": "wider_side_u"}
 
 
 class _FixedAction:
@@ -172,6 +173,24 @@ class _ScriptedAim:
 
     def predict(self, obs, deterministic=True):
         return np.array([self.brake, self.rule(obs)], dtype=np.float32), None
+
+
+class _BrakeFirst:
+    """Wraps a controller: full brake and stay in the lane while braking alone stops in time
+    (rl_steering.brake_alone_stops), the wrapped controller otherwise. Attributes (critic, policy, ...) are
+    the wrapped one's, so the circuit's critic recording scores the action actually taken."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def predict(self, obs, deterministic=True):
+        from rl_steering import brake_alone_stops
+        if brake_alone_stops(np.asarray(obs).ravel()):
+            return np.array([1.0, 0.0], dtype=np.float32), None
+        return self.inner.predict(obs, deterministic=deterministic)
 
 
 def _build_configs(args):

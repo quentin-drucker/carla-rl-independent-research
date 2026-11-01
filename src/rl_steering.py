@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from passage import DEFAULT_SCAN_MAX_M, DEFAULT_SIDE_MARGIN_M, Obstacle, Passage, passage_coordinate_to_offset_m
-from pedestrian_contact import EGO_HALF_WIDTH_M
+from pedestrian_contact import DEFAULT_PEDESTRIAN_RADIUS_M, EGO_HALF_LENGTH_M, EGO_HALF_WIDTH_M
 from rl_reward_design import STATE_DIM, W_JERK, W_SMOOTH_ACTION
 
 STEER_COMMIT_PER_TICK = "per_tick"
@@ -236,6 +236,34 @@ def pass_behind_u(observation: Sequence[float]) -> float:
     if speed > PASS_BEHIND_SPEED_MPS:
         return 0.0
     return 1.0 if abs(predicted_m) < reach_m else 0.0
+
+
+def wider_side_u(observation: Sequence[float]) -> float:
+    """Week 8 rule baseline (run with full brake, per_tick): swerve fully to
+    the side where the passage has more room (left on a tie), or stay in the
+    lane if it has no room on either side. Reads only what the policy sees."""
+    left = -observation[STATE_DIM + STEERING_STATE_NAMES.index("passage_left_edge_norm")]
+    right = observation[STATE_DIM + STEERING_STATE_NAMES.index("passage_right_edge_norm")]
+    if left <= 0.0 and right <= 0.0:
+        return 0.0
+    return -1.0 if left >= right else 1.0
+
+
+FULL_BRAKE_DECEL_MPS2 = 7.2  # CARLA full brake, spring calibration (6.96-7.56)
+FULL_BRAKE_DELAY_S = 0.06    # fitted on 21 clean brake-only circuit stops, 12.8-15.9 m/s (rms 1.25 m)
+BRAKE_FIRST_MARGIN_M = 0.5
+
+
+def brake_alone_stops(observation: Sequence[float]) -> bool:
+    """Week 8 brake-first rule (Quentin, 2026-11-01: brake when there is room to stop, swerve only when
+    braking cannot work): True while full braking alone stops the car's front before the pedestrian's line,
+    from the speed and line distance the policy sees. ponytail: one deceleration for every speed and road;
+    measured at 13-16 m/s on dry roads only."""
+    speed = observation[0] * 26.82  # STATE_SPEC ego_speed_norm
+    line = observation[STATE_DIM + STEERING_STATE_NAMES.index("distance_to_pedestrian_line_norm")] * DISTANCE_SCALE_M
+    need = (speed * FULL_BRAKE_DELAY_S + speed * speed / (2.0 * FULL_BRAKE_DECEL_MPS2)
+            + EGO_HALF_LENGTH_M + DEFAULT_PEDESTRIAN_RADIUS_M + BRAKE_FIRST_MARGIN_M)
+    return line >= need
 
 
 # =============================================================================

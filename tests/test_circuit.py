@@ -7,8 +7,8 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from circuit import (curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard,  # noqa: E402
-                     straight_flags, training_spots)
+from circuit import (curve_speed_limit_mps, encounter_done, lane_change_offsets, place_hazards,  # noqa: E402
+                     sample_hazard, straight_flags, training_spots, without_backtracking)
 
 
 class StraightFlagsTests(unittest.TestCase):
@@ -25,6 +25,61 @@ class StraightFlagsTests(unittest.TestCase):
     def test_yaw_wraps_around_180(self):
         ok = straight_flags([179.0, -179.0, 179.0, -179.0, 179.0], [False] * 5, window=1, max_turn_deg=10.0)
         self.assertTrue(all(ok))
+
+
+class LaneChangeOffsetsTests(unittest.TestCase):
+    """The route planner's lane changes become smooth ramps (Quentin's lap watching, 2026-11-01)."""
+
+    @staticmethod
+    def _road(jump_at=50, step_m=3.5, n=100, junction_at=None):  # heading +x, 2 m spacing; CARLA +y = right
+        xy = [(2.0 * k, step_m if k > jump_at else 0.0) for k in range(n)]
+        junction = [junction_at is not None and abs(k - junction_at) <= 1 for k in range(n)]
+        return xy, [0.0] * n, junction
+
+    def test_jump_becomes_a_smooth_ramp_and_far_points_stay_put(self):
+        xy, yaws, junction = self._road()
+        off = lane_change_offsets(xy, yaws, junction, ramp_m=60.0)
+        path = [y + o for (_, y), o in zip(xy, off)]
+        self.assertTrue(all(abs(o) < 1e-9 for o in off[:35] + off[67:]))      # > 30 m from the jump
+        self.assertAlmostEqual(path[50], 1.75, delta=0.2)                     # halfway across at the jump
+        self.assertTrue(all(b >= a - 1e-9 for a, b in zip(path, path[1:])))   # never steps back
+        self.assertLess(max(b - a for a, b in zip(path, path[1:])), 3.5 * 1.5 * 2.0 / 60.0 + 1e-6)  # max slope
+
+    def test_left_jump_and_straight_road_and_junction(self):
+        xy, yaws, junction = self._road(step_m=-3.5)
+        self.assertAlmostEqual(min(lane_change_offsets(xy, yaws, junction)), -1.75, delta=0.2)
+        self.assertEqual(set(lane_change_offsets(*self._road(step_m=0.0))), {0.0})
+        self.assertEqual(set(lane_change_offsets(*self._road(junction_at=50))), {0.0})  # turns in junctions are not lane changes
+
+    def test_ramp_stops_at_a_hazard_zone_and_the_zone_is_untouched(self):
+        xy, yaws, junction = self._road()
+        fixed = [55 <= k <= 70 for k in range(100)]  # a hazard zone starting 10 m after the jump
+        off = lane_change_offsets(xy, yaws, junction, fixed=fixed, ramp_m=60.0)
+        self.assertTrue(all(off[k] == 0.0 for k in range(55, 71)))
+        path = [y + o for (_, y), o in zip(xy, off)]
+        self.assertAlmostEqual(path[54], 3.5, delta=0.05)               # already across before the zone
+        self.assertTrue(all(abs(o) < 1e-9 for o in off[:25]))           # slid back: still a 60 m ramp
+        self.assertGreater(abs(off[30]), 0.01)
+        self.assertTrue(all(b >= a - 1e-9 for a, b in zip(path, path[1:])))
+
+    def test_lane_change_right_after_a_junction_starts_after_the_junction(self):
+        xy, yaws, junction = self._road(junction_at=47)  # junction ends 2 points (4 m) before the jump
+        off = lane_change_offsets(xy, yaws, junction, ramp_m=60.0)
+        self.assertTrue(all(off[k] == 0.0 for k in range(46, 49)))      # nothing inside the junction
+        path = [y + o for (_, y), o in zip(xy, off)]
+        self.assertAlmostEqual(path[49], 0.0, delta=0.3)                # leaves the junction in the old lane
+        self.assertAlmostEqual(path[78], 3.5, delta=0.05)               # across ~60 m later
+        self.assertTrue(all(b >= a - 1e-9 for a, b in zip(path, path[1:])))
+
+
+class WithoutBacktrackingTests(unittest.TestCase):
+    def test_points_behind_or_repeated_are_interpolated_and_the_rest_unchanged(self):
+        # Town05 route 1439-1451 m in miniature: a lane-change point 2.2 m BEHIND, repeated joint points
+        xy = [(0.0, 0.0), (2.0, 0.0), (4.3, 0.0), (2.1, 0.1), (2.1, 0.1), (4.3, 0.1), (6.3, 0.1), (8.3, 0.1)]
+        out = without_backtracking(xy, [0.0] * len(xy))
+        self.assertEqual(out[:3] + out[6:], xy[:3] + xy[6:])
+        self.assertTrue(all(b[0] > a[0] for a, b in zip(out, out[1:])))   # always moving forward
+        self.assertAlmostEqual(out[4][0], 4.3 + 2.0 * 2 / 4, places=6)
 
 
 class PlaceHazardsTests(unittest.TestCase):

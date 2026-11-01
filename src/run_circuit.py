@@ -36,7 +36,8 @@ import sys
 
 import numpy as np
 
-from circuit import curve_speed_limit_mps, encounter_done, place_hazards, sample_hazard, straight_flags
+from circuit import (curve_speed_limit_mps, encounter_done, lane_change_offsets, place_hazards, sample_hazard,
+                     straight_flags, without_backtracking)
 from encounter_metrics import compute_encounter_metrics
 from eval_policy_encounters import PROTOCOL, SCRIPTED_AIMS, _FixedAction, _git, _ScriptedAim, _versions
 from physics_backend import BACKEND_DEFAULT, create_run_dir
@@ -46,6 +47,7 @@ from rl_steering import STEER_COMMIT_MODES, STEERING_STATE_NAMES
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNS_ROOT = os.path.join(SRC_DIR, "runs", "circuit")
+RAMP_CLEAR_BEFORE_M, RAMP_CLEAR_AFTER_M = 30.0, 10.0  # no smoothed lane change here: onset is <= 23 m before a hazard
 STUCK_RECOVER_S = 10.0  # stopped this long outside an encounter: put the car back on its route (counted)
 HAZARD_COLUMNS = ["hazard", "lap", "route_m", "walker", "ttc_s", "onset_time_s", "speed_at_onset_mps", "outcome",
                   "outcome_v4", "contact_cause", "ego_safe_success", "safe_success", "contact_speed_mps",
@@ -95,29 +97,47 @@ def loop_route(world, laps):
     return stops[0], lap * laps
 
 
-def route_geometry(route_wps):
-    """(distance along the route, heading in deg, straight flag) per waypoint."""
-    s = [0.0]
+def route_geometry(route_wps, xy=None):
+    """(distance along the route, heading in deg, straight flag) per waypoint. xy: positions to use
+    instead of the waypoints' own (the smoothed route)."""
+    s = [0.0]  # always along the planner's waypoints, in 3D (hills): hazard positions are measured on it
     for a, b in zip(route_wps, route_wps[1:]):
         s.append(s[-1] + a.transform.location.distance(b.transform.location))
+    xy = xy or [(wp.transform.location.x, wp.transform.location.y) for wp in route_wps]
     # Headings from the waypoints' POSITIONS: the planner's lane changes jump ~7 m sideways within ~10 m while
     # each waypoint's own yaw still reads "straight" (the first city lap crashed into one at full speed).
     yaws = []
-    for a, b in zip(route_wps, route_wps[1:]):
-        dx, dy = b.transform.location.x - a.transform.location.x, b.transform.location.y - a.transform.location.y
+    for a, b in zip(xy, xy[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
         yaws.append(math.degrees(math.atan2(dy, dx)) if dx * dx + dy * dy > 1e-4 else (yaws[-1] if yaws else 0.0))
     yaws.append(yaws[-1])
     return s, yaws, straight_flags(yaws, [wp.is_junction for wp in route_wps])
 
 
+def smoothed_route(route_wps, hazard_route_m=()):
+    """[(x, y, z)] the lane follower steers along: the route with the planner's lane changes spread over a
+    smooth ramp (circuit.lane_change_offsets), kept off each hazard's zone (from RAMP_CLEAR_BEFORE_M before
+    it to RAMP_CLEAR_AFTER_M after) so approach, onset and passing happen on the unchanged lane."""
+    s, _, _ = route_geometry(route_wps)
+    xy = [(wp.transform.location.x, wp.transform.location.y) for wp in route_wps]
+    yaws = [wp.transform.rotation.yaw for wp in route_wps]
+    fixed = [any(h - RAMP_CLEAR_BEFORE_M <= sk <= h + RAMP_CLEAR_AFTER_M for h in hazard_route_m) for sk in s]
+    off = lane_change_offsets(xy, yaws, [wp.is_junction for wp in route_wps], fixed=fixed)
+    moved = without_backtracking([(x - o * math.sin(math.radians(y)), yy + o * math.cos(math.radians(y)))
+                                  for (x, yy), y, o in zip(xy, yaws, off)], yaws)
+    return [(x, y, wp.transform.location.z) for (x, y), wp in zip(moved, route_wps)]
+
+
 def plan_hazards(route_wps, args):
-    """([(route_m, ScenarioConfig)] for the whole run, route distances, route yaws)."""
+    """([(route_m, ScenarioConfig)] for the whole run, route distances, smoothed-route yaws, smoothed points)."""
     from steer_brake_baseline import baseline_scenario_config
 
-    s, yaws, ok = route_geometry(route_wps)
+    s, _, ok = route_geometry(route_wps)  # hazards from the raw route: the same spots as before smoothing
     rng = random.Random(args.seed)
     positions = place_hazards(s, ok, n=args.laps * args.hazards_per_lap, min_gap_m=args.min_gap_m, start_m=200.0,
                               end_margin_m=150.0, rng=rng)
+    pts = smoothed_route(route_wps, positions)
+    _, yaws, _ = route_geometry(route_wps, [p[:2] for p in pts])
     plan = []
     for i, pos in enumerate(positions):
         h = sample_hazard(rng)
@@ -125,7 +145,7 @@ def plan_hazards(route_wps, args):
                                        run_id=f"hz{i:02d}_{h['walker']}_ttc{h['ttc_s']:.2f}")
         cfg.encounter_distance_m, cfg.sim_seconds = pos, 1e6  # the episode is the whole circuit
         plan.append((pos, cfg))
-    return plan, s, yaws
+    return plan, s, yaws, pts
 
 
 def main(argv=None):
@@ -141,7 +161,7 @@ def main(argv=None):
                       map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port)
     route = loop_route(env._world, args.laps)
     env._route_builder = lambda world: route
-    plan, route_s, route_yaws = plan_hazards(route[1], args)
+    plan, route_s, route_yaws, env._route_points_xyz = plan_hazards(route[1], args)
     route_len = route_s[-1]
     if not plan:
         raise SystemExit("no straight, non-junction stretch long enough for a hazard on this route")
@@ -168,7 +188,7 @@ def main(argv=None):
                    "git_dirty": bool(dirty), "git_tracked_changes": dirty, "argv": sys.argv, "args": vars(args),
                    "model_path": model_path, "model_sha256": file_sha256(model_path) if args.model else None,
                    "map": args.map, "route_m": route_len, "lap_m": lap_len, "physics_backend": BACKEND_DEFAULT,
-                   "protocol": PROTOCOL.__dict__, "merge_back": True, "same_direction_passage": True,
+                   "protocol": PROTOCOL.__dict__, "merge_back": True, "lane_changes_smoothed": True, "same_direction_passage": True,
                    "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
                    "versions": _versions()}, f, indent=2)
     print(f"[circuit] {args.map}: {args.laps} lap(s) of {lap_len:.0f} m, {len(plan)} hazards | policy {os.path.basename(model_path)}")

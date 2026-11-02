@@ -2714,8 +2714,9 @@ the same spots every lap: the route planner's lane changes (1.5-7 m sideways wit
 waypoint 2-4 m behind the previous one), not the policy (its action is discarded before onset and its inputs
 hold no position); 29 of 30 such stretches on Town10HD sit at a lane-change jump. **Fixed in `1872b3f`:**
 each jump is a smoothstep ramp of up to 60 m kept out of junctions and hazard zones, so every hazard keeps
-its exact spot; mid-road lane changes went from 12-50 deg off the lane to ~5 deg (a full re-score is
-running). A 8-13 deg wobble after some junction exits is unchanged by smoothing: the lane follower coming out
+its exact spot; mid-road lane changes went from 12-50 deg off the lane to ~5 deg. Re-scored on all four
+towns (2026-11-02): **safety scores barely moved** (six policies 303 -> 311 safe of 738; scripted and rule
+within noise) — the fix removes the phantom swerves without changing the results. A 8-13 deg wobble after some junction exits is unchanged by smoothing: the lane follower coming out
 of turns. (2) One seed swerving right and passing, another left into the pedestrian: the side habit above.
 (3) The car holding speed toward a visible standing pedestrian and swerving at the last moment: the
 oracle-onset protocol (since 2026-10-02) keeps both policy and LiDAR braking off until onset at TTC 0.6-1.5 s,
@@ -2723,6 +2724,25 @@ while a "stationary" pedestrian stands in the lane the whole approach — a prot
 there is room to stop" is right: the under-braking above. Proposed order: brake-first rule (stopping
 feasibility; no retraining), side-balanced retrain, stationary pedestrian appearing at onset; reacting before
 onset is a bigger protocol change for Quentin / Izmirli to decide.
+
+**Brake-first rule (2026-11-02, `4348be8` + latch `1495714`).** Full brake and stay in the lane whenever
+braking alone stops in time (CARLA full brake 7.2 m/s², 0.06 s delay, 0.5 m margin); the policy otherwise.
+Once it fires after onset it keeps braking until the encounter ends: re-checked every tick it handed back to
+the policy ~0.1 s into the stop (the car barely slows while the brakes take hold, the margin ran out), and
+that caused all 23 of its failures above 1.35 s onset TTC. Same smoothed routes and hazards, six policies:
+
+| | Town05 /192 | Town01 /186 | Town02 /216 | Town10HD /144 | all /738 |
+|---|---|---|---|---|---|
+| policy | 134 | 58 | 60 | 59 | 311 (42%) |
+| + brake-first, per tick | 136 | 62 | 65 | 75 | 338 (46%) |
+| + brake-first, latched | 143 | 62 | 73 | 80 | **358 (49%)** |
+
+By onset TTC (all towns): **1.35-1.5 s: 66% -> 99% safe** (143/144; brake-only 100%, rule 92%);
+1.2-1.35 s: 49% -> 51% (the rule rarely fires there: braking alone does not quite stop by its physics, yet
+brake-only is 75% safe and the rule 90%, plausibly because edge walkers move out of the path); below 1.2 s
+unchanged (39% / 25%). Every seed but one improves (t05ctl_s1 60 -> 59, noise). The best seed with it (mixed_s3, 71 of 123) equals the steering rule (71); the
+side-habit seeds stay well below it. Brake-first answers observation (4) where braking can work; the short-warning
+cases are where the side-balanced retrain has to help.
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 

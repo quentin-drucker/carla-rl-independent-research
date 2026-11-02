@@ -178,17 +178,24 @@ class _ScriptedAim:
 class _BrakeFirst:
     """Wraps a controller: full brake and stay in the lane while braking alone stops in time
     (rl_steering.brake_alone_stops), the wrapped controller otherwise. Attributes (critic, policy, ...) are
-    the wrapped one's, so the circuit's critic recording scores the action actually taken."""
+    the wrapped one's, so the circuit's critic recording scores the action actually taken.
+    armed (the caller sets it True from onset to the end of the encounter): once it fires while armed it
+    keeps braking. Re-checked every tick, it handed back to the policy ~0.1 s in: the car barely slows while
+    the brakes take hold, the 0.5 m margin ran out, and the policy steered into the pedestrian (all 23
+    failures above 1.35 s onset TTC, Nov 1 re-score; brake-only stopped every one)."""
 
     def __init__(self, inner):
         self.inner = inner
+        self.armed = self.latched = False
 
     def __getattr__(self, name):
         return getattr(self.inner, name)
 
     def predict(self, obs, deterministic=True):
         from rl_steering import brake_alone_stops
-        if brake_alone_stops(np.asarray(obs).ravel()):
+        fire = (self.armed and self.latched) or brake_alone_stops(np.asarray(obs).ravel())
+        self.latched = self.armed and fire
+        if fire:
             return np.array([1.0, 0.0], dtype=np.float32), None
         return self.inner.predict(obs, deterministic=deterministic)
 

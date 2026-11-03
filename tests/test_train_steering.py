@@ -72,6 +72,25 @@ class RotateMapsTests(unittest.TestCase):
         self.assertEqual(a.circuit_map, ["Town05_Opt", "Town01_Opt"])
 
 
+class LeftSameDirectionTests(unittest.TestCase):
+    def test_only_a_driving_lane_running_the_same_way(self):
+        import carla
+        from train_steering import left_same_direction
+
+        class Wp:
+            def __init__(self, lane_id, lane_type=carla.LaneType.Driving, left=None):
+                self.lane_id, self.lane_type, self._left = lane_id, lane_type, left
+
+            def get_left_lane(self):
+                return self._left
+
+        same = Wp(-2)
+        self.assertIs(left_same_direction(Wp(-3, left=same)), same)
+        self.assertIsNone(left_same_direction(Wp(-1, left=Wp(1))))  # oncoming
+        self.assertIsNone(left_same_direction(Wp(-3, left=Wp(-2, carla.LaneType.Parking))))
+        self.assertIsNone(left_same_direction(Wp(-1)))
+
+
 class WalkerSpawnRetryTests(unittest.TestCase):
     """reset() redraws a random training spot whose walker cannot spawn (a Town01 spot stopped two runs)."""
 

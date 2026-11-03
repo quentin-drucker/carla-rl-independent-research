@@ -118,7 +118,9 @@ def check_corridor_drivability(carla_map, corridor_points_world, lane_type=carla
 # waypoint at all with project_to_road=False (found 2026-10-02 by test26: a
 # footprint corner crossing from lane -2 into lane -3 of road 39 was flagged
 # non_drivable for one tick although every neighbouring point was Driving).
-SEAM_TOLERANCE_M = 0.05
+# 0.1 since 2026-11-02: Town05 road 37 has a ~6 cm gap between lanes -2 and -3 (lateral 1.76-1.80 m); with 0.05
+# the passage scan stopped there (missing the lane beyond) and a car crossing it was scored off-road.
+SEAM_TOLERANCE_M = 0.1
 
 
 def classify_point_drivability_seam_tolerant(

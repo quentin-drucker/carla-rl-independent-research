@@ -2744,6 +2744,31 @@ unchanged (39% / 25%). Every seed but one improves (t05ctl_s1 60 -> 59, noise). 
 side-habit seeds stay well below it. Brake-first answers observation (4) where braking can work; the short-warning
 cases are where the side-balanced retrain has to help.
 
+**Lane-seam bug (fixed 2026-11-02, `ab83737`).** Town05 road 37 has a ~6 cm gap between lanes -2 and -3 where
+CARLA returns no waypoint; the 0.05 m seam tolerance did not bridge it, so the passage scan stopped there and a
+car crossing it was scored off-road. Tolerance is now 0.1 m. Re-scored with the fix (same plans, same models):
+**Town05 off-road failures were almost all this bug** (mixed_s1-3: 19 -> 1; rule: 9 -> 0; collisions
+unchanged), so Town05 safe counts above are understated for every controller (mixed 67 -> 85 of 96, rule
+23 -> 32 of 32). Town02 and Town10HD are unchanged. The brake-first and control-seed Town05 numbers were not re-run.
+
+**Side-balanced retrain (2026-11-03, `ab83737`, `--left-lane-share 0.5`).** Mixed settings, but half of the
+Town05 training episodes approach the spot in the same-direction left lane, so the room is on the right as often
+as on the left. 3 seeds, 150k steps each; scored with the seam fix, no brake-first, against the mixed seeds
+re-scored the same way:
+
+| safe | Town05 /32 | Town02 /36 (held out) | Town10HD /24 (held out) | 3 towns /92 |
+|---|---|---|---|---|
+| side-balanced s1 / s2 / s3 | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 (70%) |
+| mixed s1 / s2 / s3 | 26 / 30 / 29 | 14 / 6 / 14 | 8 / 3 / 18 | 48 / 39 / 61 (54%) |
+| rule | 32 | 14 | 20 | 66 (72%) |
+
+**Town10HD (room on the right): 40% -> 82% safe, and the seed spread closes (75-88% vs 12-75%).** The old
+bad seeds mostly did not swerve at all there (13 and 11 of 24 encounters stayed within 0.5 m of the lane); every
+side-balanced seed swerved in nearly every encounter, to both sides. **Two side-balanced seeds match the rule
+(67 and 66 vs 66 of 92) without brake-first; one (s2) is lower on Town05.** Town02 rises a little (31% -> 41%),
+still the hardest town for everyone. Caveat: the new seeds differ from the old in two ways (left-lane episodes
+and the seam fix during training), so the gain cannot be split between them without a control retrain.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

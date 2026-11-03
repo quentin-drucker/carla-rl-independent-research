@@ -91,6 +91,9 @@ def _parse_args(argv=None):
     p.add_argument("--u-min", type=float, default=0.0, help="lowest steering u: 0 = right only (default), -1 = both sides")
     p.add_argument("--circuit-map", nargs="+", help="train at random straight spots of these towns' circuit loops "
                    "(run_circuit.py), rotating towns every EPISODES_PER_MAP episodes; default: the Town04 test spot")
+    p.add_argument("--left-lane-share", type=float, default=0.0,
+                   help="with --circuit-map: share of episodes approaching in the same-direction lane left of the "
+                   "route's, so the room is on the right (side-balanced training)")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     p.add_argument("--relaunch-carla", action="store_true",
@@ -169,18 +172,21 @@ def sample_scenario(rng, *, walkers=("stationary",), ttc_range=TTC_RANGE_S, walk
     return cfg
 
 
-def circuit_spot_builder(rng, approach_m=CIRCUIT_APPROACH_M):
+def circuit_spot_builder(rng, approach_m=CIRCUIT_APPROACH_M, left_lane_share=0.0):
     """CarlaAEBEnv route_builder for multi-location training: each episode spawns
     the car approach_m before a random training spot of the town's circuit loop
     (circuit.training_spots); the episode starts at cruise speed and its
     encounter distance (CIRCUIT_APPROACH_M) lands on that spot. No spot is held
     out: the circuit planner uses the same few straights, so evaluate held-out
-    generalization on another town's circuit."""
+    generalization on another town's circuit.
+    left_lane_share: that share of episodes approaches the spot in the same-direction lane to the LEFT of the
+    route's (where every waypoint from the start to 40 m past the spot has one), so the room is on the right.
+    The loop's route keeps to the rightmost lane, so training almost never had room on the right and half the
+    seeds learned "swerve left" instead of reading the passage edges (2026-11-01, Town10HD)."""
     cache = {}
 
     def build(world):
         import bisect
-        import carla
         from circuit import training_spots
         from run_circuit import loop_route, route_geometry
 
@@ -190,14 +196,32 @@ def circuit_spot_builder(rng, approach_m=CIRCUIT_APPROACH_M):
             cache.update(lap=lap, s=s, spots=training_spots(s, ok, approach_m=approach_m))
             if not cache["spots"]:
                 raise RuntimeError("no training spot on this circuit")
+            cache["left_spots"] = [i for i in cache["spots"] if all(
+                left_same_direction(lap[k]) for k in range(bisect.bisect_left(s, s[i] - approach_m),
+                                                           bisect.bisect_right(s, s[i] + 40.0)))]
         lap, s = cache["lap"], cache["s"]
-        i = rng.choice(cache["spots"])
+        left = left_lane_share > 0.0 and bool(cache["left_spots"]) and rng.random() < left_lane_share
+        i = rng.choice(cache["left_spots"] if left else cache["spots"])
         i0 = bisect.bisect_left(s, s[i] - approach_m)
-        wp = lap[i0].transform
-        spawn = carla.Transform(carla.Location(x=wp.location.x, y=wp.location.y, z=wp.location.z + 0.5), wp.rotation)
-        return spawn, lap[i0:] + lap  # continue around the loop after the encounter
+        if left:  # the rest of the loop too, where it has such a lane (merge-back returns to the route)
+            return _spawn(lap[i0]), [left_same_direction(w) or w for w in lap[i0:]] + lap
+        return _spawn(lap[i0]), lap[i0:] + lap  # continue around the loop after the encounter
+
+    def _spawn(waypoint):
+        import carla
+        wp = waypoint.transform
+        return carla.Transform(carla.Location(x=wp.location.x, y=wp.location.y, z=wp.location.z + 0.5), wp.rotation)
 
     return build
+
+
+def left_same_direction(waypoint):
+    """The driving lane immediately left of this waypoint's, if it runs the same direction; else None."""
+    import carla
+    left = waypoint.get_left_lane()
+    if left is None or left.lane_type != carla.LaneType.Driving or left.lane_id * waypoint.lane_id <= 0:
+        return None
+    return left
 
 
 def _make_callbacks(run_dir, log, start_time, checkpoint_every):
@@ -299,7 +323,7 @@ def main(argv=None):
             "scenario": "steer_brake_baseline.baseline_scenario_config (Town04)", "walkers": args.walker,
             "walker_speed_mps": args.walker_speed, "walker_change_s": args.walker_change_s,
             "lock_delay_s": args.lock_delay_s, "road_right_limit_m": args.road_right_limit_m,
-            "merge_back": args.merge_back, "circuit_map": args.circuit_map,
+            "merge_back": args.merge_back, "circuit_map": args.circuit_map, "left_lane_share": args.left_lane_share,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -327,7 +351,8 @@ def main(argv=None):
         maps = [maps] if isinstance(maps, str) else maps  # Week 8 manifests hold one town as a string
         if maps:
             spot_rng = random.Random(seed * 7919 + timesteps_done)
-            builders = {m: circuit_spot_builder(spot_rng) for m in maps}
+            builders = {m: circuit_spot_builder(spot_rng, left_lane_share=manifest.get("left_lane_share", 0.0))
+                        for m in maps}
             circuit = dict(map_name=maps[0], same_direction_passage=True, start_at_cruise_speed=True,
                            route_builder=builders[maps[0]])
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),

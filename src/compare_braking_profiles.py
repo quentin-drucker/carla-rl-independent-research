@@ -6,7 +6,7 @@ figures across braking profiles.
 
 Usage:
     python compare_braking_profiles.py
-    python compare_braking_profiles.py runs/20260401_120000/sweep_summary.csv
+    python compare_braking_profiles.py ../artifacts/runs/20260401_120000/sweep_summary.csv
 
 If no path is given, the script finds the most recent sweep folder automatically.
 """
@@ -191,10 +191,10 @@ def _draw_confidence_ellipse(ax, x_data, y_data, color, n_std=1.5):
 
 def _find_latest_csv() -> str:
     """Return path to sweep_summary.csv in the most recently created sweep folder."""
-    candidates = glob.glob(os.path.join("runs", "*", "sweep_summary.csv"))
+    candidates = glob.glob(os.path.join(RUNS_DIR, "*", "sweep_summary.csv"))
     if not candidates:
         raise FileNotFoundError(
-            "No sweep_summary.csv found under runs/. "
+            "No sweep_summary.csv found under artifacts/runs/. "
             "Run sweep.py first, or pass the CSV path as an argument."
         )
     # sort by folder modification time
@@ -282,7 +282,7 @@ def plot_metric_boxplots(df: pd.DataFrame, out_dir: str):
         if col == "mean_jerk_mps3":
             ax.text(
                 0.98, 0.98,
-                "Box = middle 50% of runs\n"
+                "Box = middle 50% of ..\\artifacts\\runs\\n"
                 "━ white line = median\n"
                 "│ whiskers = full range\n"
                 "• dots = outliers",
@@ -654,3 +654,4 @@ if __name__ == "__main__":
     plot_jerk_by_speed(df, out_dir)
 
     print(f"\n[compare] All figures saved to: {out_dir}")
+from project_paths import RUNS_DIR

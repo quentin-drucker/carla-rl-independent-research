@@ -13,12 +13,12 @@ stretches (circuit.straight_flags) at least --min-gap-m apart. The passage is
 limited to same-direction lanes (no swerving into oncoming traffic).
 
 Usage (CARLA running; from src/ in the venv):
-    python -u -X utf8 run_circuit.py --model runs/steering_train/<run>/final_model.zip --steer-commit per_tick --u-min -1
+    python -u -X utf8 run_circuit.py --model ../artifacts/runs/steering_train/<run>/final_model.zip --steer-commit per_tick --u-min -1
     python -u -X utf8 run_circuit.py --fixed-u 1 --steer-commit per_tick        # scripted: full brake + full right swerve
     python -u -X utf8 run_circuit.py --scripted-aim wider_side --steer-commit per_tick  # rule: full brake, wider side or none
     add --watch to follow the car with the spectator camera (visible CARLA)
 
-Evidence (git-ignored): src/runs/circuit/<timestamp>_circuit_default/
+Evidence (git-ignored): artifacts/runs/circuit/<timestamp>_circuit_default/
     manifest.json, hazards.csv, skipped_hazards.json, stuck_recoveries.json,
     hz_NN/{trace.csv, metrics.json, hazard.json, policy_ticks.csv}
 policy_ticks.csv: per tick, the 14 inputs the action was chosen from, the action [brake, u] and the
@@ -42,12 +42,13 @@ from circuit import (curve_speed_limit_mps, encounter_done, lane_change_offsets,
 from encounter_metrics import compute_encounter_metrics
 from eval_policy_encounters import PROTOCOL, SCRIPTED_AIMS, _BrakeFirst, _FixedAction, _git, _ScriptedAim, _versions
 from physics_backend import BACKEND_DEFAULT, create_run_dir
+from project_paths import RUNS_DIR
 from rl_eval_protocol import file_sha256, resolve_model_path, trace_telemetry
 from rl_reward_design import STATE_SPEC
 from rl_steering import STEER_COMMIT_MODES, STEERING_STATE_NAMES
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-RUNS_ROOT = os.path.join(SRC_DIR, "runs", "circuit")
+RUNS_ROOT = os.path.join(RUNS_DIR, "circuit")
 RAMP_CLEAR_BEFORE_M, RAMP_CLEAR_AFTER_M = 30.0, 10.0  # no smoothed lane change here: onset is <= 23 m before a hazard
 STUCK_RECOVER_S = 10.0  # stopped this long outside an encounter: put the car back on its route (counted)
 HAZARD_COLUMNS = ["hazard", "lap", "route_m", "walker", "ttc_s", "onset_time_s", "speed_at_onset_mps", "outcome",

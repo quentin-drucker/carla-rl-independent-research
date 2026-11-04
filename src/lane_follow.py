@@ -411,7 +411,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
                 # governance decision only (see hazard_governance.py). Not
                 # used for the visualized/telemetry transition corridor
                 # above -- that stays at the normal width for consistency
-                # with prior runs/plots. This one exists purely to catch a
+                # with prior ../artifacts/runs/plots. This one exists purely to catch a
                 # pedestrian sitting just outside the normal corridor's
                 # narrow band, which is exactly what produced the
                 # 2026-09-18 false-clear regression.

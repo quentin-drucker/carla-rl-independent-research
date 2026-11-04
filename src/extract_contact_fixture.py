@@ -1,7 +1,7 @@
 """extract_contact_fixture.py
 
 Builds tests/fixtures/test26_contact_cases.json from the Week 4 test26 evidence
-(git-ignored under src/runs/steer_brake_baseline/), so the RL collision-signal
+(git-ignored under artifacts/runs/steer_brake_baseline/), so the RL collision-signal
 tests can check the geometric contact signal against known outcomes on any
 clone. Offline only; reads traces, never re-simulates.
 
@@ -20,10 +20,11 @@ import os
 import sys
 
 from rl_collision_signal import geometric_clearance_m, is_geometric_contact
+from project_paths import RUNS_DIR
 from trace_schema import read_trace_csv
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-SWEEP_GLOB = os.path.join(SRC_DIR, "runs", "steer_brake_baseline", "*_steer_brake_baseline_default")
+SWEEP_GLOB = os.path.join(RUNS_DIR, "steer_brake_baseline", "*_steer_brake_baseline_default")
 OUT_PATH = os.path.join(SRC_DIR, "..", "tests", "fixtures", "test26_contact_cases.json")
 TICK_FIELDS = ("tick_index", "sim_time_s", "pos_x_m", "pos_y_m", "yaw_deg", "speed_mps",
                "pedestrian_x_m", "pedestrian_y_m")
@@ -85,7 +86,7 @@ def main():
             cases.append(_run_case(os.path.dirname(trace), os.path.basename(sweep)))
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     with open(OUT_PATH, "w") as f:
-        json.dump({"tick_fields": list(TICK_FIELDS), "source": "src/runs/steer_brake_baseline (test26, CARLA default physics)",
+        json.dump({"tick_fields": list(TICK_FIELDS), "source": "artifacts/runs/steer_brake_baseline (test26, CARLA default physics)",
                    "generator": "src/extract_contact_fixture.py", "cases": cases}, f, separators=(",", ":"))
     n_contact = sum(c["recorded_outcome"] == "contact" for c in cases)
     print(f"wrote {len(cases)} cases ({n_contact} recorded contacts) -> {os.path.normpath(OUT_PATH)}")

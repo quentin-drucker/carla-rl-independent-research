@@ -7,7 +7,7 @@ Each panel = one controller. Physics avoidability boundary overlaid on every pan
 
 Reads:
     eval_results.csv                        — SAC 100-episode eval (from eval_sac.py)
-    runs/<latest>/sweep_summary.csv         — profile sweep (from sweep.py)
+    ../artifacts/runs/<latest>/sweep_summary.csv         — profile sweep (from sweep.py)
 
 Outputs:
     speed_ttc_5panel.png
@@ -27,13 +27,14 @@ SCOPE NOTE:
 
 Usage:
     python plot_speed_ttc_comparison.py
-    python plot_speed_ttc_comparison.py eval_results.csv runs/20260405_025448/sweep_summary.csv
+    python plot_speed_ttc_comparison.py eval_results.csv ../artifacts/runs/20260405_025448/sweep_summary.csv
 """
 
 import os
 import sys
 import csv
 import glob
+from project_paths import RUNS_DIR
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -83,11 +84,11 @@ def _physics_label(target_mph, trigger_ttc_s, walker_speed_mps, walker_cross,
 # ---------------------------------------------------------------------------
 
 def _find_latest_sweep_csv():
-    run_root   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+    run_root   = os.fspath(RUNS_DIR)
     candidates = sorted(glob.glob(os.path.join(run_root, "*", "sweep_summary.csv")))
     if not candidates:
         raise FileNotFoundError(
-            "No sweep_summary.csv found under runs/. "
+            "No sweep_summary.csv found under artifacts/runs/. "
             "Pass the path explicitly: python plot_speed_ttc_comparison.py <sac_csv> <sweep_csv>"
         )
     return candidates[-1]
@@ -100,7 +101,7 @@ elif len(sys.argv) == 2:
     _sac_path   = sys.argv[1]
     _sweep_path = _find_latest_sweep_csv()
 else:
-    _sac_path   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_results.csv")
+    _sac_path   = os.path.join(RUNS_DIR, "analysis", "eval_results.csv")
     _sweep_path = _find_latest_sweep_csv()
 
 print(f"SAC data   : {_sac_path}")

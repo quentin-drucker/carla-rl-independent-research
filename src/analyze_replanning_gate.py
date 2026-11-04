@@ -20,7 +20,7 @@ walking into an already-stopped car is not an ego hit) and v3 (safe_success,
 every contact counts).
 
 Usage (from src/):
-    python -X utf8 analyze_replanning_gate.py runs/rl_encounter_eval/<dir> [...] [--out report.md]
+    python -X utf8 analyze_replanning_gate.py ../artifacts/runs/rl_encounter_eval/<dir> [...] [--out report.md]
 """
 
 import argparse

@@ -170,7 +170,7 @@ def main(argv=None):
     p.add_argument("--out", required=True, help="directory for the comparison files")
     p.add_argument("--alt-radius", type=float, default=0.188)
     p.add_argument("--archived-sac-csv",
-                   default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "20260417_202355",
+                   default=os.path.join(RUNS_DIR, "20260417_202355",
                                         "sac_on_sweep_results.csv"))
     args = p.parse_args(argv)
 
@@ -195,3 +195,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+from project_paths import RUNS_DIR

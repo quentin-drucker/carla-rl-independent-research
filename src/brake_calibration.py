@@ -40,6 +40,7 @@ Notes:
 """
 
 import os
+from project_paths import ANALYSIS_DIR
 import sys
 import csv
 import time
@@ -74,7 +75,8 @@ MAX_TEST_TICKS  = 1000       # safety limit (20 seconds)
 STOP_THRESHOLD_MPS = 0.5    # consider stopped below this speed
 
 TARGET_MAP = "Town04_Opt"
-OUTPUT_CSV = "brake_calibration_results.csv"
+ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_CSV = os.path.join(ANALYSIS_DIR, "brake_calibration_results.csv")
 
 # ---------------------------------------------------------------------------
 # Connect

@@ -27,6 +27,7 @@ script assembles).
 import os
 import sys
 from datetime import datetime
+from project_paths import RUNS_DIR
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -42,7 +43,7 @@ from trajectory_plot import (
 )
 
 FIXED_DT = 0.02
-RUN_DIR = os.path.join(os.path.dirname(__file__), "runs", "trajectory_viz")
+RUN_DIR = os.path.join(RUNS_DIR, "trajectory_viz")
 
 
 def _base_config(run_id: str) -> ScenarioConfig:

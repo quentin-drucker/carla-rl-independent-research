@@ -23,7 +23,7 @@ unified comparison plots. Use brake_profile = "SAC_800k" as the label.
 Usage:
     python eval_sac_on_sweep.py
     python eval_sac_on_sweep.py sac_aeb_rand_800k
-    python eval_sac_on_sweep.py sac_aeb_rand_800k runs/20260405_025448/sweep_summary.csv
+    python eval_sac_on_sweep.py sac_aeb_rand_800k ../artifacts/runs/20260405_025448/sweep_summary.csv
 
 Prerequisite: CARLA must be running (CarlaUE4.exe).
 
@@ -50,6 +50,8 @@ from carla_aeb_env import CarlaAEBEnv
 from scenario_config import ScenarioConfig
 from avoidability import compute_avoidability
 from math_utils import get_speed_mps
+from project_paths import RUNS_DIR
+from rl_eval_protocol import resolve_model_path
 
 # ---------------------------------------------------------------------------
 # Args
@@ -62,10 +64,10 @@ MODEL_PATH  = sys.argv[1] if len(sys.argv) > 1 else "sac_aeb_rand_1600k"
 SWEEP_PATH  = sys.argv[2] if len(sys.argv) > 2 else None
 
 def _find_latest_sweep_csv():
-    run_root   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+    run_root   = os.fspath(RUNS_DIR)
     candidates = sorted(glob.glob(os.path.join(run_root, "*", "sweep_summary.csv")))
     if not candidates:
-        raise FileNotFoundError("No sweep_summary.csv found under runs/")
+        raise FileNotFoundError("No sweep_summary.csv found under artifacts/runs/")
     return candidates[-1]
 
 sweep_csv_path = SWEEP_PATH or _find_latest_sweep_csv()
@@ -114,7 +116,7 @@ print(f"Loaded {len(sweep_configs)} unique scenario configs from sweep")
 # ---------------------------------------------------------------------------
 
 env   = CarlaAEBEnv(cfg=sweep_configs[0])
-model = SAC.load(MODEL_PATH, env=env)
+model = SAC.load(resolve_model_path(MODEL_PATH), env=env)
 
 # ---------------------------------------------------------------------------
 # Run SAC on each config

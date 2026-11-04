@@ -8,7 +8,7 @@ reruns the failed configs, and rewrites the CSV with the patched results.
 
 Usage:
     python resume_sweep.py                        <- latest sweep folder
-    python resume_sweep.py runs/20260417_202355   <- explicit folder
+    python resume_sweep.py ../artifacts/runs/20260417_202355   <- explicit folder
 """
 
 import os
@@ -16,6 +16,7 @@ import sys
 import csv
 import glob
 import traceback
+from project_paths import RUNS_DIR
 
 CARLA_ROOT = r"C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16"
 _carla_pythonapi_root  = os.path.join(CARLA_ROOT, "PythonAPI")
@@ -33,7 +34,7 @@ from test3___ped_intrusion_scenario import run_scenario
 # ---------------------------------------------------------------------------
 
 def _latest_sweep_dir():
-    run_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+    run_root = os.fspath(RUNS_DIR)
     dirs = sorted(glob.glob(os.path.join(run_root, "*")))
     for d in reversed(dirs):
         if os.path.exists(os.path.join(d, "sweep_summary.csv")):

@@ -46,6 +46,8 @@ from stable_baselines3 import SAC
 from carla_aeb_env import CarlaAEBEnv
 from train_sac import sample_config
 from avoidability import compute_avoidability
+from project_paths import ANALYSIS_DIR
+from rl_eval_protocol import resolve_model_path
 
 # ---------------------------------------------------------------------------
 # Args
@@ -92,7 +94,7 @@ def _profile_targets(d_min, trigger_dist, hazard_active):
 # ---------------------------------------------------------------------------
 
 env   = CarlaAEBEnv(config_fn=sample_config)
-model = SAC.load(MODEL_PATH, env=env)
+model = SAC.load(resolve_model_path(MODEL_PATH), env=env)
 
 all_traces  = []   # list of episode trace dicts
 all_ticks   = []   # flat list of per-tick dicts for CSV
@@ -181,8 +183,8 @@ env.close()
 # Save raw CSV
 # ---------------------------------------------------------------------------
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-csv_out    = os.path.join(script_dir, "brake_curves_data.csv")
+ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+csv_out    = os.path.join(ANALYSIS_DIR, "brake_curves_data.csv")
 if all_ticks:
     with open(csv_out, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=all_ticks[0].keys())
@@ -277,6 +279,6 @@ fig.suptitle(
 )
 fig.tight_layout()
 
-png_out = os.path.join(script_dir, f"brake_curves_{n_ep}episodes.png")
+png_out = os.path.join(ANALYSIS_DIR, f"brake_curves_{n_ep}episodes.png")
 fig.savefig(png_out, dpi=150)
 print(f"Saved brake curve figure -> {png_out}")

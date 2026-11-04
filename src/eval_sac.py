@@ -6,7 +6,7 @@ Evaluates a trained SAC model and saves per-episode results to a CSV for plottin
 Usage:
     python eval_sac.py                          <- evaluates sac_aeb_rand_800k
     python eval_sac.py sac_aeb_rand_800k        <- same, explicit
-    python eval_sac.py checkpoints/sac_aeb_rand_50000_steps.zip
+    python eval_sac.py ../artifacts/checkpoints/sac_aeb_rand_50000_steps.zip
 
 Output:
     - Per-episode table printed to console (with physics label and margin)
@@ -31,6 +31,7 @@ to generate a different fixed set (e.g. for a second validation batch).
    eval_policy_encounters.py (common encounter protocol).
 """
 
+import os
 import sys
 import csv
 import random
@@ -42,6 +43,8 @@ from carla_aeb_env import CarlaAEBEnv
 from spectator import SpectatorController
 from train_sac import sample_config
 from avoidability import compute_avoidability
+from project_paths import ANALYSIS_DIR
+from rl_eval_protocol import resolve_model_path
 
 print("[WARNING] legacy evaluator: outcome labels are unreliable; "
       "use eval_policy_encounters.py for reported results (see header).")
@@ -57,7 +60,7 @@ print(f"  EVALUATING: {model_path}")
 print(f"{'='*55}\n")
 
 env   = CarlaAEBEnv(config_fn=sample_config)
-model = SAC.load(model_path, env=env)
+model = SAC.load(resolve_model_path(model_path), env=env)
 
 N_EPISODES = 100
 rewards    = []
@@ -183,9 +186,9 @@ for ep in range(N_EPISODES):
 env.close()
 
 # ── Save CSV ────────────────────────────────────────────────────────────────
-import os
 model_stem = os.path.splitext(os.path.basename(model_path))[0]
-csv_path = f"eval_results_{model_stem}.csv"
+ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+csv_path = os.path.join(ANALYSIS_DIR, f"eval_results_{model_stem}.csv")
 with open(csv_path, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=rows[0].keys())
     writer.writeheader()

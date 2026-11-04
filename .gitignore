@@ -4,39 +4,50 @@ venv/
 *.pyc
 
 # Trained RL model checkpoints (large binaries, hundreds of snapshots per training run)
-src/checkpoints/
+artifacts/checkpoints/*
+
+# These eight model-lineage ZIPs were already versioned before artifacts were reorganized.
+# Keep their moves trackable, but do not add new checkpoints or large binaries.
+!artifacts/checkpoints/sac_aeb_200k.zip
+!artifacts/checkpoints/sac_aeb_rand_1600k.zip
+!artifacts/checkpoints/sac_aeb_rand_300k.zip
+!artifacts/checkpoints/sac_aeb_rand_800k.zip
+!artifacts/checkpoints/sac_aeb_rand_interrupted_58223steps.zip
+!artifacts/checkpoints/sac_v2_1600k.zip
+!artifacts/checkpoints/sac_v2_2400k.zip
+!artifacts/checkpoints/sac_v3_1600k.zip
 
 # Raw per-run telemetry/sensor data (many small files per run; keep summary CSVs only)
-src/runs/*/run_*/
-previous_src_tests/test3_rare_hazard_scenario/runs/*/run_*/
+artifacts/runs/*/run_*/
+artifacts/runs/legacy_test3_rare_hazard_scenario/*/run_*/
 
 # Raw per-tick physical-limits traces/manifests (Week 3 physics harness) --
 # keep code, compact summaries, and findings in worklogs/PRs, not raw traces.
-src/runs/physics/
+artifacts/runs/physics/
 
 # Raw per-tick trajectory traces + rendered plots (Week 3 trajectory
 # visualization tooling) -- same reasoning, keep the tool and findings, not
 # raw run data/images.
-src/runs/trajectory_viz/
+artifacts/runs/trajectory_viz/
 
 # Raw per-run traces/manifests from the steering-plus-braking baseline
 # (test26) -- same reasoning; findings go in worklogs/PRs/MASTER summary.
-src/runs/steer_brake_baseline/
+artifacts/runs/steer_brake_baseline/
 
 # Raw per-episode traces/steps/metrics from encounter-protocol RL evaluation
 # (eval_policy_encounters.py) -- same reasoning.
-src/runs/rl_encounter_eval/
+artifacts/runs/rl_encounter_eval/
 
 # Steering-policy training runs (train_steering.py): checkpoints with replay
 # buffers and per-episode logs -- large, regenerable; findings go in worklogs/MASTER.
-src/runs/steering_train/
+artifacts/runs/steering_train/
 
 # Raw per-run traces/metrics from the fixed-profile matched-sweep re-score
 # (test27) -- same reasoning.
-src/runs/fixed_profile_rescore/
+artifacts/runs/fixed_profile_rescore/
 
 # Raw camera frame captures
-previous_src_tests/test0_ego_camera/out/
+artifacts/runs/legacy_ego_camera/
 
 # Throwaway diagnostic scripts/dumps for investigating a live finding --
 # not part of the numbered test suite, not a tracked research artifact.
@@ -59,4 +70,4 @@ Thumbs.db
 .DS_Store
 
 # City-circuit runs (run_circuit.py): per-hazard traces, regenerable.
-src/runs/circuit/
+artifacts/runs/circuit/

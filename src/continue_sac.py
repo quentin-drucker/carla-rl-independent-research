@@ -36,6 +36,8 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import CheckpointCallback
 from carla_aeb_env import CarlaAEBEnv
 from train_sac import sample_config
+from project_paths import CHECKPOINTS_DIR
+from rl_eval_protocol import resolve_model_path
 
 # Reset entropy to this value after loading. By the end of a long run,
 # ent_coef decays near zero — continuing with it that low means the agent
@@ -58,8 +60,8 @@ if _m:
 else:
     _prefix, _base_k = "sac_continued", 0
 _total_k = _base_k + EXTRA_STEPS // 1000
-FINAL_PATH       = f"{_prefix}_{_total_k}k"
-CHECKPOINT_DIR   = "checkpoints"
+CHECKPOINT_DIR   = os.fspath(CHECKPOINTS_DIR)
+FINAL_PATH       = os.path.join(CHECKPOINT_DIR, f"{_prefix}_{_total_k}k")
 CHECKPOINT_EVERY = 20_000
 
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -87,7 +89,7 @@ checkpoint_callback = CheckpointCallback(
 )
 
 try:
-    model = SAC.load(LOAD_PATH, env=env)
+    model = SAC.load(resolve_model_path(LOAD_PATH), env=env)
 
     print(f"  Loaded model from {LOAD_PATH}.zip")
     print(f"  Continuing from step {model.num_timesteps:,}")

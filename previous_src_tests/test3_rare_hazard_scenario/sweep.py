@@ -41,6 +41,9 @@ from datetime import datetime
 from itertools import product
 import random as _random
 from typing import List, Optional
+from pathlib import Path
+
+LEGACY_RUNS_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "runs" / "legacy_test3_rare_hazard_scenario"
 
 # CARLA path setup must happen before importing scenario modules.
 CARLA_ROOT = r"C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16"
@@ -192,7 +195,7 @@ def run_sweep(
     """
     if output_dir is None:
         timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join("runs", timestamp)
+        output_dir = os.path.join(LEGACY_RUNS_DIR, timestamp)
 
     os.makedirs(output_dir, exist_ok=True)
     print(f"\n[sweep] Output directory: {os.path.abspath(output_dir)}")

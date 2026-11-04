@@ -14,10 +14,13 @@ If no path is given, the script finds the most recent sweep folder automatically
 import os
 import sys
 import glob
+from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+
+LEGACY_RUNS_DIR = Path(__file__).resolve().parents[2] / "artifacts" / "runs" / "legacy_test3_rare_hazard_scenario"
 
 
 # =====================================================================
@@ -191,10 +194,10 @@ def _draw_confidence_ellipse(ax, x_data, y_data, color, n_std=1.5):
 
 def _find_latest_csv() -> str:
     """Return path to sweep_summary.csv in the most recently created sweep folder."""
-    candidates = glob.glob(os.path.join("runs", "*", "sweep_summary.csv"))
+    candidates = glob.glob(os.path.join(LEGACY_RUNS_DIR, "*", "sweep_summary.csv"))
     if not candidates:
         raise FileNotFoundError(
-            "No sweep_summary.csv found under runs/. "
+            "No sweep_summary.csv found under artifacts/runs/legacy_test3_rare_hazard_scenario/. "
             "Run sweep.py first, or pass the CSV path as an argument."
         )
     # sort by folder modification time

@@ -82,7 +82,8 @@ Run through this before pushing a branch, and again before merging the PR:
       end-to-end at least once — a training loop that only fails after 500k steps is much cheaper
       to catch by running it briefly than by discovering it in the middle of an overnight run.
 - [ ] **No large or generated files snuck in.** Run `git status` before committing and check the
-      file list against `.gitignore` — checkpoints, `runs/*/run_*/` folders, and camera captures
+      file list against `.gitignore` — `artifacts/checkpoints/`, `artifacts/runs/*/run_*/`
+      folders, and camera captures
       should never appear staged. If one does, fix `.gitignore` rather than committing it once
       "just this time."
 - [ ] **No dead/commented-out experiment code left in** unless it's genuinely useful reference —

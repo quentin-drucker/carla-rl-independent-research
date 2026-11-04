@@ -11,10 +11,10 @@ Usage (custom single run):
     cfg = ScenarioConfig(target_mph=45, walker_side="right", weather_preset="HardRainNoon")
 
 Usage (re-run from a saved config file):
-    cfg = ScenarioConfig.from_json("runs/20260314_120000/run_0001/config.json")
+    cfg = ScenarioConfig.from_json("../artifacts/runs/20260314_120000/run_0001/config.json")
 
 Usage (save config to file):
-    cfg.to_json("runs/20260314_120000/run_0001/config.json")
+    cfg.to_json("../artifacts/runs/20260314_120000/run_0001/config.json")
 """
 
 import json

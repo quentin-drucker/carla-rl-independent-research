@@ -38,12 +38,13 @@ Usage (CARLA must already be running):
     python -X utf8 test11___physical_limits_rollover.py
 
 Writes one timestamped, non-overwritable run directory per case (plus any
-automatic repeat) under runs/physics/<timestamp>_rollover/.
+automatic repeat) under ../artifacts/runs/physics/<timestamp>_rollover/.
 """
 
 import datetime
 import itertools
 import os
+from project_paths import RUNS_DIR
 
 import carla
 
@@ -259,7 +260,7 @@ def _print_row(row):
 
 def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join("runs", "physics", f"{timestamp}_{RUN_FAMILY}")
+    run_dir = os.path.join(RUNS_DIR, "physics", f"{timestamp}_{RUN_FAMILY}")
 
     client, world = connect_and_load_world(host=HOST, port=PORT, timeout_s=10.0, target_map=TARGET_MAP)
     enable_sync_mode(world, fixed_dt=FIXED_DT)

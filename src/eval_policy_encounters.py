@@ -28,13 +28,13 @@ the exit code is 1 on any difference (step 4 gate 3).
 
 Usage (CARLA running with default physics; from src/ in the venv):
     python -X utf8 eval_policy_encounters.py --model sac_v3_1600k --suite sweep \
-        --sweep-csv runs/20260417_202355/sweep_summary.csv --limit 5
+        --sweep-csv ../artifacts/runs/20260417_202355/sweep_summary.csv --limit 5
     python -X utf8 eval_policy_encounters.py --model sac_v3_1600k --suite random --n 100 --seed 42
     python -X utf8 eval_policy_encounters.py --suite test26 --steer-commit lock_at_onset \
-        --fixed-u 0 0.25 0.75 1 --mph 35 45 --ttc 0.6 1.0 --parity-with runs/steer_brake_baseline/<sweep>
+        --fixed-u 0 0.25 0.75 1 --mph 35 45 --ttc 0.6 1.0 --parity-with ../artifacts/runs/steer_brake_baseline/<sweep>
 
 Evidence (git-ignored, never overwritten):
-    src/runs/rl_encounter_eval/<timestamp>_rl_encounter_eval_default/
+    artifacts/runs/rl_encounter_eval/<timestamp>_rl_encounter_eval_default/
         eval_manifest.json, summary.csv, ep_NNNN/{trace.csv, steps.csv,
         metrics.json, episode.json}
 """
@@ -53,6 +53,7 @@ import numpy as np
 
 from encounter_metrics import EncounterProtocol, compute_encounter_metrics, summarize_for_console
 from physics_backend import BACKEND_DEFAULT, create_run_dir
+from project_paths import RUNS_DIR
 from rl_collision_signal import COLLISION_SIGNAL_GEOMETRIC, COLLISION_SIGNAL_MODES
 from rl_steering import STEER_COMMIT_MODES
 from rl_eval_protocol import (
@@ -73,7 +74,7 @@ from rl_eval_protocol import (
 )
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-RUNS_ROOT = os.path.join(SRC_DIR, "runs", RUN_FAMILY)
+RUNS_ROOT = os.path.join(RUNS_DIR, RUN_FAMILY)
 PROTOCOL = EncounterProtocol(horizon_s=8.0)  # identical to test26
 STEP_COLUMNS = ["tick", "sim_time_s", "action", "reward", "terminated", "truncated", "drive_mode",
                 "triggered", "collision", "collision_sensor", "collision_legacy_proximity",

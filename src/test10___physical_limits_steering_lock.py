@@ -38,12 +38,13 @@ Usage (CARLA must already be running):
     python -X utf8 test10___physical_limits_steering_lock.py
 
 Writes one timestamped, non-overwritable run directory per case under
-runs/physics/<timestamp>_steering_lock/.
+../artifacts/runs/physics/<timestamp>_steering_lock/.
 """
 
 import datetime
 import itertools
 import os
+from project_paths import RUNS_DIR
 
 import carla
 
@@ -242,7 +243,7 @@ def _run_one_case(
 
 def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join("runs", "physics", f"{timestamp}_{RUN_FAMILY}")
+    run_dir = os.path.join(RUNS_DIR, "physics", f"{timestamp}_{RUN_FAMILY}")
 
     client, world = connect_and_load_world(host=HOST, port=PORT, timeout_s=10.0, target_map=TARGET_MAP)
     enable_sync_mode(world, fixed_dt=FIXED_DT)

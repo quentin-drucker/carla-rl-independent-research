@@ -63,7 +63,7 @@ Do not read an archived numerical value as automatically comparable across contr
 |---|---|
 | **What is this research about?** | Building a controlled CARLA framework for rare pedestrian hazards, measuring safety and comfort, comparing four fixed automatic-emergency-braking (AEB) rules, and testing whether a Soft Actor-Critic (SAC) policy can learn adaptive braking near physical stopping limits. |
 | **What did I accomplish?** | A working end-to-end experimental pipeline: deterministic route generation, custom lane following, PI speed control, route-conforming LiDAR detection, scripted pedestrian intrusion, fixed AEB profiles, quantitative metrics, JSON/CSV provenance, automated sweeps, Gymnasium integration, SAC training, evaluation, and plotting. |
-| **What is the current implementation?** | The top-level `src/` tree, with `test3___ped_intrusion_scenario.py` for classical runs, `carla_aeb_env.py` for RL, `train_sac.py` for current v3 training, and `sac_v3_1600k.zip` as the intended final model. |
+| **What is the current implementation?** | The top-level `src/` tree, with `test3___ped_intrusion_scenario.py` for classical runs, `carla_aeb_env.py` for RL, and `train_sac.py` for current v3 training; `artifacts/checkpoints/sac_v3_1600k.zip` is the intended final model. |
 | **What does SAC actually control?** | One continuous brake target in `[0,1]`. Steering and cruising remain classical. More importantly, classical LiDAR hazard logic gates the `HAZARD_BRAKE` mode; SAC is a learned post-detection brake shaper, not an end-to-end or independently perceiving driving policy. |
 | **What works?** | The retained artifacts show that single scenarios, 800-run profile sweeps, SAC training, randomized evaluation, matched-grid evaluation, data serialization, and plotting all ran during the semester. Current operation has not yet been smoke-tested after the break. |
 | **What is the strongest result?** | On the final 200-configuration grid, fixed controllers recorded 19–23% collision rates, while the archived final SAC results recorded 20%. This supports descriptive overall collision-rate proximity on that grid, not statistical equivalence or SAC superiority. **Superseded 2026-10-04:** under the common protocol v3 makes contact in 36.5% of the grid; under the same protocol the fixed profiles score 30-38%; **SAC ranks second-worst of five** (Week 5 comparison). |
@@ -86,8 +86,8 @@ Do not read an archived numerical value as automatically comparable across contr
 4. [`src/lane_follow.py`](src/lane_follow.py) — actual classical controller, hazard detection state, fixed profiles, and RL brake integration.
 5. [`src/test3___ped_intrusion_scenario.py`](src/test3___ped_intrusion_scenario.py) — current classical scenario runner.
 6. [`src/eval_sac_on_sweep.py`](src/eval_sac_on_sweep.py) — the matched evaluator and location of the central outcome defect.
-7. [`src/runs/20260417_202355/sweep_summary.csv`](src/runs/20260417_202355/sweep_summary.csv) — final fixed-profile data.
-8. [`src/runs/20260417_202355/sac_on_sweep_results.csv`](src/runs/20260417_202355/sac_on_sweep_results.csv) — final SAC data, with the caveats in this document.
+7. [`artifacts/runs/20260417_202355/sweep_summary.csv`](artifacts/runs/20260417_202355/sweep_summary.csv) — final fixed-profile data.
+8. [`artifacts/runs/20260417_202355/sac_on_sweep_results.csv`](artifacts/runs/20260417_202355/sac_on_sweep_results.csv) — final SAC data, with the caveats in this document.
 9. [`WORKFLOW.md`](WORKFLOW.md) — useful historical run notes, but stale in several important places.
 
 ---
@@ -462,7 +462,7 @@ The far-cross termination path is central to the known result bug discussed late
 Classical sweeps create:
 
 ```text
-src/runs/<timestamp>/
+artifacts/runs/<timestamp>/
 ├── run_0000/
 │   ├── config.json
 │   └── result.json
@@ -485,7 +485,9 @@ Important weakness: `eval_sac_on_sweep.py` overwrites the matched SAC CSV rather
 | Path | Status | Purpose and warning |
 |---|---|---|
 | `MASTER_CARLA_RESEARCH_SUMMARY.md` | **CURRENT / IMPORTANT** | This reconstructed master reference. |
-| `src/` | **CURRENT / IMPORTANT** | Latest source, model ZIPs, checkpoints, outputs, and run artifacts. |
+| `src/` | **CURRENT / IMPORTANT** | Latest implementation, training, evaluation, and analysis code. |
+| `tests/` | **CURRENT / IMPORTANT** | Offline regression suite for the active implementation. |
+| `artifacts/` | **CURRENT / IMPORTANT EVIDENCE** | Generated runs, retained summaries/plots, and trained checkpoints. Inspect selectively; see `artifacts/README.md`. |
 | `previous_src_tests/` | **HISTORICAL / EXPERIMENTAL** | Preserves the progression from camera test through lane following, early LiDAR braking, and an April 5 test3 snapshot. Do not mistake it for the current implementation. |
 | `notes/` | **HISTORICAL** | Early project/RL planning notes. Useful for intent, not current truth. |
 | `venv/` | **CURRENT / IMPORTS VERIFIED** | Retained Windows virtual environment. Key dependencies and project modules imported successfully on August 12, 2026; a live CARLA episode still needs a smoke test. |
@@ -564,25 +566,25 @@ No `.git` repository, `requirements.txt`, lockfile, package definition, or autom
 
 | Model | State dimension | Interpretation |
 |---|---:|---|
-| `src/sac_aeb_200k.zip` | 5 | Early/fixed-scenario lineage; exact experiment mapping is unclear. |
-| `src/sac_aeb_rand_300k.zip` | 5 | **UNCLEAR** early five-input artifact. Its name suggests randomized training, but it may map to the documented fixed-far 300k experiment; the ZIP does not preserve its sampler. |
-| `src/sac_aeb_rand_800k.zip` | 5 | Randomized 800k checkpoint used in early evaluation. |
-| `src/sac_aeb_rand_1600k.zip` | 5 | Continued five-input checkpoint used in initial matched comparison. |
-| `src/sac_v2_1600k.zip` | 6 | Added stopping feasibility and revised reward. Intermediate. |
-| `src/sac_v2_2400k.zip` | 6 | Continued v2; mixed/degraded result. Superseded. |
-| `src/sac_v3_1600k.zip` | 6 | **CURRENT intended final model.** Fresh training with targeted TTC and both headways. |
-| `src/checkpoints/` | mixed | Hundreds of intermediate checkpoints, roughly 1 GB total. Useful for lineage studies, not normal resumption. |
+| `artifacts/checkpoints/sac_aeb_200k.zip` | 5 | Early/fixed-scenario lineage; exact experiment mapping is unclear. |
+| `artifacts/checkpoints/sac_aeb_rand_300k.zip` | 5 | **UNCLEAR** early five-input artifact. Its name suggests randomized training, but it may map to the documented fixed-far 300k experiment; the ZIP does not preserve its sampler. |
+| `artifacts/checkpoints/sac_aeb_rand_800k.zip` | 5 | Randomized 800k checkpoint used in early evaluation. |
+| `artifacts/checkpoints/sac_aeb_rand_1600k.zip` | 5 | Continued five-input checkpoint used in initial matched comparison. |
+| `artifacts/checkpoints/sac_v2_1600k.zip` | 6 | Added stopping feasibility and revised reward. Intermediate. |
+| `artifacts/checkpoints/sac_v2_2400k.zip` | 6 | Continued v2; mixed/degraded result. Superseded. |
+| `artifacts/checkpoints/sac_v3_1600k.zip` | 6 | **CURRENT intended final model.** Fresh training with targeted TTC and both headways. |
+| `artifacts/checkpoints/` | mixed | Hundreds of intermediate checkpoints, roughly 1 GB total. Useful for lineage studies, not normal resumption. |
 
-The top-level v3 ZIP and nominal 1.6M callback checkpoint contain different policy weights. The retained matched CSV stores a model label but no hash, so the exact evaluated bytes are **UNCLEAR**.
+The retained v3 ZIP and nominal 1.6M callback checkpoint contain different policy weights. The retained matched CSV stores a model label but no hash, so the exact evaluated bytes are **UNCLEAR**.
 
 ### Run directories
 
-- `src/runs/20260417_202355/` — **CURRENT / MOST IMPORTANT** final fixed sweep, final overwritten matched SAC CSV, and v2/v3 comparison plots.
-- `src/runs/20260405_025448/` — important earlier 192-run/matched comparison family; exact role should be read with the weekly log.
+- `artifacts/runs/20260417_202355/` — **CURRENT / MOST IMPORTANT** final fixed sweep, final overwritten matched SAC CSV, and v2/v3 comparison plots.
+- `artifacts/runs/20260405_025448/` — important earlier 192-run/matched comparison family; exact role should be read with the weekly log.
 - Earlier March and early-April directories — development sweeps, small grids, interrupted runs, or validation experiments. Preserve them as history; do not pool them blindly.
 - Several timestamp directories are incomplete/interrupted and contain little or no usable output.
 
-The `previous_src_tests/test3_rare_hazard_scenario/` copy contains duplicated April 5-era code and run data. It is an archive, not an independent current dataset.
+The `previous_src_tests/test3_rare_hazard_scenario/` copy contains duplicated April 5-era code; its retained run data now lives under `artifacts/runs/legacy_test3_rare_hazard_scenario/`. It is an archive, not an independent current dataset.
 
 ---
 
@@ -631,8 +633,8 @@ The current main block:
 1. Creates `CarlaAEBEnv(config_fn=sample_config)`.
 2. Creates SB3 `SAC("MlpPolicy", ...)`.
 3. Trains for 1,600,000 simulator steps.
-4. Saves every 20,000 steps under `src/checkpoints/`.
-5. Saves the final model as `src/sac_v3_1600k.zip`.
+4. Saves every 20,000 steps under `artifacts/checkpoints/`.
+5. Saves the final model as `artifacts/checkpoints/sac_v3_1600k.zip`.
 
 This is the latest training path even though the module header still describes older v2 settings.
 
@@ -646,7 +648,7 @@ The script contains the far-clearance/full-stop outcome defect. Use it only afte
 
 ## Matched SAC evaluation
 
-`python eval_sac_on_sweep.py sac_v3_1600k runs/20260417_202355/sweep_summary.csv`
+`python eval_sac_on_sweep.py sac_v3_1600k ../artifacts/runs/20260417_202355/sweep_summary.csv`
 
 The script takes the `proportional_ramp` rows as one copy of the 200 unique scenario configurations, runs SAC deterministically on each, and writes `sac_on_sweep_results.csv` into the sweep directory. It reconstructs only a subset of `ScenarioConfig`, omitting friction, sun/cloud overrides, post-trigger delay, and random seed. Calling it “matched” is justified for the retained final grid because those omitted values were defaults, but not for arbitrary future sweeps that vary them.
 
@@ -707,7 +709,7 @@ The scripts append CARLA's `PythonAPI` and `PythonAPI/carla` directories to `sys
 - Wait approximately 15 seconds after starting the simulator.
 - Main scripts reload `Town04_Opt`; preloading `Town04` is ineffective.
 - Headless `-RenderOffScreen` mode was used for long training and sweeps.
-- Scripts assume they are executed from `src/` because models, `runs/`, checkpoints, and outputs use relative paths.
+- Commands below are shown from `src/`, but generated run/checkpoint paths are anchored to the repository root through `src/project_paths.py`; model-name lookup also searches `artifacts/checkpoints/`.
 - OneDrive paths and large checkpoint/run trees may introduce sync overhead.
 - Synchronous mode improves control over simulator time but does not prove bitwise deterministic physics.
 
@@ -777,10 +779,10 @@ Warning: the current active grid is 800 runs and can take hours. For a first smo
 For an active copied sweep with exact `CRASHED` rows:
 
 ```powershell
-python resume_sweep.py runs\<working-copy-timestamp>
+python resume_sweep.py ..\\artifacts\\runs\\<working-copy-timestamp>
 ```
 
-The final `runs\20260417_202355\sweep_summary.csv` already has 800 rows and zero `CRASHED` rows; there is nothing to resume there. The utility reconstructs only part of `ScenarioConfig` and omits friction, sun/cloud overrides, post-trigger delay, and random seed. That was compatible with the final grid's defaults but is unsafe for arbitrary future sweeps. It overwrites run JSON and later rewrites the CSV in place, so interruption can leave them inconsistent.
+The final `..\\artifacts\\runs\\20260417_202355\sweep_summary.csv` already has 800 rows and zero `CRASHED` rows; there is nothing to resume there. The utility reconstructs only part of `ScenarioConfig` and omits friction, sun/cloud overrides, post-trigger delay, and random seed. That was compatible with the final grid's defaults but is unsafe for arbitrary future sweeps. It overwrites run JSON and later rewrites the CSV in place, so interruption can leave them inconsistent.
 
 ## 5. Train current SAC v3
 
@@ -803,20 +805,20 @@ This is the syntactically correct current command. The evaluation outcome logic 
 ## 7. Evaluate SAC on the final matched grid
 
 ```powershell
-python eval_sac_on_sweep.py sac_v3_1600k runs\20260417_202355\sweep_summary.csv
+python eval_sac_on_sweep.py sac_v3_1600k ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
 ```
 
-**Data-preservation warning:** this overwrites `runs/20260417_202355/sac_on_sweep_results.csv`. Copy the entire archived run directory to a new, explicitly named experiment directory before any rerun. Do not overwrite the only retained final raw SAC comparison.
+**Data-preservation warning:** this overwrites `../artifacts/runs/20260417_202355/sac_on_sweep_results.csv`. Copy the entire archived run directory to a new, explicitly named experiment directory before any rerun. Do not overwrite the only retained final raw SAC comparison.
 
 ## 8. Offline analysis
 
-These do not need a running CARLA server. Run them only against copied/versioned outputs if preservation matters, because they overwrite PNGs in `src/` or the selected run directory. `compare_braking_profiles.py` also opens interactive plot windows and may wait until they are closed.
+These do not need a running CARLA server. Run them only against copied/versioned outputs if preservation matters, because they overwrite PNGs under `artifacts/runs/analysis/` or in the selected run directory. `compare_braking_profiles.py` also opens interactive plot windows and may wait until they are closed.
 
 ```powershell
-python compare_braking_profiles.py runs\20260417_202355\sweep_summary.csv
-python plot_unified_comparison.py runs\20260417_202355\sweep_summary.csv
-python plot_comfort_safety.py runs\20260417_202355\sweep_summary.csv
-python plot_presentation_summary.py runs\20260417_202355\sweep_summary.csv
+python compare_braking_profiles.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
+python plot_unified_comparison.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
+python plot_comfort_safety.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
+python plot_presentation_summary.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
 python plot_stopping_distance.py
 ```
 
@@ -825,7 +827,7 @@ The unified/comfort presentation plots will faithfully reproduce flawed SAC labe
 To plot a newly generated randomized v3 evaluation:
 
 ```powershell
-python plot_eval.py eval_results_sac_v3_1600k.csv
+python plot_eval.py ..\artifacts\runs\analysis\eval_results_sac_v3_1600k.csv
 ```
 
 `plot_eval.py` without an argument reads the provenance-unclear generic CSV. Likewise, `plot_speed_ttc_comparison.py` without arguments mixes generic randomized SAC data with the latest fixed sweep; it is an unmatched historical visualization, not the final matched comparison.
@@ -843,7 +845,7 @@ python inspect_brake_curves.py sac_v3_1600k 5
 Offline classifier validation:
 
 ```powershell
-python validate_avoidability.py runs\20260417_202355\sweep_summary.csv
+python validate_avoidability.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
 ```
 
 `inspect_brake_curves.py` currently writes TTC into a column named `ego_speed`; correct that before using its CSV scientifically.
@@ -853,7 +855,7 @@ python validate_avoidability.py runs\20260417_202355\sweep_summary.csv
 - Use `Ctrl+C` in the training/evaluation terminal to interrupt Python. `train_sac.py` attempts to preserve an interrupted checkpoint.
 - Stop the CARLA process from its terminal with `Ctrl+C`, or close the windowed simulator normally.
 - Several scripts lack exception-safe `env.close()`/world cleanup, and even the main scenario's early setup path can fail before all cleanup variables exist. An interrupt can leave actors or synchronous mode active. Use a dedicated CARLA instance and restart it after a failed/interrupted script before trusting later runs.
-- Do not delete or “clean” archived runs/checkpoints until they have been backed up and inventoried.
+- Do not delete or “clean” archived runs or checkpoints until they have been backed up and inventoried.
 
 ---
 
@@ -876,23 +878,23 @@ python test3___ped_intrusion_scenario.py
 # Fixed profiles
 python sweep.py
 # Only for a backed-up active sweep containing exact CRASHED rows:
-python resume_sweep.py runs\<working-copy-timestamp>
+python resume_sweep.py ..\\artifacts\\runs\\<working-copy-timestamp>
 
 # Current intended SAC model
 python train_sac.py
 python eval_sac.py sac_v3_1600k
-python eval_sac_on_sweep.py sac_v3_1600k runs\20260417_202355\sweep_summary.csv
+python eval_sac_on_sweep.py sac_v3_1600k ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
 
 # Physics and behavior diagnostics
 python brake_test.py
 python brake_calibration.py
-python validate_avoidability.py runs\20260417_202355\sweep_summary.csv
+python validate_avoidability.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
 python inspect_brake_curves.py sac_v3_1600k 5
 
 # Offline plots
-python compare_braking_profiles.py runs\20260417_202355\sweep_summary.csv
-python plot_unified_comparison.py runs\20260417_202355\sweep_summary.csv
-python plot_comfort_safety.py runs\20260417_202355\sweep_summary.csv
+python compare_braking_profiles.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
+python plot_unified_comparison.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
+python plot_comfort_safety.py ..\\artifacts\\runs\\20260417_202355\sweep_summary.csv
 ```
 
 Most commands after the environment/CARLA startup write or overwrite artifacts. Do not run this block mechanically against the archived final directory; use the detailed warnings in [How to Run the Project](#how-to-run-the-project).
@@ -1096,7 +1098,7 @@ This catalog groups small development tests when they answered the same research
 
 - `src/brake_test.py`
 - `src/brake_calibration.py`
-- `src/brake_calibration_results.csv`
+- `artifacts/runs/analysis/brake_calibration_results.csv`
 - `src/plot_stopping_distance.py`
 - `src/avoidability.py`
 - `src/validate_avoidability.py`
@@ -1129,7 +1131,7 @@ This catalog groups small development tests when they answered the same research
 - `src/lane_follow.py`
 - `src/sweep.py`
 - `src/compare_braking_profiles.py`
-- `src/runs/20260417_202355/sweep_summary.csv`
+- `artifacts/runs/20260417_202355/sweep_summary.csv`
 
 **Final setup:**
 
@@ -1171,7 +1173,7 @@ weather:            ClearSunset
 
 **Research question:** Can SAC learn braking from one controlled scenario?
 
-**Likely artifacts:** `src/sac_aeb_200k.zip` and/or `src/sac_aeb_rand_300k.zip`; exact model-to-log mapping is **UNCLEAR**.
+**Likely artifacts:** `artifacts/checkpoints/sac_aeb_200k.zip` and/or `artifacts/checkpoints/sac_aeb_rand_300k.zip`; exact model-to-log mapping is **UNCLEAR**.
 
 **Setup:** The early environment used five observations and a fixed far-cross scenario.
 
@@ -1197,7 +1199,7 @@ weather:            ClearSunset
 
 ### Provenance-uncertain randomized evaluation
 
-`src/eval_results.csv` contains 100 rows with the presentation's physics-stratified rates. It cannot be assigned confidently to this five-observation lineage—or to v3—because it has no model field and predates the current evaluator revision:
+`artifacts/runs/analysis/eval_results.csv` contains 100 rows with the presentation's physics-stratified rates. It cannot be assigned confidently to this five-observation lineage—or to v3—because it has no model field and predates the current evaluator revision:
 
 | Stored physics label | Collisions / total |
 |---|---:|
@@ -1228,8 +1230,8 @@ weather:            ClearSunset
 
 - `src/rl_reward_design.py`
 - `src/carla_aeb_env.py`
-- `src/sac_v2_1600k.zip`
-- v2 plots in `src/runs/20260417_202355/`
+- `artifacts/checkpoints/sac_v2_1600k.zip`
+- v2 plots in `artifacts/runs/20260417_202355/`
 
 **Changes:** Sixth state feature, higher collision and urgent-braking weights, lower action-smoothness weight, larger stop bonus, and distance-based margin bonus.
 
@@ -1241,7 +1243,7 @@ weather:            ClearSunset
 
 **Purpose:** Determine whether another 800k steps improved v2.
 
-**Artifact:** `src/sac_v2_2400k.zip` and named presentation/comparison plots.
+**Artifact:** `artifacts/checkpoints/sac_v2_2400k.zip` and named presentation/comparison plots.
 
 **Documented result:** Overall and borderline collision behavior worsened while some high-speed/full-stop behavior appeared stronger. It was retained as a secondary example of diminishing returns/instability rather than chosen as final.
 
@@ -1258,8 +1260,8 @@ weather:            ClearSunset
 **Artifact:**
 
 - `src/train_sac.py`
-- `src/sac_v3_1600k.zip`
-- `src/runs/20260417_202355/sac_on_sweep_results.csv`
+- `artifacts/checkpoints/sac_v3_1600k.zip`
+- `artifacts/runs/20260417_202355/sac_on_sweep_results.csv`
 - v3-named plots in the same run directory.
 
 **Setup:** Six observations; 1.6 million fresh steps; 50% broad/50% borderline-targeted TTC; headway sampled from 2.5 or 5.0 seconds; near/far weighted 2:1.
@@ -1290,7 +1292,7 @@ weather:            ClearSunset
 - `src/plot_comfort_safety.py`
 - `src/plot_speed_ttc_comparison.py`
 - `src/plot_presentation_summary.py`
-- `src/runs/20260417_202355/`
+- `artifacts/runs/20260417_202355/`
 
 **Strong part:** The SAC evaluator reconstructs the same 200 unique configuration values used in the fixed grid, and the model acts deterministically.
 
@@ -1308,7 +1310,7 @@ weather:            ClearSunset
 
 **Purpose:** Inspect how SAC's applied brake evolves compared with analytical fixed-profile targets on the same states.
 
-**Files:** `src/inspect_brake_curves.py`, `src/brake_curves_data.csv`, `src/brake_curves_5episodes.png`.
+**Files:** `src/inspect_brake_curves.py`, `artifacts/runs/analysis/brake_curves_data.csv`, `artifacts/runs/analysis/brake_curves_5episodes.png`.
 
 **Potential value:** Reveals pre-braking, oscillation, delay, and ramp behavior more directly than aggregate outcomes.
 
@@ -1457,7 +1459,7 @@ These are the strongest defensible conclusions after reconciling documents, code
 
 **Conclusion:** In the retained 800-run grid, step constant recorded the fewest collisions and most full stops; cautious ramp recorded the most collisions and fewest full stops. The controllers did not all produce the same safety/outcome behavior.
 
-**Evidence:** `src/runs/20260417_202355/sweep_summary.csv`:
+**Evidence:** `artifacts/runs/20260417_202355/sweep_summary.csv`:
 
 - Step constant: 38 collisions, 144 full stops, 18 slowed/avoided.
 - Proportional: 40, 135, 25.
@@ -2164,7 +2166,7 @@ server was confirmed launched without `--chrono`):
   and protocol labels.
 
 **Re-audit of v3 on last semester's 200-configuration matched grid**
-(`src/runs/rl_encounter_eval/20261004_192904_rl_encounter_eval_default`, git `0bcc0e6`
+(`artifacts/runs/rl_encounter_eval/20261004_192904_rl_encounter_eval_default`, git `0bcc0e6`
 clean, model `sac_v3_1600k.zip` SHA-256 `ef04f2fd04aa...`):
 
 | | Archived (`eval_sac_on_sweep.py`) | Protocol (`encounter_metrics`) |
@@ -2222,14 +2224,14 @@ a single seed.
 **What was done** (branch `experiment/fixed-profile-rescore`, CARLA 0.9.16 default physics,
 server renderless with `-RenderOffScreen`, no `--chrono`):
 - `src/test27___fixed_profile_rescore.py` re-ran last semester's final matched sweep
-  (`src/runs/20260417_202355`: 4 fixed profiles x 200 configs). Each run used its archived
+  (`artifacts/runs/20260417_202355`: 4 fixed profiles x 200 configs). Each run used its archived
   `config.json` unchanged and `run_scenario` exactly as `sweep.py` did. The only change is
   a longer post-crossing settle (9 s instead of 3 s) so the protocol's 8 s window is
   covered. Every run was recorded as a trace and scored with `encounter_metrics`, the
   same protocol as test26 and the v3 re-audit.
 - `src/analyze_controller_comparison.py` matched the 200 scenarios across the four
   profiles and SAC v3 (from the Phase 1 re-audit) and compared contacts per scenario.
-- Evidence: `src/runs/fixed_profile_rescore/20261004_203248_fixed_profile_rescore_default`
+- Evidence: `artifacts/runs/fixed_profile_rescore/20261004_203248_fixed_profile_rescore_default`
   (git `10ec7a0`, crash-recovery resume at `ec50109`; the scenario code path is identical).
 
 **Reproduction:** **800/800 runs match the archive exactly on everything fixed at onset**
@@ -2413,7 +2415,7 @@ things have not run live at all: a walking pedestrian (so the prediction, and an
 difference between the two commitment versions), the off-road penalty, and left swerves.
 
 **Evidence status:** **CONFIRMED** for the stationary-pedestrian scenario. Evidence:
-`src/runs/rl_encounter_eval/20261010_202653...` and `20261010_202918...` (each with
+`artifacts/runs/rl_encounter_eval/20261010_202653...` and `20261010_202918...` (each with
 `parity.json`), and `src/_scratch/regression_4b/` for gate 2.
 
 ## Week 5 (Phase 2, step 5): first steering policies trained (added 2026-10-11)
@@ -2447,13 +2449,13 @@ a usable learning signal on its own.
 
 **Evidence status:** **PRELIMINARY.** One seed, 50k steps, one evaluation episode per
 case, stationary pedestrian only. The lock vs. per-tick gap may close with more
-training. Evidence: `src/runs/steering_train/20261011_185208...` and `20261011_191733...`,
-`src/runs/rl_encounter_eval/20261011_191544...` (lock) and `20261011_194106...`
+training. Evidence: `artifacts/runs/steering_train/20261011_185208...` and `20261011_191733...`,
+`artifacts/runs/rl_encounter_eval/20261011_191544...` (lock) and `20261011_194106...`
 (per_tick). Lock's peak lateral acceleration (18-26 m/s^2) exceeds real-tire limits,
 which is the CARLA default physics caveat.
 
 **Follow-up, 2026-10-12: 3 more seeds at 150k steps per version** (runs
-`src/runs/steering_train/20261011_194942...` to `20261012_020016...`; evaluation
+`artifacts/runs/steering_train/20261011_194942...` to `20261012_020016...`; evaluation
 folders are named in `steering_train/eval_<mode>_s<seed>_<50k|150k>.log`; no CARLA
 crash):
 - **Safety is identical: all 14 evaluations (2 versions x 4 seeds, at 50k and 150k) are
@@ -2478,7 +2480,7 @@ crash):
 
 **Retrain, 2026-10-12: enough clearance 1.0 m and an aim-change penalty (0.07 per unit of
 u change), seeds 1-3 x both versions, 150k steps** (commit `66efc8f`; runs
-`src/runs/steering_train/20261012_081049...` to `20261012_143607...`; evaluation folders
+`artifacts/runs/steering_train/20261012_081049...` to `20261012_143607...`; evaluation folders
 named in `steering_train/eval_<mode>_s<seed>_1m_<50k|150k>.log`):
 - **Safety unchanged: all 12 evaluations are 10 of 12 safe, contact only at TTC 0.4 s.**
 - **The 1.0 m target changed little that can be measured on the test grid.** Passes
@@ -2500,7 +2502,7 @@ named in `steering_train/eval_<mode>_s<seed>_1m_<50k|150k>.log`):
 
 **Finer test grid, 2026-10-13: 60 cases (30-50 mph x TTC 0.4-1.5 s) for all 12 trained
 150k policies, plus a scripted reference** (evidence folders named in
-`src/runs/steering_train/grid_<tag>.log`; scored with protocol v3, which adds the
+`artifacts/runs/steering_train/grid_<tag>.log`; scored with protocol v3, which adds the
 commitment counts taken only while the car is moving):
 - **Full braking alone is safe in 15 of 60 cases; full braking with the maximum swerve in
   55 of 60 (it fails only at TTC 0.4 s). 10 of the 12 policies reach that 55.**
@@ -2538,7 +2540,7 @@ pedestrian: full brake with u = 0 / 0.5 / 1, coast with u = 0 / 1 (all fixed fro
 scripted per-tick replanner ("pass behind the pedestrian", `rl_steering.pass_behind_u`), and
 the same rule locked 0.5 s after onset. Scored with encounter protocol v4 (decision 11) and
 v3. `src/analyze_replanning_gate.py`. Evidence: the 12 folders listed in
-`src/runs/steering_train/w7_table.log` (2026-10-21 22:17 - 2026-10-22 03:45, 2520 episodes).
+`artifacts/runs/steering_train/w7_table.log` (2026-10-21 22:17 - 2026-10-22 03:45, 2520 episodes).
 
 **Result: the gate failed for every design tried, under v4 and v3 alike; no policy was trained.**
 
@@ -2582,7 +2584,7 @@ v3. `src/analyze_replanning_gate.py`. Evidence: the 12 folders listed in
 Quentin deferred the mid-run behavior changes until a model can swerve around a hazard and
 merge back reliably. Matched 50k pair, seed 0, steady crossings both ways (right_far,
 left_far, 1.8 m/s), TTC 0.5-1.6 s, lock delay 0.5 s; same 60-case grid x 2 directions
-(evidence folders in `src/runs/steering_train/w7_walk.log`):
+(evidence folders in `artifacts/runs/steering_train/w7_walk.log`):
 - Full brake + u = 1 is safe in 114/120; every case is avoidable by some scripted option.
 - **per_tick: 110/120 (v4).** Its 10 misses are all the pedestrian from the right with
   0.5-0.6 s of warning, where staying in lane is right and it swerved into them.
@@ -2912,7 +2914,7 @@ Other fixed-name outputs also overwrite silently or reuse colliding names:
 - `eval_sac.py sac_v3_1600k`: `eval_results_sac_v3_1600k.csv`.
 - `brake_calibration.py`: `brake_calibration_results.csv`.
 - `inspect_brake_curves.py sac_v3_1600k 5`: `brake_curves_data.csv` and `brake_curves_5episodes.png`.
-- Plotters: existing PNGs in `src/` or the selected run directory; `plot_stopping_distance.py` always writes `src/stopping_distance_reference.png`.
+- Plotters: standalone analysis PNGs under `artifacts/runs/analysis/` or figures alongside the selected run directory; `plot_stopping_distance.py` writes `artifacts/runs/analysis/stopping_distance_reference.png`.
 
 ### 10. Defaults and documentation are stale
 
@@ -3089,11 +3091,11 @@ This reconstruction did not relaunch CARLA, so the phrase “works” means it d
 
 ## Most relevant retained results
 
-1. `src/runs/20260417_202355/sweep_summary.csv` — strongest clean comparative artifact among fixed profiles.
-2. `src/runs/20260417_202355/sac_on_sweep_results.csv` — important final SAC artifact, but must be interpreted using the audit corrections.
-3. `src/sac_v3_1600k.zip` — intended final learned policy.
-4. `src/eval_results.csv` — historical randomized-evaluation pattern with uncertain model provenance.
-5. `src/brake_calibration_results.csv` — simulator braking diagnostic.
+1. `artifacts/runs/20260417_202355/sweep_summary.csv` — strongest clean comparative artifact among fixed profiles.
+2. `artifacts/runs/20260417_202355/sac_on_sweep_results.csv` — important final SAC artifact, but must be interpreted using the audit corrections.
+3. `artifacts/checkpoints/sac_v3_1600k.zip` — intended final learned policy.
+4. `artifacts/runs/analysis/eval_results.csv` — historical randomized-evaluation pattern with uncertain model provenance.
+5. `artifacts/runs/analysis/brake_calibration_results.csv` — simulator braking diagnostic.
 
 ## What I believed when I stopped
 
@@ -3613,7 +3615,7 @@ pedestrian's line. It can turn "past before they get there" into a hit, or a hit
 "they have already crossed". The policy can brake or coast but not accelerate.
 
 **Result of the scripted walking sweep (2026-10-13; 120 scenarios x 7 options, evidence
-folders named in `src/runs/steering_train/walk_<tag>.log`):**
+folders named in `artifacts/runs/steering_train/walk_<tag>.log`):**
 
 | Option | Safe of 120 |
 |---|---|
@@ -3744,7 +3746,7 @@ Before running anything:
 
 - Back up the whole repository.
 - Hash all top-level models and relevant final checkpoints.
-- Make `src/runs/20260417_202355/` read-only or copy it to an archival location.
+- Make `artifacts/runs/20260417_202355/` read-only or copy it to an archival location.
 - Record current file timestamps and environment package versions.
 - Initialize version control for future work, without rewriting historical artifacts.
 
@@ -3902,12 +3904,12 @@ Only after these cases are correct should the 200-config comparison be rerun.
 
 | Path | Remember this |
 |---|---|
-| `src/sac_v3_1600k.zip` | Intended final policy; exact evaluated bytes not proven. |
-| `src/runs/20260417_202355/sweep_summary.csv` | Final 800-row fixed-profile dataset. |
-| `src/runs/20260417_202355/sac_on_sweep_results.csv` | Final 200-row SAC dataset; contains mislabeled far-clearance stops. |
-| `src/eval_results.csv` | Generic 100-episode result; model provenance unclear. |
-| `src/brake_calibration_results.csv` | Direct brake calibration data. |
-| `src/checkpoints/` | Large model lineage archive. |
+| `artifacts/checkpoints/sac_v3_1600k.zip` | Intended final policy; exact evaluated bytes not proven. |
+| `artifacts/runs/20260417_202355/sweep_summary.csv` | Final 800-row fixed-profile dataset. |
+| `artifacts/runs/20260417_202355/sac_on_sweep_results.csv` | Final 200-row SAC dataset; contains mislabeled far-clearance stops. |
+| `artifacts/runs/analysis/eval_results.csv` | Generic 100-episode result; model provenance unclear. |
+| `artifacts/runs/analysis/brake_calibration_results.csv` | Direct brake calibration data. |
+| `artifacts/checkpoints/` | Large model lineage archive. |
 
 ## Historical evidence
 

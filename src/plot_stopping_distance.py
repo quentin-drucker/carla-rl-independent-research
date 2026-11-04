@@ -33,6 +33,7 @@ Usage:
 """
 
 import os
+from project_paths import ANALYSIS_DIR
 import sys
 import csv
 import numpy as np
@@ -55,7 +56,7 @@ MPH_TO_MPS     = 0.44704
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _cal_path = (sys.argv[1] if len(sys.argv) > 1
-             else os.path.join(_script_dir, "brake_calibration_results.csv"))
+             else os.path.join(ANALYSIS_DIR, "brake_calibration_results.csv"))
 
 cal_rows = []
 with open(_cal_path, newline="") as f:
@@ -165,6 +166,7 @@ note = (
 fig.text(0.5, 0.01, note, ha="center", fontsize=7.5, color="#555555")
 fig.tight_layout(rect=[0, 0.05, 1, 1])
 
-out_path = os.path.join(_script_dir, "stopping_distance_reference.png")
+ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+out_path = os.path.join(ANALYSIS_DIR, "stopping_distance_reference.png")
 fig.savefig(out_path, dpi=150)
 print(f"Saved -> {out_path}")

@@ -15,10 +15,11 @@ Produces two figures:
 
 Usage:
     python plot_unified_comparison.py
-    python plot_unified_comparison.py runs/20260405_025448/sweep_summary.csv
+    python plot_unified_comparison.py ../artifacts/runs/20260405_025448/sweep_summary.csv
 """
 
 import os, sys, csv, glob
+from project_paths import RUNS_DIR
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -31,7 +32,7 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 
 def _latest_sweep_dir():
-    run_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+    run_root = os.fspath(RUNS_DIR)
     dirs = sorted(glob.glob(os.path.join(run_root, "*")))
     for d in reversed(dirs):
         if os.path.exists(os.path.join(d, "sac_on_sweep_results.csv")):

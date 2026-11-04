@@ -28,7 +28,7 @@ STEP 3 — Quick smoke test (confirm env connects, ~30 seconds):
 
 STEP 4 — Start SAC training (overnight, ~10-25 hours headless):
     python train_sac.py
-    Saves a checkpoint every 10,000 steps to checkpoints/ folder.
+    Saves a checkpoint every 10,000 steps to ../artifacts/checkpoints/ folder.
     To stop early: press Ctrl+C once, wait 10 seconds — it saves automatically.
 
 STEP 5 — Evaluate the trained model (run after training finishes):
@@ -36,7 +36,7 @@ STEP 5 — Evaluate the trained model (run after training finishes):
     Runs 10 episodes and prints collision rate, full stops, mean reward.
 
     To evaluate a specific checkpoint instead of the final model:
-    python eval_sac.py checkpoints/sac_aeb_50000_steps.zip
+    python eval_sac.py ../artifacts/checkpoints/sac_aeb_50000_steps.zip
 
 
 MONITORING TRAINING
@@ -62,7 +62,7 @@ WHAT THE FILES DO
   carla_aeb_env.py    — Gymnasium wrapper (the env the RL agent lives in)
   rl_reward_design.py — state vector + reward function design doc
   sac_aeb_200k.zip    — final trained SAC model (created after training)
-  checkpoints/        — folder of intermediate saves every 10k steps
+  ../artifacts/checkpoints/ — folder of intermediate saves every 10k steps
 
 
 WHAT TO LOOK FOR IN EVAL OUTPUT
@@ -116,7 +116,7 @@ COMMON ISSUES
 
 Training crashes mid-run:
     Check CARLA is still running. Restart CARLA and re-run train_sac.py.
-    The latest checkpoint in checkpoints/ is safe — it was saved before the crash.
+    The latest checkpoint in ../artifacts/checkpoints/ is safe — it was saved before the crash.
 
 Episode resets are slow (30-40 sec each):
     Normal. CARLA actor spawning takes time. Nothing to fix.

@@ -54,7 +54,7 @@ Usage (CARLA must be running with --chrono; from src/ in the venv):
     python -X utf8 test25___chrono_hold_diagnostic.py --fast              # no real-time pacing
 
 Evidence: one manifest.json + trace.csv per case under
-src/runs/physics/<timestamp>_chrono_hold_diag/<case>/ (git-ignored, never
+artifacts/runs/physics/<timestamp>_chrono_hold_diag/<case>/ (git-ignored, never
 overwritten). Chrono templates are validated and the --chrono server flag is
 checked before anything spawns; templates are never modified.
 """
@@ -72,6 +72,7 @@ from dataclasses import asdict, dataclass
 import carla
 
 from carla_session import cleanup_session, enable_sync_mode, restore_async_mode
+from project_paths import RUNS_DIR
 from physics_backend import (
     BACKEND_CHRONO,
     BACKEND_DEFAULT,
@@ -96,7 +97,7 @@ HOLD_S = 10.0
 SLOPE_SPAWN = 242
 FLAT_SPAWN = 11
 RUN_FAMILY = "chrono_hold_diag"
-RUNS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "physics")
+RUNS_ROOT = os.path.join(RUNS_DIR, "physics")
 
 
 @dataclass(frozen=True)

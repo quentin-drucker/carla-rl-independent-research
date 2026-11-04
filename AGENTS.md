@@ -47,3 +47,15 @@ largely be a distillation of worklog entries, not written from scratch.
 Follow `CONTRIBUTING.md` for branch naming, commit message format, and the pre-push
 checklist. Don't push large binaries (checkpoints, raw run data, raw camera captures) —
 see `.gitignore` for what's already excluded and why.
+
+## Research artifacts — inspect selectively, not by default
+
+Generated evidence and trained models live under `artifacts/`; active implementation code
+does not. Do not recursively enumerate or read all of `artifacts/` for ordinary development
+tasks. This tree is large and most of it is irrelevant to a typical code change.
+
+The artifacts are not off limits. When a task concerns results, regression evidence, model
+provenance, reproducibility, or a historical claim, inspect the smallest relevant subset.
+Start with manifests, summary CSV/JSON files, named reports, and progress logs; read individual
+metrics or raw traces when the question requires that level of evidence. See
+`artifacts/README.md` for the layout and evidence-reading order.

@@ -36,7 +36,7 @@ which flagged a lane-seam false positive; --rescore recomputes drivability
 and metrics from its saved traces into *_v2 files without re-simulating.
 
 Evidence (git-ignored, never overwritten):
-    src/runs/steer_brake_baseline/<timestamp>_steer_brake_baseline_default/
+    artifacts/runs/steer_brake_baseline/<timestamp>_steer_brake_baseline_default/
         summary.csv, sweep_manifest.json, progress.log, best_route_table.md,
         <case>/<run label>/{trace.csv, drivability.json, result.json,
         metrics.json, manifest.json, row.json}
@@ -61,6 +61,7 @@ from encounter_metrics import EncounterProtocol, compute_encounter_metrics, summ
 from fixed_rescore_protocol import eta_text
 from map_drivability import footprint_drivable
 from physics_backend import BACKEND_DEFAULT, create_run_dir
+from project_paths import RUNS_DIR
 from reactive_avoidance import compute_required_clearance_offset_m
 from passage import Passage, corridor_segments
 from passage_carla import draw_corridor, passage_at_location
@@ -90,7 +91,7 @@ from trace_schema import read_trace_csv
 from trajectory_recording import TrajectoryRecorder
 
 RUN_FAMILY = "steer_brake_baseline"
-RUNS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", RUN_FAMILY)
+RUNS_ROOT = os.path.join(RUNS_DIR, RUN_FAMILY)
 
 # Predeclared scenario/controller parameters (recorded in every manifest).
 BRAKE_TARGET = 1.0                # both braking modes: the same full brake

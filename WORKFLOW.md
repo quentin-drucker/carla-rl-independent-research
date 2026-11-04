@@ -15,7 +15,7 @@ CARLA 0.9.16 | Python 3.12 | stable-baselines3 SAC
 | Evaluate a SAC model (100 random episodes) | `python eval_sac.py sac_aeb_rand_1600k` |
 | Plot SAC eval results | `python plot_eval.py` |
 | Run profile sweep (800 runs) | `python sweep.py` |
-| Resume a crashed sweep | `python resume_sweep.py runs/<timestamp>` |
+| Resume a crashed sweep | `python resume_sweep.py ../artifacts/runs/<timestamp>` |
 | Run SAC on same configs as sweep | `python eval_sac_on_sweep.py sac_aeb_rand_1600k` |
 | Unified SAC vs profiles comparison | `python plot_unified_comparison.py` |
 | Comfort/safety/radar comparison | `python plot_comfort_safety.py` |
@@ -60,7 +60,7 @@ python train_sac.py
 ```
 - Trains for 800,000 steps by default
 - Saves to `sac_aeb_rand_800k.zip`
-- Checkpoints saved every 20k steps to `checkpoints/`
+- Checkpoints saved every 20k steps to `artifacts/checkpoints/`
 - Randomizes episode configs (speed 22–50 mph, TTC 1.5–4.0s) each episode
 - **Requires CARLA running**
 
@@ -88,7 +88,7 @@ python eval_sac.py                          # evaluates sac_aeb_rand_800k (defau
 python eval_sac.py sac_aeb_rand_1600k       # evaluate specific model
 ```
 - Runs 100 fixed episodes (seed=42, same scenarios every time — comparable across models)
-- Saves results to `eval_results.csv` in `src/`
+- Saves results under `artifacts/runs/analysis/`
 - Prints per-episode table + collision breakdown by physics label
 - **Requires CARLA running**
 
@@ -104,7 +104,7 @@ Output columns in `eval_results.csv`:
 python plot_eval.py                   # reads eval_results.csv
 python plot_eval.py my_results.csv    # or specify a file
 ```
-Produces 4 figures (saved to `src/`):
+Produces 4 figures beside the input CSV (normally `artifacts/runs/analysis/`):
 - `speed_ttc_scatter.png` — every episode on speed×TTC space; shape=near/far cross, color=physics label, marker type=outcome. The most information-dense plot.
 - `outcome_by_label.png` — stacked bar: collision vs safe per physics label
 - `reward_by_label.png` — two-panel reward distribution (safe episodes left, collision right)
@@ -137,7 +137,7 @@ python sweep.py
 - TTC values: 1.8, 2.2, 2.6, 3.0, 3.5 s
 - Walker cross: near (stops in center lane) or far (crosses full road)
 - Detection range (brake_headway_s): 2.5s baseline vs 5.0s early-detection
-- Output saved to `runs/<timestamp>/` with one subfolder per run + `sweep_summary.csv`
+- Output saved to `../artifacts/runs/<timestamp>/` with one subfolder per run + `sweep_summary.csv`
 - **Requires CARLA running** (headless recommended — takes several hours)
 
 The 4 braking profiles evaluated:
@@ -154,7 +154,7 @@ The 4 braking profiles evaluated:
 If CARLA crashes or the computer shuts off mid-sweep:
 ```
 python resume_sweep.py                          # auto-finds latest sweep folder
-python resume_sweep.py runs/20260417_202355     # specify folder explicitly
+python resume_sweep.py ../artifacts/runs/20260417_202355     # specify folder explicitly
 ```
 - Reads `sweep_summary.csv`, finds all rows with `error=CRASHED`
 - Re-runs only those configs, patches results back into the existing CSV
@@ -171,7 +171,7 @@ This is the main comparison pipeline. Run these in order after both the sweep an
 ### Step 1 — Run SAC on the exact same configs as the sweep
 ```
 python eval_sac_on_sweep.py sac_aeb_rand_1600k
-python eval_sac_on_sweep.py sac_aeb_rand_1600k runs/20260417_202355/sweep_summary.csv
+python eval_sac_on_sweep.py sac_aeb_rand_1600k ../artifacts/runs/20260417_202355/sweep_summary.csv
 ```
 - Loads the unique scenario configs from `sweep_summary.csv` (200 configs from proportional_ramp rows)
 - Runs SAC deterministically on each one
@@ -183,7 +183,7 @@ python eval_sac_on_sweep.py sac_aeb_rand_1600k runs/20260417_202355/sweep_summar
 ### Step 2 — Generate unified comparison figures
 ```
 python plot_unified_comparison.py
-python plot_unified_comparison.py runs/20260417_202355/sweep_summary.csv
+python plot_unified_comparison.py ../artifacts/runs/20260417_202355/sweep_summary.csv
 ```
 Produces 2 figures saved into the sweep folder:
 - `unified_outcomes.png` — LEFT: stacked outcome bars (full stop / slowed / collision) per controller. RIGHT: collision rate by physics label for each controller side by side.
@@ -196,7 +196,7 @@ Auto-detects the SAC model label from the CSV so no edits needed when switching 
 ### Step 3 — Comfort/safety/risk comparison
 ```
 python plot_comfort_safety.py
-python plot_comfort_safety.py runs/20260417_202355/sweep_summary.csv
+python plot_comfort_safety.py ../artifacts/runs/20260417_202355/sweep_summary.csv
 ```
 Produces 2 figures saved into the sweep folder:
 - `comfort_safety_distributions.png` — violin+strip plots for mean jerk, min pedestrian distance, and time-to-stop across all 5 controllers.
@@ -248,21 +248,21 @@ python inspect_brake_curves.py 10       # 10 episodes
 
 ## 6. Output File Map
 
-### Model files (in `src/`)
+### Model files (in `artifacts/checkpoints/`)
 | File | Description |
 |---|---|
 | `sac_aeb_rand_800k.zip` | SAC trained 800k steps |
 | `sac_aeb_rand_1600k.zip` | SAC continued to 1.6M steps |
-| `checkpoints/` | Intermediate checkpoints saved every 20k steps during training |
+| other checkpoint ZIPs | Intermediate checkpoints saved every 20k steps during training |
 
-### CSV data files (in `src/`)
+### Standalone analysis data (in `artifacts/runs/analysis/`)
 | File | Produced by | Contains |
 |---|---|---|
 | `eval_results.csv` | `eval_sac.py` | 100-episode SAC eval on random scenarios |
 | `brake_calibration_results.csv` | `brake_calibration.py` | Raw vehicle deceleration measurements |
 | `brake_curves_data.csv` | `inspect_brake_curves.py` | Per-tick brake trace data |
 
-### Sweep output (in `src/runs/<timestamp>/`)
+### Sweep output (in `artifacts/runs/<timestamp>/`)
 | File | Produced by | Contains |
 |---|---|---|
 | `sweep_summary.csv` | `sweep.py` | One row per run: all config params + outcome metrics for all 4 profiles |
@@ -273,17 +273,17 @@ python inspect_brake_curves.py 10       # 10 episodes
 ### Plot files
 | File | Produced by | Location |
 |---|---|---|
-| `speed_ttc_scatter.png` | `plot_eval.py` | `src/` |
-| `outcome_by_label.png` | `plot_eval.py` | `src/` |
-| `reward_by_label.png` | `plot_eval.py` | `src/` |
-| `success_by_speed.png` | `plot_eval.py` | `src/` |
-| `unified_outcomes.png` | `plot_unified_comparison.py` | `src/runs/<timestamp>/` |
-| `unified_fullstop_by_speed.png` | `plot_unified_comparison.py` | `src/runs/<timestamp>/` |
-| `comfort_safety_distributions.png` | `plot_comfort_safety.py` | `src/runs/<timestamp>/` |
-| `comfort_safety_radar.png` | `plot_comfort_safety.py` | `src/runs/<timestamp>/` |
-| `speed_ttc_5panel.png` | `plot_speed_ttc_comparison.py` | `src/` |
-| `stopping_distance_reference.png` | `plot_stopping_distance.py` | `src/` |
-| `brake_curves_Nepisodes.png` | `inspect_brake_curves.py` | `src/` |
+| `speed_ttc_scatter.png` | `plot_eval.py` | `artifacts/runs/analysis/` |
+| `outcome_by_label.png` | `plot_eval.py` | `artifacts/runs/analysis/` |
+| `reward_by_label.png` | `plot_eval.py` | `artifacts/runs/analysis/` |
+| `success_by_speed.png` | `plot_eval.py` | `artifacts/runs/analysis/` |
+| `unified_outcomes.png` | `plot_unified_comparison.py` | `artifacts/runs/<timestamp>/` |
+| `unified_fullstop_by_speed.png` | `plot_unified_comparison.py` | `artifacts/runs/<timestamp>/` |
+| `comfort_safety_distributions.png` | `plot_comfort_safety.py` | `artifacts/runs/<timestamp>/` |
+| `comfort_safety_radar.png` | `plot_comfort_safety.py` | `artifacts/runs/<timestamp>/` |
+| `speed_ttc_5panel.png` | `plot_speed_ttc_comparison.py` | `artifacts/runs/analysis/` |
+| `stopping_distance_reference.png` | `plot_stopping_distance.py` | `artifacts/runs/analysis/` |
+| `brake_curves_Nepisodes.png` | `inspect_brake_curves.py` | `artifacts/runs/analysis/` |
 
 ---
 
@@ -326,9 +326,9 @@ python eval_sac.py sac_aeb_rand_1600k       # → eval_results.csv
 python plot_eval.py
 
 # 6. Run profile sweep (several hours)
-python sweep.py                             # → runs/<timestamp>/sweep_summary.csv
+python sweep.py                             # → ../artifacts/runs/<timestamp>/sweep_summary.csv
 # If it crashes:
-python resume_sweep.py runs/<timestamp>
+python resume_sweep.py ../artifacts/runs/<timestamp>
 
 # 7. Run SAC on matched configs (30 min)
 python eval_sac_on_sweep.py sac_aeb_rand_1600k

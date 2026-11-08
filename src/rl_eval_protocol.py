@@ -32,6 +32,7 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
+from project_paths import CHECKPOINTS_DIR
 from scenario_config import ScenarioConfig
 
 EVAL_PROTOCOL_VERSION = 1
@@ -55,7 +56,7 @@ def resolve_model_path(model_arg: str, *, search_dir: Optional[str] = None) -> s
     form ("sac_v3_1600k") and paths relative to search_dir. Raises
     FileNotFoundError rather than guessing a default model."""
     candidates = [model_arg] if model_arg.endswith(".zip") else [model_arg + ".zip", model_arg]
-    bases = [os.getcwd()] + ([search_dir] if search_dir else [])
+    bases = [os.getcwd()] + ([search_dir] if search_dir else []) + [os.fspath(CHECKPOINTS_DIR)]
     for base in bases:
         for c in candidates:
             p = c if os.path.isabs(c) else os.path.join(base, c)

@@ -15,7 +15,7 @@ CARLA's measured walker collision half-extent; the protocol default is a
 conservative 0.3 m) to show how sensitive the contact count is to it.
 
 Usage (from src/):
-    ..\\venv\\Scripts\\python.exe -X utf8 analyze_rl_reaudit.py runs/rl_encounter_eval/<dir>
+    ..\\venv\\Scripts\\python.exe -X utf8 analyze_rl_reaudit.py ../artifacts/runs/rl_encounter_eval/<dir>
 Writes <dir>/reaudit_comparison.csv and <dir>/reaudit_report.json.
 """
 
@@ -28,10 +28,11 @@ import sys
 from collections import Counter
 
 from encounter_metrics import EncounterProtocol, compute_encounter_metrics
+from project_paths import RUNS_DIR
 from trace_schema import read_trace_csv
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_ARCHIVED = os.path.join(SRC_DIR, "runs", "20260417_202355", "sac_on_sweep_results.csv")
+DEFAULT_ARCHIVED = os.path.join(RUNS_DIR, "20260417_202355", "sac_on_sweep_results.csv")
 COLUMNS = ["episode", "run_id", "walker_cross", "target_mph", "trigger_ttc_s", "physics_label",
            "archived_outcome", "legacy_label", "protocol_outcome", "contact_speed_mps", "first_contact_time_s",
            "time_to_stop_s", "min_clearance_m", "contact_after_first_stop", "alt_radius_outcome",

@@ -10,7 +10,7 @@ how you go from "one interesting run" to "50 runs covering different
 conditions" without manually editing and re-running the script.
 
 Output structure (created automatically):
-    runs/
+    ../artifacts/runs/
       <sweep_timestamp>/
         run_0000/
           config.json      <- the ScenarioConfig used for that run
@@ -41,6 +41,7 @@ from datetime import datetime
 from itertools import product
 import random as _random
 from typing import List, Optional
+from project_paths import RUNS_DIR
 
 # CARLA path setup must happen before importing scenario modules.
 CARLA_ROOT = r"C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16"
@@ -182,14 +183,14 @@ def run_sweep(
     Args:
         configs:    List of ScenarioConfig objects to run (in order).
         output_dir: Directory to write results into. Defaults to
-                    runs/<timestamp> in the current working directory.
+                    ../artifacts/runs/<timestamp> in the current working directory.
 
     Returns:
         List of RunResult objects (one per config, None if a run crashed).
     """
     if output_dir is None:
         timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join("runs", timestamp)
+        output_dir = os.path.join(RUNS_DIR, timestamp)
 
     os.makedirs(output_dir, exist_ok=True)
     print(f"\n[sweep] Output directory: {os.path.abspath(output_dir)}")

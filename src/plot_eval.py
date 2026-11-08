@@ -29,10 +29,12 @@ matplotlib.use("Agg")   # headless — no display required
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from collections import defaultdict
+from project_paths import ANALYSIS_DIR
 
 # ── Load CSV ────────────────────────────────────────────────────────────────
-csv_path = sys.argv[1] if len(sys.argv) > 1 else "eval_results.csv"
-out_prefix = os.path.splitext(os.path.basename(csv_path))[0] + "_"
+csv_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ANALYSIS_DIR, "eval_results.csv")
+out_prefix = os.path.join(os.path.dirname(os.path.abspath(csv_path)),
+                          os.path.splitext(os.path.basename(csv_path))[0] + "_")
 rows = []
 with open(csv_path, newline="") as f:
     for r in csv.DictReader(f):

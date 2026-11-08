@@ -31,7 +31,10 @@ Requires a running CARLA 0.9.16 simulator instance (see the setup section in
 ## Repository layout
 
 - `src/` — current codebase: environment, training, evaluation, and plotting scripts.
+- `tests/` — automated offline regression tests.
 - `previous_src_tests/` — earlier exploratory test scripts, kept for reference.
+- `artifacts/` — generated research evidence and trained models (`runs/` and
+  `checkpoints/`); see `artifacts/README.md` before inspecting it in bulk.
 - Large binaries (trained model checkpoints, raw per-run telemetry, raw camera captures) are
   intentionally excluded from version control — see `.gitignore`.
 

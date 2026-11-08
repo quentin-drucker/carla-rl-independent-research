@@ -1,6 +1,6 @@
 """test27___fixed_profile_rescore.py
 
-Re-run last semester's final fixed-profile matched sweep (src/runs/20260417_202355:
+Re-run last semester's final fixed-profile matched sweep (artifacts/runs/20260417_202355:
 4 profiles x 200 configs) with trace recording, and score every run with the
 common encounter protocol -- the same onset, 8 s window and encounter_metrics
 used for the test26 baselines and the SAC v3 re-audit. Only then can fixed
@@ -22,7 +22,7 @@ Usage (from src/ in the venv; CARLA running):
     add --relaunch-carla to restart a crashed CARLA server automatically (renderless)
 
 Evidence (git-ignored, never overwritten; --resume only adds missing runs):
-    src/runs/fixed_profile_rescore/<timestamp>_fixed_profile_rescore_default/
+    artifacts/runs/fixed_profile_rescore/<timestamp>_fixed_profile_rescore_default/
         manifest.json, progress.log, summary.csv,
         run_XXXX/{trace.csv, metrics.json, result.json, run.json, console.log}
 """
@@ -42,11 +42,12 @@ import time
 from encounter_metrics import EncounterProtocol, compute_encounter_metrics
 from fixed_rescore_protocol import RUN_FAMILY, compare_to_archived, load_archived_runs, progress_line
 from physics_backend import BACKEND_DEFAULT, create_run_dir
+from project_paths import RUNS_DIR
 from rl_eval_protocol import file_sha256
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-RUNS_ROOT = os.path.join(SRC_DIR, "runs", RUN_FAMILY)
-DEFAULT_SWEEP = os.path.join(SRC_DIR, "runs", "20260417_202355")
+RUNS_ROOT = os.path.join(RUNS_DIR, RUN_FAMILY)
+DEFAULT_SWEEP = os.path.join(RUNS_DIR, "20260417_202355")
 PROTOCOL = EncounterProtocol(horizon_s=8.0)  # identical to test26 and the SAC re-audit
 SETTLE_S = PROTOCOL.horizon_s + 1.0           # archive used 3.0
 CARLA_EXE = r"C:\Users\qdruc\OneDrive\Desktop\CARLA_0.9.16\CarlaUE4.exe"

@@ -44,11 +44,12 @@ Usage (CARLA must already be running):
     python -X utf8 test15___physical_limits_rollover_open_location.py
 
 Writes one timestamped, non-overwritable run directory per case under
-runs/physics/<timestamp>_rollover_open_location/.
+../artifacts/runs/physics/<timestamp>_rollover_open_location/.
 """
 
 import datetime
 import os
+from project_paths import RUNS_DIR
 
 import carla
 
@@ -276,7 +277,7 @@ def _run_matrix(world, bp_lib, spawn_points, run_dir, repeat_suffix="", spectato
 
 def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join("runs", "physics", f"{timestamp}_{RUN_FAMILY}")
+    run_dir = os.path.join(RUNS_DIR, "physics", f"{timestamp}_{RUN_FAMILY}")
 
     client, world = connect_and_load_world(host=HOST, port=PORT, timeout_s=10.0, target_map=TARGET_MAP)
     enable_sync_mode(world, fixed_dt=FIXED_DT)

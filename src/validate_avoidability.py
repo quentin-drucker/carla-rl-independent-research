@@ -26,7 +26,7 @@ NOTE on ego_speed_at_trigger_mps:
 
 Usage:
     python validate_avoidability.py
-    python validate_avoidability.py runs/20260405_025448/sweep_summary.csv
+    python validate_avoidability.py ../artifacts/runs/20260405_025448/sweep_summary.csv
 """
 
 import sys

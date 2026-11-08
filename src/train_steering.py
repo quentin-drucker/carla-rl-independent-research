@@ -27,11 +27,11 @@ episodes.csv, checkpoints with the replay buffer, --resume, --relaunch-carla.
 
 Usage (CARLA running, default physics; from src/ in the venv):
     python -u -X utf8 train_steering.py --commit lock_at_onset --steps 50000
-    python -u -X utf8 train_steering.py --resume runs/steering_train/<run dir>
+    python -u -X utf8 train_steering.py --resume ../artifacts/runs/steering_train/<run dir>
     add --relaunch-carla to restart a crashed CARLA server (renderless) and continue
 
 Evidence (git-ignored):
-    src/runs/steering_train/<timestamp>_steering_train_<commit>_default/
+    artifacts/runs/steering_train/<timestamp>_steering_train_<commit>_default/
         manifest.json, progress.log, episodes.csv, checkpoints/, final_model.zip
 """
 
@@ -52,10 +52,11 @@ import gymnasium
 import numpy as np
 
 from physics_backend import BACKEND_DEFAULT, create_run_dir
+from project_paths import RUNS_DIR
 from rl_steering import STEER_COMMIT_MODES, SteeringRewardConfig, policy_should_act
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-RUNS_ROOT = os.path.join(SRC_DIR, "runs", "steering_train")
+RUNS_ROOT = os.path.join(RUNS_DIR, "steering_train")
 MPH_RANGE = (30.0, 50.0)
 TTC_RANGE_S = (0.3, 1.5)
 HAND_OVER_LEAD_S = 1.0

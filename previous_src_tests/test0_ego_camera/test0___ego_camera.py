@@ -17,7 +17,7 @@ def main():
     bp_lib = world.get_blueprint_library()      # returns a BlueprintLibrary object--is basically a template you can spawn (vehicles, pedestrians, sensors, traffic lights, etc.)
     actors = []  # keep track of actors so we can destroy everything cleanly at the end -- otherwise there'll be "ghost actors" accumulating in the world
 
-    out_dir = Path("out") / "rgb"
+    out_dir = Path(__file__).resolve().parents[2] / "artifacts" / "runs" / "legacy_ego_camera" / "rgb"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     simulation_duration = 20  # seconds
@@ -148,7 +148,7 @@ def main():
         
         print(f"✓ Ego + RGB camera spawned. Capturing for {simulation_duration} seconds...")
         time.sleep(simulation_duration) # This "sleep" just gives the sensor time to produce frames
-        print("✓ Done. Check: out/rgb/")
+        print(f"✓ Done. Check: {out_dir}")
 
     finally:
         # 5) Cleanup: stop sensors first, then destroy everything

@@ -35,7 +35,7 @@ Provenance rules:
     collision". CARLA 0.9.16 has no server-side backend getter, so "chrono"
     means: server launched with --chrono + template validation passed +
     enable_chrono_physics() returned without error + no collision.
-  - Each run gets a new, exclusive directory under src/runs/physics/
+  - Each run gets a new, exclusive directory under artifacts/runs/physics/
     (git-ignored); nothing is ever overwritten.
   - Actors are destroyed and asynchronous mode restored in `finally`, then
     the manifest/trace (possibly partial) are written so failures leave
@@ -57,6 +57,7 @@ import carla
 
 from carla_session import cleanup_session, enable_sync_mode, restore_async_mode
 from map_drivability import classify_point_drivability
+from project_paths import RUNS_DIR
 from physics_backend import (
     BACKEND_CHRONO,
     BACKEND_DEFAULT,
@@ -98,7 +99,7 @@ WEATHER_PRESET = "ClearNoon"
 STOPPED_MPS = 0.15
 STOP_HOLD_S = 0.5  # keep logging this long after the stop to see it settle
 RUN_FAMILY = "chrono_smoke"
-RUNS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs", "physics")
+RUNS_ROOT = os.path.join(RUNS_DIR, "physics")
 
 TERMINATION_STOPPED = "sequence_complete_stopped"
 TERMINATION_BRAKE_TIMEOUT = "brake_phase_timeout_not_stopped"

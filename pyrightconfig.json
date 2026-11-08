@@ -1,0 +1,12 @@
+{
+  "include": [
+    "src",
+    "tests"
+  ],
+  "exclude": [
+    "artifacts",
+    "previous_src_tests",
+    "src/_scratch",
+    "venv"
+  ]
+}

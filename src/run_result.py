@@ -6,8 +6,8 @@ scenario run. Saved as result.json alongside config.json.
 
 Usage:
     result = run_scenario(cfg)          # returned by test3's run_scenario()
-    result.to_json("runs/.../result.json")
-    result = RunResult.from_json("runs/.../result.json")
+    result.to_json("../artifacts/runs/.../result.json")
+    result = RunResult.from_json("../artifacts/runs/.../result.json")
     print_run_result(result)
 """
 

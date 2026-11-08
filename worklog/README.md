@@ -1,5 +1,10 @@
 # Worklogs
 
+> Artifact-path note (2026-11-04): historical entries written before the repository
+> reorganization may refer to `src/runs/` or to `runs/` while executing from `src/`.
+> Those artifacts now live under `artifacts/runs/`; the old wording is preserved because
+> worklogs record what was true at the time.
+
 A worklog is a running, dated record of what happened on one branch — what changed, why,
 what worked, what didn't. It exists so that writing the weekly advisor progress report,
 or a PR description, is compression of existing notes instead of trying to reconstruct a

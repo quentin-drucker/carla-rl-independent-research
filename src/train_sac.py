@@ -10,7 +10,7 @@ Usage:
 
 To stop early: press Ctrl+C — the most recent checkpoint is kept.
 Final model saved as: sac_v2_1600k.zip
-Checkpoints saved as: checkpoints/sac_v2_XXXXX_steps.zip
+Checkpoints saved as: ../artifacts/checkpoints/sac_v2_XXXXX_steps.zip
 
 =============================================================================
 IMPORTANT — RUN CARLA IN HEADLESS (NO WINDOW) MODE FOR OVERNIGHT TRAINING
@@ -55,6 +55,7 @@ import os
 import random
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import CheckpointCallback
+from project_paths import CHECKPOINTS_DIR
 from carla_aeb_env import CarlaAEBEnv
 from scenario_config import ScenarioConfig
 
@@ -134,8 +135,8 @@ if __name__ == "__main__":
     # --- Config ---
     TOTAL_STEPS      = 1_600_000
     CHECKPOINT_EVERY = 20_000
-    CHECKPOINT_DIR   = "checkpoints"
-    FINAL_PATH       = "sac_v3_1600k"
+    CHECKPOINT_DIR   = os.fspath(CHECKPOINTS_DIR)
+    FINAL_PATH       = os.path.join(CHECKPOINT_DIR, "sac_v3_1600k")
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -180,7 +181,7 @@ if __name__ == "__main__":
         print(f"{'='*55}\n")
 
     except KeyboardInterrupt:
-        interrupted_path = f"sac_v3_interrupted_{model.num_timesteps}steps"
+        interrupted_path = os.path.join(CHECKPOINT_DIR, f"sac_v3_interrupted_{model.num_timesteps}steps")
         model.save(interrupted_path)
         print(f"\n{'='*55}")
         print(f"  Training interrupted at step {model.num_timesteps:,}")

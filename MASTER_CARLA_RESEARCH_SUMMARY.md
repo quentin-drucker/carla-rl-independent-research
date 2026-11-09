@@ -2805,6 +2805,28 @@ reacts least to speed, distance and time to collision** and most to the pedestri
 policy's own previous steering, so braking is tied to the swerve rather than to stopping distance. Caveat:
 shuffling breaks the links between correlated inputs, so the ranking is meaningful, the exact sizes less so.
 
+**Two overnight retrains (2026-11-08/09, `d640e99`, 3 seeds each, 150k steps, same 15 plans, no brake-first).**
+(A) side-balanced settings with the hazard flag and both LiDAR inputs blanked (always 0 for the network, in
+training and evaluation); (B) side-balanced settings without the left-lane episodes, i.e. the seam fix as the
+only change from the old mixed models (a control for the Town10HD gain).
+
+| safe | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 | mean |
+|---|---|---|---|---|---|
+| side-balanced s1 / s2 / s3 | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 | 64.0 (70%) |
+| (A) no hazard flag, no LiDAR | 19 / 28 / 29 | 14 / 16 / 12 | 20 / 17 / 14 | 53 / 61 / 55 | 56.3 (61%) |
+| (B) control: no left-lane episodes | 31 / 31 / 27 | 9 / 12 / 8 | 14 / 21 / 5 | 54 / 64 / 40 | 52.7 (57%) |
+| old mixed (seam fix at evaluation only) | 26 / 30 / 29 | 14 / 6 / 14 | 8 / 3 / 18 | 48 / 39 / 61 | 49.3 (54%) |
+| rule | 32 | 14 | 20 | 66 | 66 (72%) |
+
+**(A) Removing the LiDAR inputs costs about 8 safe encounters per seed (64 -> 56 of 92)**, mostly on Town05
+(89 -> 76 of 96) and Town10HD (59 -> 51 of 72), with more collisions (82 -> 101 contacts). The hazard flag had no
+effect, so the loss is the two LiDAR inputs. **Unreliable as it is, the LiDAR signal carries information the
+models use**, consistent with the importance check; the reduced models are still above the old mixed ones.
+**(B) The left-lane episodes, not the seam fix, made the side-balanced gain**: without them Town10HD is 40 of 72
+(56%, seeds 5-21 of 24) vs 59 of 72 (82%, 18-21) with them, and the three-town mean is 52.7 vs 64.0; the seam fix
+alone is +3 over the old mixed models (49.3), within seed noise. One seed (s3) without left-lane episodes falls to
+5 of 24 on Town10HD, the old side habit. Caveat: 3 seeds per family; seed spreads overlap for (A).
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

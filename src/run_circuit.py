@@ -230,6 +230,8 @@ def main(argv=None):
             action, _ = policy.predict(obs, deterministic=True)
             inputs, q = obs, critic_values(policy, obs, action)
             obs, _, _, _, info = env.step(np.asarray(action))
+            if args.brake_first:
+                policy.armed = info["triggered"]
             policy_rows.append([info["tick"], info["sim_time_s"], info["triggered"], *np.asarray(inputs).tolist(),
                                 *np.asarray(action).tolist(), *q])
             if spec is not None:

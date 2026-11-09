@@ -2716,8 +2716,9 @@ the same spots every lap: the route planner's lane changes (1.5-7 m sideways wit
 waypoint 2-4 m behind the previous one), not the policy (its action is discarded before onset and its inputs
 hold no position); 29 of 30 such stretches on Town10HD sit at a lane-change jump. **Fixed in `1872b3f`:**
 each jump is a smoothstep ramp of up to 60 m kept out of junctions and hazard zones, so every hazard keeps
-its exact spot; mid-road lane changes went from 12-50 deg off the lane to ~5 deg (a full re-score is
-running). A 8-13 deg wobble after some junction exits is unchanged by smoothing: the lane follower coming out
+its exact spot; mid-road lane changes went from 12-50 deg off the lane to ~5 deg. Re-scored on all four
+towns (2026-11-02): **safety scores barely moved** (six policies 303 -> 311 safe of 738; scripted and rule
+within noise) — the fix removes the phantom swerves without changing the results. A 8-13 deg wobble after some junction exits is unchanged by smoothing: the lane follower coming out
 of turns. (2) One seed swerving right and passing, another left into the pedestrian: the side habit above.
 (3) The car holding speed toward a visible standing pedestrian and swerving at the last moment: the
 oracle-onset protocol (since 2026-10-02) keeps both policy and LiDAR braking off until onset at TTC 0.6-1.5 s,
@@ -2725,6 +2726,84 @@ while a "stationary" pedestrian stands in the lane the whole approach — a prot
 there is room to stop" is right: the under-braking above. Proposed order: brake-first rule (stopping
 feasibility; no retraining), side-balanced retrain, stationary pedestrian appearing at onset; reacting before
 onset is a bigger protocol change for Quentin / Izmirli to decide.
+
+**Brake-first rule (2026-11-02, `4348be8` + latch `1495714`).** Full brake and stay in the lane whenever
+braking alone stops in time (CARLA full brake 7.2 m/s², 0.06 s delay, 0.5 m margin); the policy otherwise.
+Once it fires after onset it keeps braking until the encounter ends: re-checked every tick it handed back to
+the policy ~0.1 s into the stop (the car barely slows while the brakes take hold, the margin ran out), and
+that caused all 23 of its failures above 1.35 s onset TTC. Same smoothed routes and hazards, six policies:
+
+| | Town05 /192 | Town01 /186 | Town02 /216 | Town10HD /144 | all /738 |
+|---|---|---|---|---|---|
+| policy | 134 | 58 | 60 | 59 | 311 (42%) |
+| + brake-first, per tick | 136 | 62 | 65 | 75 | 338 (46%) |
+| + brake-first, latched | 143 | 62 | 73 | 80 | **358 (49%)** |
+
+By onset TTC (all towns): **1.35-1.5 s: 66% -> 99% safe** (143/144; brake-only 100%, rule 92%);
+1.2-1.35 s: 49% -> 51% (the rule rarely fires there: braking alone does not quite stop by its physics, yet
+brake-only is 75% safe and the rule 90%, plausibly because edge walkers move out of the path); below 1.2 s
+unchanged (39% / 25%). Every seed but one improves (t05ctl_s1 60 -> 59, noise). The best seed with it (mixed_s3, 71 of 123) equals the steering rule (71); the
+side-habit seeds stay well below it. Brake-first answers observation (4) where braking can work; the short-warning
+cases are where the side-balanced retrain has to help.
+
+**Lane-seam bug (fixed 2026-11-02, `ab83737`).** Town05 road 37 has a ~6 cm gap between lanes -2 and -3 where
+CARLA returns no waypoint; the 0.05 m seam tolerance did not bridge it, so the passage scan stopped there and a
+car crossing it was scored off-road. Tolerance is now 0.1 m. Re-scored with the fix (same plans, same models):
+**Town05 off-road failures were almost all this bug** (mixed_s1-3: 19 -> 1; rule: 9 -> 0; collisions
+unchanged), so Town05 safe counts above are understated for every controller (mixed 67 -> 85 of 96, rule
+23 -> 32 of 32). Town02 and Town10HD are unchanged. The brake-first and control-seed Town05 numbers were not re-run.
+
+**Side-balanced retrain (2026-11-03, `ab83737`, `--left-lane-share 0.5`).** Mixed settings, but half of the
+Town05 training episodes approach the spot in the same-direction left lane, so the room is on the right as often
+as on the left. 3 seeds, 150k steps each; scored with the seam fix, no brake-first, against the mixed seeds
+re-scored the same way:
+
+| safe | Town05 /32 | Town02 /36 (held out) | Town10HD /24 (held out) | 3 towns /92 |
+|---|---|---|---|---|
+| side-balanced s1 / s2 / s3 | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 (70%) |
+| mixed s1 / s2 / s3 | 26 / 30 / 29 | 14 / 6 / 14 | 8 / 3 / 18 | 48 / 39 / 61 (54%) |
+| rule | 32 | 14 | 20 | 66 (72%) |
+
+**Town10HD (room on the right): 40% -> 82% safe, and the seed spread closes (75-88% vs 12-75%).** The old
+bad seeds mostly did not swerve at all there (13 and 11 of 24 encounters stayed within 0.5 m of the lane); every
+side-balanced seed swerved in nearly every encounter, to both sides. **Two side-balanced seeds match the rule
+(67 and 66 vs 66 of 92) without brake-first; one (s2) is lower on Town05.** Town02 rises a little (31% -> 41%),
+still the hardest town for everyone. Caveat: the new seeds differ from the old in two ways (left-lane episodes
+and the seam fix during training), so the gain cannot be split between them without a control retrain.
+
+**Brake-first on the side-balanced seeds (2026-11-08, eval only).** Same 15 plans, latched brake-first rule added:
+
+| safe | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 |
+|---|---|---|---|---|
+| side-balanced s1 / s2 / s3 | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 |
+| + brake-first | 32 / 26 / 32 | 14 / 17 / 16 | 21 / 22 / 18 | 67 / 65 / 66 (72%) |
+| rule | 32 | 14 | 20 | 66 (72%) |
+
+**Brake-first now adds almost nothing** (only the weakest seed, s2, gains: 59 -> 65); the side-balanced
+seeds already brake when braking can stop. Re-run on Town05 with the seam fix, the mixed seeds with brake-first
+score 27 / 29 / 30 of 32 (previously reported 22 / 25 / 25, understated by the seam bug), the same as without
+brake-first (26 / 30 / 29). **All three side-balanced seeds with brake-first tie the rule (65-67 vs 66 of 92).**
+
+**Town02's ceiling (same date, `_scratch/w9_shared_failures.py`, per encounter).** 16 of the 36 Town02 encounters
+are failed by every controller (the rule and all nine model runs, with and without brake-first), all with onset
+TTC 0.72-1.19 s on its narrow roads; Town10HD has 1 such encounter, Town05 none. So at most 20 of 36 Town02
+encounters are solved by anything tried, and the best runs reach 16-17 of those 20. This is a ceiling of the
+oracle-onset protocol on narrow roads, not a model weakness (not proven unavoidable: no tested controller acts
+before onset). **The models and the rule fail partly different encounters:** on Town02 and Town10HD, 9 encounters
+the rule fails are passed by at least one side-balanced run (all short warning, TTC 0.76-0.99 s), and 11 the
+rule passes are failed by one, so the learned policy is not a copy of the wider-side rule even where it ties it.
+
+**Which inputs the models use (2026-11-08, `artifacts/runs/analysis/w9_input_importance.{csv,png}`).**
+Permutation importance on ~6.5-7k recorded decision ticks per model (policy in charge, car moving, pedestrian
+ahead; replay reproduces the recorded actions): shuffle one input, measure the change in brake and steering aim.
+**The hazard flag has exactly zero effect** (it is constant while the policy drives). **No input dominates**: the
+calculated inputs (reachable edges, predicted pedestrian position) sit mid-pack, below the raw pedestrian
+sideways speed and the car's heading. **LiDAR obstacle proximity is the second most influential input**, although
+it misses about a third of the ticks with the pedestrian in the car's path: the models lean on an unreliable
+signal (this corrects the Nov 4 note to Prof. Izmirli that the LiDAR inputs "add almost nothing"). **Braking
+reacts least to speed, distance and time to collision** and most to the pedestrian's sideways speed and the
+policy's own previous steering, so braking is tied to the swerve rather than to stopping distance. Caveat:
+shuffling breaks the links between correlated inputs, so the ranking is meaningful, the exact sizes less so.
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 

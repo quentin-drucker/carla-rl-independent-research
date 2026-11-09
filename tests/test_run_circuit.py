@@ -88,6 +88,30 @@ class BrakeFirstTests(unittest.TestCase):
         self.assertEqual(bf.predict(obs)[0].tolist(), [0.30000001192092896, -1.0])
         self.assertEqual(bf.critic, "the inner critic")
 
+    def test_once_fired_after_onset_it_keeps_braking_until_disarmed(self):
+        from eval_policy_encounters import _BrakeFirst
+        from rl_steering import STEERING_STATE_DIM, STATE_DIM, STEERING_STATE_NAMES
+
+        class Inner:
+            def predict(self, obs, deterministic=True):
+                return np.array([0.3, -1.0], dtype=np.float32), None
+
+        obs = np.zeros(STEERING_STATE_DIM, dtype=np.float32)
+        obs[0] = 15.0 / 26.82
+        line = STATE_DIM + STEERING_STATE_NAMES.index("distance_to_pedestrian_line_norm")
+        bf = _BrakeFirst(Inner())
+        obs[line] = 30.0 / 80.0
+        bf.predict(obs)  # before onset (not armed): no latch
+        obs[line] = 12.0 / 80.0
+        self.assertEqual(bf.predict(obs)[0].tolist()[1], -1.0)
+        bf.armed = True
+        obs[line] = 30.0 / 80.0
+        bf.predict(obs)
+        obs[line] = 12.0 / 80.0  # the margin ran out while the brakes took hold: keep braking
+        self.assertEqual(bf.predict(obs)[0].tolist(), [1.0, 0.0])
+        bf.armed = False  # encounter over
+        self.assertEqual(bf.predict(obs)[0].tolist()[1], -1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

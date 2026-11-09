@@ -98,6 +98,10 @@ def _parse_args(argv=None):
     p.add_argument("--blank-inputs", nargs="+", default=[], metavar="NAME",
                    help="input-ablation: these observation inputs always read 0 for the network (saved in the "
                    "manifest; run_circuit.py blanks the same ones for this model)")
+    p.add_argument("--raw-inputs", action="store_true",
+                   help="input-reduction retrain: the pedestrian's current position instead of the predicted one, "
+                   "and road edges without the pedestrian's zone (CarlaAEBEnv raw_inputs; run_circuit.py follows "
+                   "the manifest)")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     p.add_argument("--relaunch-carla", action="store_true",
@@ -164,13 +168,14 @@ class BlankedPolicy:
         return self.inner.predict(self.blank(obs), deterministic=deterministic)
 
 
-def trained_blank_inputs(model_path):
-    """The --blank-inputs a model was trained with, from the training manifest next to it ([] if none)."""
+def trained_setting(model_path, key, default):
+    """A setting a model was trained with (e.g. "blank_inputs", "raw_inputs"), from the training manifest
+    next to it; default if there is no manifest or no such key."""
     manifest = os.path.join(os.path.dirname(os.path.abspath(model_path)), "manifest.json")
     if not os.path.isfile(manifest):
-        return []
+        return default
     with open(manifest) as f:
-        return json.load(f).get("blank_inputs", [])
+        return json.load(f).get(key, default)
 
 
 class SkipApproach(gymnasium.Wrapper):
@@ -391,7 +396,7 @@ def main(argv=None):
             "walker_speed_mps": args.walker_speed, "walker_change_s": args.walker_change_s,
             "lock_delay_s": args.lock_delay_s, "road_right_limit_m": args.road_right_limit_m,
             "merge_back": args.merge_back, "circuit_map": args.circuit_map, "left_lane_share": args.left_lane_share,
-            "blank_inputs": args.blank_inputs,
+            "blank_inputs": args.blank_inputs, "raw_inputs": args.raw_inputs,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -426,7 +431,7 @@ def main(argv=None):
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
                           road_right_limit_m=manifest.get("road_right_limit_m"),
                           merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]),
-                          port=args.port, **circuit)
+                          raw_inputs=manifest.get("raw_inputs", False), port=args.port, **circuit)
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),

@@ -163,7 +163,7 @@ class BlankInputsTests(unittest.TestCase):
         import json
         import tempfile
         import numpy as np
-        from train_steering import BlankedPolicy, blank_indices, trained_blank_inputs
+        from train_steering import BlankedPolicy, blank_indices, trained_setting
 
         class Echo:
             critic = "inner-critic"
@@ -177,7 +177,39 @@ class BlankInputsTests(unittest.TestCase):
         self.assertEqual(np.flatnonzero(seen == 0).tolist(), idx)
         self.assertEqual(p.critic, "inner-critic")  # attributes pass through (critic recording)
         with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(trained_blank_inputs(f"{d}/final_model.zip"), [])  # no manifest
+            self.assertEqual(trained_setting(f"{d}/final_model.zip", "blank_inputs", []), [])  # no manifest
             with open(f"{d}/manifest.json", "w") as f:
                 json.dump({"blank_inputs": ["hazard_active"]}, f)
-            self.assertEqual(trained_blank_inputs(f"{d}/final_model.zip"), ["hazard_active"])
+            self.assertEqual(trained_setting(f"{d}/final_model.zip", "blank_inputs", []), ["hazard_active"])
+            self.assertFalse(trained_setting(f"{d}/final_model.zip", "raw_inputs", False))  # older manifest
+
+
+class RawInputsTests(unittest.TestCase):
+    """Input-reduction retrain (Week 10): current pedestrian position, road-only passage."""
+
+    def test_raw_mode_drops_the_prediction_and_the_pedestrian_zone(self):
+        from types import SimpleNamespace as NS
+        from carla_aeb_env import CarlaAEBEnv
+
+        def env(raw):
+            e = CarlaAEBEnv.__new__(CarlaAEBEnv)
+            e._raw_inputs, e._road_extent = raw, (-7.0, 7.0)  # two lanes each side: room past the pedestrian
+            e._frame_origin, e._frame_right = (0.0, 0.0), (0.0, 1.0)  # road runs along +x, right = +y
+            e._vehicle = NS(get_transform=lambda: NS(location=NS(x=-20.0, y=0.0), rotation=NS(yaw=0.0)))
+            e._walker = NS(get_location=lambda: NS(x=0.0, y=-2.0), get_velocity=lambda: NS(x=0.0, y=1.5))
+            return e._steering_measurements(ego_speed_mps=10.0)  # 2 s to the line: predicted at +1.0 m
+
+        cooked_passage, cooked = env(False)
+        raw_passage, raw = env(True)
+        self.assertAlmostEqual(cooked["pedestrian_lateral_m"], 1.0)
+        self.assertAlmostEqual(raw["pedestrian_lateral_m"], -2.0)
+        self.assertEqual(raw["pedestrian_lateral_speed_mps"], cooked["pedestrian_lateral_speed_mps"])
+        self.assertEqual(len(raw_passage.intervals), 1)   # the whole road, nothing cut out
+        self.assertEqual(len(cooked_passage.intervals), 2)  # the predicted pedestrian's zone cut out
+        self.assertGreater(raw_passage.right_edge_m - raw_passage.left_edge_m,
+                           cooked_passage.right_edge_m - cooked_passage.left_edge_m - 1e-9)
+
+    def test_flag_reaches_the_manifest_parser(self):
+        from train_steering import _parse_args
+        self.assertTrue(_parse_args(["--commit", "per_tick", "--raw-inputs"]).raw_inputs)
+        self.assertFalse(_parse_args(["--commit", "per_tick"]).raw_inputs)

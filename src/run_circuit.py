@@ -177,6 +177,11 @@ def main(argv=None):
         policy = SAC.load(model_path)
         if policy.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {policy.observation_space.shape} != env {env.observation_space.shape}")
+        from train_steering import BlankedPolicy, blank_indices, trained_blank_inputs
+        blanked = trained_blank_inputs(model_path)
+        if blanked:  # an input-ablation model: it must see the inputs blanked exactly as in training
+            print(f"[circuit] model trained with blanked inputs {blanked}; blanking them here too")
+            policy = BlankedPolicy(policy, blank_indices(blanked))
     elif args.scripted_aim:
         import rl_steering
         model_path = f"scripted_aim:{args.scripted_aim},brake={args.fixed_brake:g}"
@@ -339,6 +344,8 @@ def critic_values(policy, obs, action):
         return ["", ""]
     import torch
 
+    if hasattr(policy, "blank"):  # an input-ablation model: the critics see what the actor saw
+        obs = policy.blank(obs)
     obs_t, _ = policy.policy.obs_to_tensor(obs)
     act_t = torch.as_tensor(policy.policy.scale_action(np.asarray(action))[None], device=policy.device)  # critics see [-1, 1]
     with torch.no_grad():

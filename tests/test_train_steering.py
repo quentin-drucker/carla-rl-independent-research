@@ -123,3 +123,61 @@ class WalkerSpawnRetryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BlankInputsTests(unittest.TestCase):
+    """Input ablation (2026-11-08): blanked inputs read 0 in training and, for that model, in evaluation."""
+
+    def test_wrapper_zeroes_only_the_named_inputs_on_reset_and_step(self):
+        import gymnasium
+        import numpy as np
+        from train_steering import BlankInputs, blank_indices, observation_names
+
+        class Ones(gymnasium.Env):
+            observation_space = gymnasium.spaces.Box(-1.0, 1.0, (14,), np.float32)
+            action_space = gymnasium.spaces.Box(-1.0, 1.0, (2,), np.float32)
+
+            def reset(self, **kwargs):
+                return np.ones(14, np.float32), {}
+
+            def step(self, action):
+                return np.ones(14, np.float32), 0.0, False, False, {}
+
+        names = ["hazard_active", "obstacle_proximity_norm", "stopping_feasibility_norm"]
+        idx = blank_indices(names)
+        self.assertEqual(len(observation_names()), 14)
+        env = BlankInputs(Ones(), idx)
+        for obs in (env.reset()[0], env.step(np.zeros(2))[0]):
+            self.assertEqual(sorted(np.flatnonzero(obs == 0).tolist()), sorted(idx))
+            self.assertEqual(int((obs == 1).sum()), 11)
+        self.assertTrue((BlankInputs(Ones(), []).reset()[0] == 1).all())  # empty list = unchanged
+
+    def test_unknown_input_name_is_refused(self):
+        from train_steering import _parse_args, blank_indices
+        with self.assertRaises(ValueError):
+            blank_indices(["no_such_input"])
+        with self.assertRaises(SystemExit):
+            _parse_args(["--commit", "per_tick", "--blank-inputs", "no_such_input"])
+
+    def test_policy_wrapper_feeds_blanked_inputs_and_reads_the_training_manifest(self):
+        import json
+        import tempfile
+        import numpy as np
+        from train_steering import BlankedPolicy, blank_indices, trained_blank_inputs
+
+        class Echo:
+            critic = "inner-critic"
+
+            def predict(self, obs, deterministic=True):
+                return obs, None
+
+        idx = blank_indices(["hazard_active"])
+        p = BlankedPolicy(Echo(), idx)
+        seen, _ = p.predict(np.ones(14, np.float32))
+        self.assertEqual(np.flatnonzero(seen == 0).tolist(), idx)
+        self.assertEqual(p.critic, "inner-critic")  # attributes pass through (critic recording)
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(trained_blank_inputs(f"{d}/final_model.zip"), [])  # no manifest
+            with open(f"{d}/manifest.json", "w") as f:
+                json.dump({"blank_inputs": ["hazard_active"]}, f)
+            self.assertEqual(trained_blank_inputs(f"{d}/final_model.zip"), ["hazard_active"])

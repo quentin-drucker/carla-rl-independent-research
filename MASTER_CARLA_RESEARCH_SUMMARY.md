@@ -2771,6 +2771,40 @@ side-balanced seed swerved in nearly every encounter, to both sides. **Two side-
 still the hardest town for everyone. Caveat: the new seeds differ from the old in two ways (left-lane episodes
 and the seam fix during training), so the gain cannot be split between them without a control retrain.
 
+**Brake-first on the side-balanced seeds (2026-11-08, eval only).** Same 15 plans, latched brake-first rule added:
+
+| safe | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 |
+|---|---|---|---|---|
+| side-balanced s1 / s2 / s3 | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 |
+| + brake-first | 32 / 26 / 32 | 14 / 17 / 16 | 21 / 22 / 18 | 67 / 65 / 66 (72%) |
+| rule | 32 | 14 | 20 | 66 (72%) |
+
+**Brake-first now adds almost nothing** (only the weakest seed, s2, gains: 59 -> 65); the side-balanced
+seeds already brake when braking can stop. Re-run on Town05 with the seam fix, the mixed seeds with brake-first
+score 27 / 29 / 30 of 32 (previously reported 22 / 25 / 25, understated by the seam bug), the same as without
+brake-first (26 / 30 / 29). **All three side-balanced seeds with brake-first tie the rule (65-67 vs 66 of 92).**
+
+**Town02's ceiling (same date, `_scratch/w9_shared_failures.py`, per encounter).** 16 of the 36 Town02 encounters
+are failed by every controller (the rule and all nine model runs, with and without brake-first), all with onset
+TTC 0.72-1.19 s on its narrow roads; Town10HD has 1 such encounter, Town05 none. So at most 20 of 36 Town02
+encounters are solved by anything tried, and the best runs reach 16-17 of those 20. This is a ceiling of the
+oracle-onset protocol on narrow roads, not a model weakness (not proven unavoidable: no tested controller acts
+before onset). **The models and the rule fail partly different encounters:** on Town02 and Town10HD, 9 encounters
+the rule fails are passed by at least one side-balanced run (all short warning, TTC 0.76-0.99 s), and 11 the
+rule passes are failed by one, so the learned policy is not a copy of the wider-side rule even where it ties it.
+
+**Which inputs the models use (2026-11-08, `artifacts/runs/analysis/w9_input_importance.{csv,png}`).**
+Permutation importance on ~6.5-7k recorded decision ticks per model (policy in charge, car moving, pedestrian
+ahead; replay reproduces the recorded actions): shuffle one input, measure the change in brake and steering aim.
+**The hazard flag has exactly zero effect** (it is constant while the policy drives). **No input dominates**: the
+calculated inputs (reachable edges, predicted pedestrian position) sit mid-pack, below the raw pedestrian
+sideways speed and the car's heading. **LiDAR obstacle proximity is the second most influential input**, although
+it misses about a third of the ticks with the pedestrian in the car's path: the models lean on an unreliable
+signal (this corrects the Nov 4 note to Prof. Izmirli that the LiDAR inputs "add almost nothing"). **Braking
+reacts least to speed, distance and time to collision** and most to the pedestrian's sideways speed and the
+policy's own previous steering, so braking is tied to the swerve rather than to stopping distance. Caveat:
+shuffling breaks the links between correlated inputs, so the ranking is meaningful, the exact sizes less so.
+
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
 **What seemed meaningful:** Presentation/log plots showed an approximately 45% SAC full-stop rate at 45 mph versus roughly 15–22.5% for fixed profiles.

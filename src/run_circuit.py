@@ -160,9 +160,15 @@ def main(argv=None):
     from steer_brake_baseline import baseline_scenario_config
     from trajectory_recording import TrajectoryRecorder
 
+    from train_steering import BlankedPolicy, blank_indices, trained_setting
+    model_path = resolve_model_path(args.model, search_dir=SRC_DIR) if args.model else None
+    raw = bool(model_path) and trained_setting(model_path, "raw_inputs", False)  # the env must match the model's
+    if raw:
+        print("[circuit] model trained with raw inputs (current pedestrian position, road-only passage)")
     env = CarlaAEBEnv(cfg=baseline_scenario_config(args.mph, 1.0), steer_commit=args.steer_commit,
                       lock_delay_s=args.lock_delay_s, merge_back=True, u_bounds=(args.u_min, 1.0),
-                      map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port)
+                      map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port,
+                      raw_inputs=raw)
     route = loop_route(env._world, args.laps)
     env._route_builder = lambda world: route
     plan, route_s, route_yaws, env._route_points_xyz = plan_hazards(route[1], args)
@@ -173,10 +179,13 @@ def main(argv=None):
 
     if args.model:
         from stable_baselines3 import SAC
-        model_path = resolve_model_path(args.model, search_dir=SRC_DIR)
         policy = SAC.load(model_path)
         if policy.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {policy.observation_space.shape} != env {env.observation_space.shape}")
+        blanked = trained_setting(model_path, "blank_inputs", [])
+        if blanked:  # an input-ablation model: it must see the inputs blanked exactly as in training
+            print(f"[circuit] model trained with blanked inputs {blanked}; blanking them here too")
+            policy = BlankedPolicy(policy, blank_indices(blanked))
     elif args.scripted_aim:
         import rl_steering
         model_path = f"scripted_aim:{args.scripted_aim},brake={args.fixed_brake:g}"
@@ -200,7 +209,7 @@ def main(argv=None):
                    "model_path": model_path, "model_sha256": file_sha256(model_path) if args.model else None,
                    "map": args.map, "route_m": route_len, "lap_m": lap_len, "physics_backend": BACKEND_DEFAULT,
                    "protocol": PROTOCOL.__dict__, "merge_back": True, "lane_changes_smoothed": True, "same_direction_passage": True,
-                   "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
+                   "raw_inputs": raw, "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
                    "versions": _versions()}, f, indent=2)
     print(f"[circuit] {args.map}: {args.laps} lap(s) of {lap_len:.0f} m, {len(plan)} hazards | policy {os.path.basename(model_path)}")
     print(f"[circuit] evidence: {out_dir}")
@@ -339,6 +348,8 @@ def critic_values(policy, obs, action):
         return ["", ""]
     import torch
 
+    if hasattr(policy, "blank"):  # an input-ablation model: the critics see what the actor saw
+        obs = policy.blank(obs)
     obs_t, _ = policy.policy.obs_to_tensor(obs)
     act_t = torch.as_tensor(policy.policy.scale_action(np.asarray(action))[None], device=policy.device)  # critics see [-1, 1]
     with torch.no_grad():

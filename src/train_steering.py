@@ -95,16 +95,87 @@ def _parse_args(argv=None):
     p.add_argument("--left-lane-share", type=float, default=0.0,
                    help="with --circuit-map: share of episodes approaching in the same-direction lane left of the "
                    "route's, so the room is on the right (side-balanced training)")
+    p.add_argument("--blank-inputs", nargs="+", default=[], metavar="NAME",
+                   help="input-ablation: these observation inputs always read 0 for the network (saved in the "
+                   "manifest; run_circuit.py blanks the same ones for this model)")
+    p.add_argument("--raw-inputs", action="store_true",
+                   help="input-reduction retrain: the pedestrian's current position instead of the predicted one, "
+                   "and road edges without the pedestrian's zone (CarlaAEBEnv raw_inputs; run_circuit.py follows "
+                   "the manifest)")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     p.add_argument("--relaunch-carla", action="store_true",
                    help="if CARLA stops answering, restart it renderless (default physics, no --chrono) and continue")
     args = p.parse_args(argv)
+    try:
+        blank_indices(args.blank_inputs)
+    except ValueError as exc:
+        p.error(str(exc))
     if not (args.commit or args.resume):
         p.error("give --commit for a new run, or --resume")
     if args.relaunch_carla and args.port != 2000:
         p.error("--relaunch-carla restarts the port-2000 server only (and kills every CARLA process)")
     return args
+
+
+def observation_names():
+    """The observation's input names in order (6 braking-state inputs, then the 8 steering inputs)."""
+    from rl_reward_design import STATE_SPEC
+    from rl_steering import STEERING_STATE_NAMES
+    return [s["name"] for s in STATE_SPEC] + list(STEERING_STATE_NAMES)
+
+
+def blank_indices(names):
+    names, order = list(names or []), observation_names()
+    unknown = [n for n in names if n not in order]
+    if unknown:
+        raise ValueError(f"unknown input(s) {unknown}; known: {order}")
+    return [order.index(n) for n in names]
+
+
+def blank_obs(obs, idx):
+    """A copy of obs with the inputs at idx set to 0 (the network then cannot use them)."""
+    out = np.array(obs, dtype=np.float32, copy=True)
+    out[..., idx] = 0.0
+    return out
+
+
+class BlankInputs(gymnasium.ObservationWrapper):
+    """Input ablation during training: the listed inputs always read 0 (no-op for an empty list)."""
+
+    def __init__(self, env, idx):
+        super().__init__(env)
+        self.idx = list(idx)
+
+    def observation(self, observation):
+        return blank_obs(observation, self.idx) if self.idx else observation
+
+
+class BlankedPolicy:
+    """Input ablation at evaluation: the wrapped model sees the same blanked inputs it was trained with.
+    Attributes are the wrapped model's; blank() lets the critic recording use the same view."""
+
+    def __init__(self, inner, idx):
+        self.inner, self.idx = inner, list(idx)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def blank(self, obs):
+        return blank_obs(obs, self.idx)
+
+    def predict(self, obs, deterministic=True):
+        return self.inner.predict(self.blank(obs), deterministic=deterministic)
+
+
+def trained_setting(model_path, key, default):
+    """A setting a model was trained with (e.g. "blank_inputs", "raw_inputs"), from the training manifest
+    next to it; default if there is no manifest or no such key."""
+    manifest = os.path.join(os.path.dirname(os.path.abspath(model_path)), "manifest.json")
+    if not os.path.isfile(manifest):
+        return default
+    with open(manifest) as f:
+        return json.load(f).get(key, default)
 
 
 class SkipApproach(gymnasium.Wrapper):
@@ -325,6 +396,7 @@ def main(argv=None):
             "walker_speed_mps": args.walker_speed, "walker_change_s": args.walker_change_s,
             "lock_delay_s": args.lock_delay_s, "road_right_limit_m": args.road_right_limit_m,
             "merge_back": args.merge_back, "circuit_map": args.circuit_map, "left_lane_share": args.left_lane_share,
+            "blank_inputs": args.blank_inputs, "raw_inputs": args.raw_inputs,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -359,7 +431,7 @@ def main(argv=None):
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
                           road_right_limit_m=manifest.get("road_right_limit_m"),
                           merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]),
-                          port=args.port, **circuit)
+                          raw_inputs=manifest.get("raw_inputs", False), port=args.port, **circuit)
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),
@@ -367,7 +439,8 @@ def main(argv=None):
                         encounter_distance_m=CIRCUIT_APPROACH_M if manifest.get("circuit_map") else None)
         if len(maps) > 1:
             env = RotateMaps(env, builders)
-        return SkipApproach(env, random.Random(seed * 1_000_003 + timesteps_done), scenario)
+        env = SkipApproach(env, random.Random(seed * 1_000_003 + timesteps_done), scenario)
+        return BlankInputs(env, blank_indices(manifest.get("blank_inputs", [])))
 
     env, model, attempts = None, None, 0
     while True:

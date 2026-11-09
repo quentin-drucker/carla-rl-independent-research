@@ -353,6 +353,9 @@ def main(argv=None):
     else:
         from stable_baselines3 import SAC
         model_path = resolve_model_path(args.model, search_dir=SRC_DIR)
+        from train_steering import trained_setting
+        if trained_setting(model_path, "raw_inputs", False) or trained_setting(model_path, "blank_inputs", []):
+            raise SystemExit("this model was trained with raw or blanked inputs: evaluate it with run_circuit.py")
         model = SAC.load(model_path)
         episodes = [(cfg, None, model) for cfg in configs]
     env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit,

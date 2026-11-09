@@ -2166,7 +2166,7 @@ server was confirmed launched without `--chrono`):
   and protocol labels.
 
 **Re-audit of v3 on last semester's 200-configuration matched grid**
-(`artifacts/runs/rl_encounter_eval/20261004_192904_rl_encounter_eval_default`, git `0bcc0e6`
+(`artifacts/runs/rl_encounter_eval/20261004_192904_rl_encounter_eval_default`, git `5aedef7`
 clean, model `sac_v3_1600k.zip` SHA-256 `ef04f2fd04aa...`):
 
 | | Archived (`eval_sac_on_sweep.py`) | Protocol (`encounter_metrics`) |
@@ -2232,7 +2232,7 @@ server renderless with `-RenderOffScreen`, no `--chrono`):
 - `src/analyze_controller_comparison.py` matched the 200 scenarios across the four
   profiles and SAC v3 (from the Phase 1 re-audit) and compared contacts per scenario.
 - Evidence: `artifacts/runs/fixed_profile_rescore/20261004_203248_fixed_profile_rescore_default`
-  (git `10ec7a0`, crash-recovery resume at `ec50109`; the scenario code path is identical).
+  (git `0dc88f5`, crash-recovery resume at `717039f`; the scenario code path is identical).
 
 **Reproduction:** **800/800 runs match the archive exactly on everything fixed at onset**
 (trigger time, speed and distance at trigger, hazard engagement). Time-to-stop differs in
@@ -2479,7 +2479,7 @@ crash):
   was too strong.
 
 **Retrain, 2026-10-12: enough clearance 1.0 m and an aim-change penalty (0.07 per unit of
-u change), seeds 1-3 x both versions, 150k steps** (commit `66efc8f`; runs
+u change), seeds 1-3 x both versions, 150k steps** (commit `6de610d`; runs
 `artifacts/runs/steering_train/20261012_081049...` to `20261012_143607...`; evaluation folders
 named in `steering_train/eval_<mode>_s<seed>_1m_<50k|150k>.log`):
 - **Safety unchanged: all 12 evaluations are 10 of 12 safe, contact only at TTC 0.4 s.**
@@ -2666,10 +2666,10 @@ waypoint positions). Town03 does not work yet: the lane-follower loses the route
   many encounters end with the car waiting beside a pedestrian until the encounter times out.
 
 **Firmer numbers and a held-out town (2026-10-26 night).** Fixes first: a stopped car may drive on past a
-pedestrian standing beside it, holding its own lateral position (`808bd53`, `ac90472`); a car wedged after
-a contact is put back on the route and counted (`2a4d7de`); the lane-follower searched the whole route
+pedestrian standing beside it, holding its own lateral position (`d649de2`, `a8a811f`); a car wedged after
+a contact is put back on the route and counted (`b6653d7`); the lane-follower searched the whole route
 for its nearest point and snapped onto the opposite leg where a route comes back along the same street
-(Town01), now a window around the last match (`1164dba`).
+(Town01), now a window around the last match (`6f460cc`).
 - **Town05, 32 hazards (plans 0-3): per_tick 21 / 23 / 24 safe; full brake + full left 24; brake only 12;
   full right 12; best scripted per hazard 27.** With twice the hazards and no more "safe" waiting, the
   policy MATCHES the best fixed maneuver, it does not beat it. Off-road clipping at the route planner's
@@ -2682,9 +2682,9 @@ for its nearest point and snapped onto the opposite leg where a route comes back
   every controller.
 
 **Narrow-road training and two held-out towns (2026-10-31 / 11-01).** Training rotates towns every 20
-episodes (`--circuit-map Town05_Opt Town01_Opt`, `d87deba`); a rule baseline `wider_side` (full brake, full
+episodes (`--circuit-map Town05_Opt Town01_Opt`, `f44547b`); a rule baseline `wider_side` (full brake, full
 swerve to the side with more passage room, none if neither); the circuit records the policy's 14 inputs, 2
-outputs and both critic values per tick (`32464a3`). 3 seeds x 150k "mixed" (Town05+Town01) and a Town05-only
+outputs and both critic values per tick (`387883a`). 3 seeds x 150k "mixed" (Town05+Town01) and a Town05-only
 control at the same code (last week's models predate the drive-on fixes). 169 circuit runs, 2 laps x 4
 hazards; Town02 (narrow) and Town10HD (wide) never trained on. Safe % per seed:
 
@@ -2708,13 +2708,13 @@ hazards; Town02 (narrow) and Town10HD (wide) never trained on. Safe % per seed:
 - **Policies under-brake when braking would do.** By onset TTC 0.6-0.9 / 0.9-1.2 / 1.2-1.5 s: brake only
   9 / 4 / 77% safe, wider-side rule 48 / 32 / 91%, policies 39 / 26 / 56% with first-0.5 s brake 0.47 / 0.49 /
   0.56 (barely scales with the time available).
-- Infrastructure: a blocked walker spawn redraws the training spot (`064a427`) or skips the circuit hazard
-  (`32464a3`); map loads get 60 s (`379ef38`, Town10HD needs > 10 s); `--port` for a second CARLA server.
+- Infrastructure: a blocked walker spawn redraws the training spot (`d9f911a`) or skips the circuit hazard
+  (`387883a`); map loads get 60 s (`5537c5f`, Town10HD needs > 10 s); `--port` for a second CARLA server.
 
 **What Quentin saw watching laps (2026-11-01), and what explains it.** (1) Swerves with no pedestrian at
 the same spots every lap: the route planner's lane changes (1.5-7 m sideways within a few metres, sometimes a
 waypoint 2-4 m behind the previous one), not the policy (its action is discarded before onset and its inputs
-hold no position); 29 of 30 such stretches on Town10HD sit at a lane-change jump. **Fixed in `1872b3f`:**
+hold no position); 29 of 30 such stretches on Town10HD sit at a lane-change jump. **Fixed in `7497357`:**
 each jump is a smoothstep ramp of up to 60 m kept out of junctions and hazard zones, so every hazard keeps
 its exact spot; mid-road lane changes went from 12-50 deg off the lane to ~5 deg. Re-scored on all four
 towns (2026-11-02): **safety scores barely moved** (six policies 303 -> 311 safe of 738; scripted and rule
@@ -2727,7 +2727,7 @@ there is room to stop" is right: the under-braking above. Proposed order: brake-
 feasibility; no retraining), side-balanced retrain, stationary pedestrian appearing at onset; reacting before
 onset is a bigger protocol change for Quentin / Izmirli to decide.
 
-**Brake-first rule (2026-11-02, `4348be8` + latch `1495714`).** Full brake and stay in the lane whenever
+**Brake-first rule (2026-11-02, `6df9894` + latch `79297f2`).** Full brake and stay in the lane whenever
 braking alone stops in time (CARLA full brake 7.2 m/s², 0.06 s delay, 0.5 m margin); the policy otherwise.
 Once it fires after onset it keeps braking until the encounter ends: re-checked every tick it handed back to
 the policy ~0.1 s into the stop (the car barely slows while the brakes take hold, the margin ran out), and
@@ -2746,14 +2746,14 @@ unchanged (39% / 25%). Every seed but one improves (t05ctl_s1 60 -> 59, noise). 
 side-habit seeds stay well below it. Brake-first answers observation (4) where braking can work; the short-warning
 cases are where the side-balanced retrain has to help.
 
-**Lane-seam bug (fixed 2026-11-02, `ab83737`).** Town05 road 37 has a ~6 cm gap between lanes -2 and -3 where
+**Lane-seam bug (fixed 2026-11-02, `1d41566`).** Town05 road 37 has a ~6 cm gap between lanes -2 and -3 where
 CARLA returns no waypoint; the 0.05 m seam tolerance did not bridge it, so the passage scan stopped there and a
 car crossing it was scored off-road. Tolerance is now 0.1 m. Re-scored with the fix (same plans, same models):
 **Town05 off-road failures were almost all this bug** (mixed_s1-3: 19 -> 1; rule: 9 -> 0; collisions
 unchanged), so Town05 safe counts above are understated for every controller (mixed 67 -> 85 of 96, rule
 23 -> 32 of 32). Town02 and Town10HD are unchanged. The brake-first and control-seed Town05 numbers were not re-run.
 
-**Side-balanced retrain (2026-11-03, `ab83737`, `--left-lane-share 0.5`).** Mixed settings, but half of the
+**Side-balanced retrain (2026-11-03, `1d41566`, `--left-lane-share 0.5`).** Mixed settings, but half of the
 Town05 training episodes approach the spot in the same-direction left lane, so the room is on the right as often
 as on the left. 3 seeds, 150k steps each; scored with the seam fix, no brake-first, against the mixed seeds
 re-scored the same way:
@@ -2804,6 +2804,50 @@ signal (this corrects the Nov 4 note to Prof. Izmirli that the LiDAR inputs "add
 reacts least to speed, distance and time to collision** and most to the pedestrian's sideways speed and the
 policy's own previous steering, so braking is tied to the swerve rather than to stopping distance. Caveat:
 shuffling breaks the links between correlated inputs, so the ranking is meaningful, the exact sizes less so.
+
+**Two overnight retrains (2026-11-08/09, `97ff805`, 3 seeds each, 150k steps, same 15 plans, no brake-first).**
+(A) side-balanced settings with the hazard flag and both LiDAR inputs blanked (always 0 for the network, in
+training and evaluation); (B) side-balanced settings without the left-lane episodes, i.e. the seam fix as the
+only change from the old mixed models (a control for the Town10HD gain).
+
+| safe | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 | mean |
+|---|---|---|---|---|---|
+| side-balanced s1 / s2 / s3 | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 | 64.0 (70%) |
+| (A) no hazard flag, no LiDAR | 19 / 28 / 29 | 14 / 16 / 12 | 20 / 17 / 14 | 53 / 61 / 55 | 56.3 (61%) |
+| (B) control: no left-lane episodes | 31 / 31 / 27 | 9 / 12 / 8 | 14 / 21 / 5 | 54 / 64 / 40 | 52.7 (57%) |
+| old mixed (seam fix at evaluation only) | 26 / 30 / 29 | 14 / 6 / 14 | 8 / 3 / 18 | 48 / 39 / 61 | 49.3 (54%) |
+| rule | 32 | 14 | 20 | 66 | 66 (72%) |
+
+**(A) Removing the LiDAR inputs costs about 8 safe encounters per seed (64 -> 56 of 92)**, mostly on Town05
+(89 -> 76 of 96) and Town10HD (59 -> 51 of 72), with more collisions (82 -> 101 contacts). The hazard flag had no
+effect, so the loss is the two LiDAR inputs. **Unreliable as it is, the LiDAR signal carries information the
+models use**, consistent with the importance check; the reduced models are still above the old mixed ones.
+**(B) The left-lane episodes, not the seam fix, made the side-balanced gain**: without them Town10HD is 40 of 72
+(56%, seeds 5-21 of 24) vs 59 of 72 (82%, 18-21) with them, and the three-town mean is 52.7 vs 64.0; the seam fix
+alone is +3 over the old mixed models (49.3), within seed noise. One seed (s3) without left-lane episodes falls to
+5 of 24 on Town10HD, the old side habit. Caveat: 3 seeds per family; seed spreads overlap for (A).
+
+**Raw-input retrain (2026-11-09, `fa892fe`, 3 seeds, 150k steps, same settings and 15 plans, no brake-first).**
+Side-balanced settings with `--raw-inputs` (the network sees the pedestrian's CURRENT lateral position instead of
+the predicted one, and the plain road edges instead of the passage with the predicted pedestrian's zone cut out;
+the steering output also maps onto the whole road) and time to collision plus the hazard flag blanked. Distance,
+speed and both LiDAR inputs stay.
+
+| safe | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 | mean |
+|---|---|---|---|---|---|
+| raw inputs s1 / s2 / s3 | 23 / 28 / 31 | 16 / 12 / 13 | 14 / 20 / 20 | 53 / 60 / 64 | 59.0 (64%) |
+| side-balanced (calculated inputs) | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 | 64.0 (70%) |
+
+**Without the calculated prediction and passage, the models lose about 5 safe encounters per seed (64 -> 59 of
+92)** but stay well above the first multi-town models (49.3) and the no-left-lane control (52.7); per town, Town05
+82 vs 89 of 96, Town02 41 vs 44 of 108, Town10HD 54 vs 59 of 72; contacts 97 vs 82. The seeds overlap (the best
+raw seed, 64, beats the weakest calculated one, 59). So **the network learns most of what the prediction step
+gives it from raw position, sideways speed, distance and speed**; the calculated inputs are a modest help, not
+the source of the learned model's performance. Neither version beats the rule (66). Caveat: 3 seeds; one
+definition of "raw" (LiDAR kept, tested separately in (A)).
+
+Figures: `src/make_figures.py` rebuilds `artifacts/figures/` (circuit_results.csv, fig_safe_overall.png,
+fig_safe_by_town.png) from the circuit logs; rerun it after any new evaluation.
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 

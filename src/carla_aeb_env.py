@@ -181,7 +181,7 @@ class CarlaAEBEnv(gymnasium.Env):
                  steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
                  merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
                  same_direction_passage: bool = False, trigger_by_line_distance: bool = False,
-                 start_at_cruise_speed: bool = False, port: int = 2000):
+                 start_at_cruise_speed: bool = False, port: int = 2000, raw_inputs: bool = False):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -236,11 +236,17 @@ class CarlaAEBEnv(gymnasium.Env):
                  trigger_by_line_distance (steering mode): onset when the
                  straight-line distance to the hazard's line falls to
                  speed x TTC (distance driven drifts over a long circuit).
+            raw_inputs (steering mode): input-reduction retrain (Week 10). The
+                 policy sees the pedestrian's CURRENT lateral position, not the
+                 predicted one, and the passage is the road alone (no
+                 pedestrian zone cut out), for the observation and for the
+                 u -> lateral target mapping. False (default) = as before.
         """
         self._map_name, self._route_builder = map_name, route_builder
         self._route_points_xyz = None  # circuit: [(x, y, z)] per route waypoint to steer along (smoothed lane changes)
         self._port = port  # a second CARLA server (-carla-rpc-port) runs a second job in parallel
         self._same_direction_passage = same_direction_passage
+        self._raw_inputs = raw_inputs
         self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
         self._start_at_cruise_speed = start_at_cruise_speed  # spawn moving at the cruise speed (short approaches)
         super().__init__()
@@ -707,8 +713,12 @@ class CarlaAEBEnv(gymnasium.Env):
         _, ped_lateral = frame_coordinates_m(self._frame_origin, self._frame_right, (ped_loc.x, ped_loc.y))
         ped_lateral_speed = ped_vel.x * self._frame_right[0] + ped_vel.y * self._frame_right[1]
         distance = -ego_along
-        predicted = predicted_lateral_at_arrival(ped_lateral, ped_lateral_speed, distance, ego_speed_mps)
-        passage = passage_from_extent(*self._road_extent, [Obstacle(predicted)])
+        if self._raw_inputs:  # no prediction, no pedestrian zone: the network works both out
+            predicted, obstacles = ped_lateral, []
+        else:
+            predicted = predicted_lateral_at_arrival(ped_lateral, ped_lateral_speed, distance, ego_speed_mps)
+            obstacles = [Obstacle(predicted)]
+        passage = passage_from_extent(*self._road_extent, obstacles)
         return (None if passage.road_left_m is None else passage), dict(
             pedestrian_lateral_m=predicted, pedestrian_lateral_speed_mps=ped_lateral_speed,
             distance_to_pedestrian_line_m=distance, ego_lateral_m=ego_lateral,

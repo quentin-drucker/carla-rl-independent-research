@@ -1,10 +1,23 @@
 # CARLA Research Summary
 
 > **Project:** Safety-Focused Reinforcement Learning for Autonomous Driving via Parameterized Rare-Hazard Scenarios in CARLA  
-> **Course/context:** COM496, junior-year spring semester, 2026  
-> **Return point:** Senior year, after several months away  
-> **Reconstruction date:** August 12, 2026  
+> **Course/context:** COM496, junior-year spring semester, 2026; continued as the senior-year (Fall 2026) CS
+> Independent Research project, advised by Prof. Ozgur Izmirli  
+> **Reconstruction date:** August 12, 2026 (spring work)  
+> **Last current-state update:** November 13, 2026 (Week 10)  
 > **Purpose:** The authoritative starting point for remembering, running, evaluating, and extending this project
+
+> **Maintenance note (2026-11-13): this document had drifted from the actual state of the research.**
+> The Fall 2026 results were appended section by section as each week finished, but the summary sections
+> (Quick Status Snapshot, one-sentence state, files to open first, Summary: Where I Am Now) were never updated
+> after the August reconstruction. Until this date they still described the spring braking-only SAC v3 project
+> on Town04 ("do not train another policy first", `sac_v3_1600k.zip` as the final model), while the actual
+> research had moved to a learned brake-and-steer avoidance policy on city circuits in three towns. The Week 8-10
+> results also sit under the "Tentative and Inconclusive Findings" heading only because they were appended
+> there. **Read [Current state (Fall 2026)](#current-state-fall-2026-as-of-2026-11-13) and
+> [Week 10](#week-10-2026-11-10-to-16-repeatability-and-how-the-policy-chooses-its-avoidance) first;** sections
+> marked HISTORICAL describe the spring project. When adding results, update the current-state table and the
+> final summary in the same change.
 
 This document reconstructs the project from four bodies of evidence: the end-of-semester presentation and its speaker notes, the full weekly research log, the semester paper draft, and the current `Carla Project` repository. It was synthesized with GPT/Codex after separately auditing the documents, the repository, and then reconciling discrepancies between them.
 
@@ -57,7 +70,23 @@ Do not read an archived numerical value as automatically comparable across contr
 
 # Quick Status Snapshot
 
-## The five-minute version
+## Current state (Fall 2026, as of 2026-11-13)
+
+| Question | Answer |
+|---|---|
+| **What is the research now?** | A learned emergency-avoidance policy for pedestrian hazards on city driving circuits in CARLA 0.9.16: when a pedestrian hazard starts, SAC chooses how hard to brake and where across the road to steer; classical code drives the rest of the lap. |
+| **What does SAC control?** | Two continuous outputs, only after hazard onset: brake `[0, 1]` and lateral aim `u` in `[-1, 1]` (negative = left). Route following, cruise throttle and the return to the lane (merge-back) are classical. Onset is an oracle (scripted at a set time to collision), not perception. Not an end-to-end driving policy. |
+| **What does it observe?** | 14 inputs: speed, LiDAR proximity, time to collision, previous brake, hazard flag, stopping feasibility, the passage's left/right edges, the pedestrian's predicted lateral position and sideways speed, distance to the pedestrian's line, the car's lateral offset and heading error, previous aim. |
+| **How is it trained?** | One hazard per episode (the quiet approach is fast-forwarded), walkers from the right edge, from the left edge, or standing, onset TTC 0.5-1.6 s, rotating locations in Town05 and Town01, half the episodes in the left lane ("side-balanced"), 150k steps, 3 seeds per variant. Walkers always move at 1.8 m/s. |
+| **How is it evaluated?** | 15 seeded circuit routes, 92 encounters: Town05 (trained on), Town02 and Town10HD (never seen). Scored with encounter protocol v4 (`ego_safe_success`). Baseline: a simple rule (full brake, full swerve to the roomier side). |
+| **Main results** | Rule 66/92 (72%); side-balanced models 64.0 (70%; seeds 67/59/66); with brake-first 66 (72%); raw inputs 59.0 (64%); no LiDAR 56.3 (61%). **The learned policy ties the rule; it does not beat it.** The calculated inputs help modestly, LiDAR helps more, the hazard flag not at all. |
+| **Week 10 results** | Evaluation is deterministic: 3 repeat runs give the same tactic and outcome on all 92 encounters. Room decides the side when one side has >= 1 m more room; on near-equal room each trained seed has its own habit (the 3 seeds agree on only 36/92 encounters). The tactic label is the first reaction: "brake first" often swerves later; safe stay-in-lane encounters are only 6-8/92 per model (corrected 2026-11-19). Walking speed (0.8-2.4 m/s) does not change the side where room decides it; with equal room, one seed switches from passing ahead of a slow walker to passing behind a fast one (Izmirli's example) but is least safe there. See Week 10. |
+| **Week 11 results** | With Prof. Izmirli's realism limits (steering at most 2.0 per second, brake capped at 75%), the rule drops only from 66 to 63 of 92, but the retrained models drop from 64.0 to 46.0 (seeds 38/44/56): they hold in the trained town and lose in the never-seen towns. CARLA's car reaches ~2-2.5 g in avoidance (tire-stress proxy). See Week 11. |
+| **Main limitations** | Oracle onset; 3 seeds; parity with the rule; Town02's narrow-road ceiling (16/36 encounters failed by every controller); walkers trained at one speed; Town03 route following broken. |
+| **What is next?** | HW7 visual (circuit video + figures) on Nov 16; final presentation ~Dec 14. Under consideration: a throttle output (Prof. Izmirli, Nov 10), what should decide the side when room is equal, perception-based onset. |
+| **Files to open first** | `worklog/feature/city-circuit.md` (running log), `src/run_circuit.py` + `src/circuit.py` (circuit evaluation), `src/train_steering.py` (training), `src/carla_aeb_env.py` + `src/rl_steering.py` (environment and observation), `src/make_figures.py`, `src/analyze_strategy.py`, `src/analyze_speed_sweep.py` (figures and analyses), `worklog/weekly-reports/` (plans, reports). |
+
+## The five-minute version (HISTORICAL: spring 2026 state, August reconstruction)
 
 | Question | Answer |
 |---|---|
@@ -76,9 +105,16 @@ Do not read an archived numerical value as automatically comparable across contr
 
 ## One-sentence state of the research
 
-**CURRENT / CONFIRMED:** This CARLA pedestrian-AEB research framework was demonstrably functioning in April 2026 and retains an intended final six-observation SAC model plus useful archived experiments. Its current machine/runtime health still needs a smoke test, and its headline cross-controller full-stop, speed, comfort, and clearance comparisons require a corrected evaluation rerun before they can be treated as findings.
+**CURRENT (2026-11-13):** A side-balanced SAC brake-and-steer policy handles pedestrian hazards on city circuits
+in three towns about as well as a simple roomier-side rule (70% vs 72% of 92 encounters), deterministically, and
+the open question is what should decide its avoidance side when room does not.
+
+**HISTORICAL (August 2026, spring state):** This CARLA pedestrian-AEB research framework was demonstrably functioning in April 2026 and retains an intended final six-observation SAC model plus useful archived experiments. Its current machine/runtime health still needs a smoke test, and its headline cross-controller full-stop, speed, comfort, and clearance comparisons require a corrected evaluation rerun before they can be treated as findings.
 
 ## Files to open first
+
+For current (Fall 2026) work, see the last row of the current-state table above. The list below is the spring
+(HISTORICAL) braking-only project.
 
 1. This document.
 2. [`src/train_sac.py`](src/train_sac.py) — current v3 sampler and training definition.
@@ -2847,7 +2883,113 @@ the source of the learned model's performance. Neither version beats the rule (6
 definition of "raw" (LiDAR kept, tested separately in (A)).
 
 Figures: `src/make_figures.py` rebuilds `artifacts/figures/` (circuit_results.csv, fig_safe_overall.png,
-fig_safe_by_town.png) from the circuit logs; rerun it after any new evaluation.
+fig_safe_by_town.png) from the circuit logs; rerun it after any new evaluation. It also writes
+`fig_hw7_inputs.png`, the simplified four-row presentation version (rule, calculated, raw, no LiDAR).
+
+## Week 10 (2026-11-10 to 16): repeatability and how the policy chooses its avoidance
+
+Prof. Izmirli (Nov 10) asked how the policy chooses between swerving left, swerving right and braking, whether a
+repeated scenario gets the same tactic, and whether a slow vs a fast pedestrian changes the choice. He also noted
+that the hazard flag is redundant given LiDAR distance (consistent with its zero importance, Week 9), and that a
+long episode with all the action early could skew training; this does not apply now, since training episodes hold
+one hazard and fast-forward the quiet approach, but it would for full-lap training. No retraining this week.
+
+**Tactic label** (`src/analyze_strategy.py`): the mean action over the first 0.5 s after onset; swerve left/right
+if |u| >= 0.2, else brake if brake >= 0.5, else neither. Thresholds are a choice.
+**Correction (2026-11-19):** this label is the *first reaction* only, so it is now called "brake first", not
+"brake, stay in lane". Many brake-first encounters swerve afterwards (Town05 plan 2, s3, encounters 2 and 5:
+brake hard, then swerve 4.0 m and 2.8 m). Measured over the whole encounter (`max_abs_route_lateral_m` < 0.5 m,
+now the `stayed_in_lane` column of `strategy_encounters.csv`), safe stay-in-lane encounters are 7 / 6 / 8 of 92
+for s1-s3 and 9 for the rule, mostly in narrow Town02.
+
+**Repeatability (`_scratch/w10_repeat.sh`, 120 circuit runs, 2026-11-13 overnight).** The three side-balanced
+seeds and the rule re-ran the same 15 routes twice more (repeats 2-3; repeat 1 = the Week 9 runs), with jobs
+spread over two servers (each launched once and reused all night, so a route's repeats often ran on different
+servers). **On all 92 encounters, every controller chose the same tactic and
+got the same safe/unsafe outcome on every repeat** (largest spread in early aim: 0.02 / 0.12 / 0.08 for s1-s3,
+0.00 for the rule). Evaluation is deterministic, so the circuit totals are exact for these models and the
+differences between seeds are training variance, not evaluation noise.
+
+**What goes with each tactic (circuit, repeat 1; `artifacts/figures/fig_strategy_by_walker.png`,
+`strategy_encounters.csv`):**
+- **Room decides the side when one side clearly has more**: with >= 1 m more room on one side, s1 and s3 always
+  swerve to it (48/48, 40/40), like the rule; s2 does in 26/36 (72%). With near-equal room (< 1 m difference)
+  every controller is close to a coin flip (45-69% to the roomier side).
+- **The seeds have different habits**: all three agree on the tactic in only 36/92 encounters. Standing
+  pedestrians: s1 and s2 mostly swerve left (59%, 62%), s3 mostly brakes first (66%; 13 of its 22 brake-first
+  encounters stay in lane). Passing behind a walking
+  pedestrian (toward the side they came from): s1 43%, s3 22%, rule 29%, s2 6%.
+- **Against the rule, encounter by encounter**: s1 is safe on 4 encounters the rule fails and fails 3 it passes,
+  s3 5 and 5, s2 9 and 16. For s1 and s3 these use the same tactic as the rule (they differ in brake level and aim
+  size); s2's are mostly different tactics, and it loses more than it gains.
+
+**Walking speed (`_scratch/w10_speed.sh`, `src/analyze_speed_sweep.py`, `fig_speed_sweep.png`).** Every circuit
+and training walker moves at 1.8 m/s, so the circuit cannot answer the slow/fast question. Controlled test at the
+Town04 straight (8.8 m of road on the right, 5.25 m on the left): walkers from the left and from the right at
+0.8 / 1.2 / 1.8 / 2.4 m/s, 35 and 45 mph, onset TTC 0.8-1.4 s, 64 episodes per controller. **Speed never changed
+the side for s1, s3 or the rule: always swerve right (the roomier side), safe at every speed** (rule 7/8 once, at
+2.4 m/s); the models handle speeds they never trained on. s2 mixes sides for walkers from the right, with no trend
+in speed (6-8/8 safe). Here room decides before speed can matter.
+
+**Same sweep with equal room (`VARIANT=_eqroom`, `--road-right-limit-m 5.25`, `fig_speed_sweep_eqroom.png`).**
+The passage's right edge is capped at 5.25 m so both sides show the same room (the physical road is unchanged;
+the cap changes what the policy sees and where its aim maps). Safe of 64: **s3 61, s2 58, rule 57, s1 45.**
+- Walker from the left: all three models always swerve right, passing ahead of the walker, at every speed. The
+  rule (left on a tie) swerves left, behind the walker, from 1.2 m/s up.
+- Walker from the right: **s1 changes its tactic with walking speed, as in Prof. Izmirli's example**: slow
+  (0.8 m/s) -> always swerve left, ahead of the walker; fast (1.8-2.4 m/s) -> mostly swerve right, behind them, or
+  brake; mixed at 1.2 m/s. But this is where s1 is least safe (3-5 of 8 per speed). s3 shows a weaker version
+  (mostly left; some right at 1.8-2.4 m/s) and stays safe (7-8/8). s2 always swerves left at every speed.
+- So **when room does not decide, the seeds differ, and only some react to walking speed**; reacting to it was
+  not safer here. The models never trained on other speeds or on equal room at this spot, so this probes
+  generalization, not a trained behavior.
+
+## Week 11 (2026-11-17 to 23): realism limits on the car (steering rate, brake cap)
+
+Prof. Izmirli (Nov 17): the car steers too fast and has no inertia or slip. Two opt-in limits (defaults unchanged):
+a **steering rate limit** on the applied CARLA steer command (`--steer-rate-limit`, all driving, since it models
+the car) and a **brake cap** on every hazard-mode brake (`--max-brake`, policy, rule and the post-contact hold).
+Both are saved in the training manifest and followed by `run_circuit.py`; explicit flags set them for the rule.
+`eval_policy_encounters.py` refuses such models.
+
+**Choosing the steering limit (2026-11-19, w9_sidebal traces, 368 encounters).** The applied steer changed very
+fast: per-encounter peak 36 per second (median; full lock in ~0.03 s), up to 100/s (lock to lock in one tick);
+while cruising, 0.07/s median and 0.7/s at the 90th percentile. **Chosen: 2.0/s** (center to full lock 0.5 s, lock
+to lock 1 s), about 18x below the median peak; every encounter is affected, cruising barely. Brake cap: 0.75.
+
+**Realism retrain (2026-11-20 overnight, `_scratch/w11_realism.sh`, 3 seeds, side-balanced settings + both limits,
+no brake-first, same 15 plans; the rule got the same limits).**
+
+| safe | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 | mean |
+|---|---|---|---|---|---|
+| side-balanced + limits s1 / s2 / s3 | 27 / 28 / 32 | 7 / 8 / 7 | 4 / 8 / 17 | 38 / 44 / 56 | 46.0 (50%) |
+| side-balanced (no limits) | 32 / 25 / 32 | 14 / 14 / 16 | 21 / 20 / 18 | 67 / 59 / 66 | 64.0 (70%) |
+| rule + limits | 32 | 10 | 21 | 63 | 63 (68%) |
+| rule (no limits) | 32 | 14 | 20 | 66 | 66 (72%) |
+
+- **The limits cost the rule 3 encounters (all on narrow Town02) but the learned models 18 on average.** The
+  slower car can still avoid; the policy trained with it generalizes worse.
+- The loss is in the towns never seen in training: Town05 87 vs 89 of 96, Town02 22 vs 44 of 108, Town10HD 29 vs
+  59 of 72. Seed 3 is close to the old models except on Town02; seeds 1 and 2 mostly do not swerve in Town10HD.
+  Example (Town10HD plan 0, standing pedestrian, 1.18 s warning): old and new seed 1 see identical inputs (3.9 m
+  of room on the right, none on the left); the old model aims right and passes, the new one aims fully left at
+  the side with no room, so its target stays in the lane and it hits at 8.4 m/s.
+- Training curves and late-training hit counts match the unlimited side-balanced runs, so this is not a training
+  failure. Not yet explained; one guess is that slower steering makes swerving pay off less often in training,
+  so the side habit is learned less reliably. Caveat: 3 seeds, large seed spread (38-56).
+
+**Tire-stress proxy (`tire_stress_integral_mps`, `tire_stress_peak_mps2` in each circuit hazards.csv row; after the
+fact, never in the reward).** Combined horizontal acceleration sqrt(a_long^2 + a_lat^2), a_lat = speed x yaw rate,
+over the 8 s window, at >= 5 m/s only (below that, CARLA's low-speed brake transient reads ~27 m/s^2 for the last
+~0.2 s of every stop). On safe encounters: integral median 29-32 m/s and **peak median 22-25 m/s^2 (~2.3-2.5 g)**
+for every realism model and the rule with limits. These peaks are real CARLA dynamics: braking with full steer at
+13-15 m/s gives ~90 deg/s of yaw and ~19 m/s^2 sideways. Real tires manage about 1 g, so this puts a number on
+"no slip" and is a reason to lower tire grip in the Week 12 car comparison. A contact also spikes the peak, so
+compare on safe encounters.
+
+**Also this week:** the Week 10 "brake, stay in lane" label is corrected to "brake first" (see the Week 10 note);
+`run_circuit.py --record` now records without the debug markers (`--keep-markers` keeps them). Clip:
+`artifacts/videos/w11_realism_town05_p2.mp4` (seed 3 with limits, 8/8 safe, same outcomes as the evaluated run).
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
@@ -4177,6 +4319,25 @@ This order is not absolute: current code may have changed after an experiment, a
 ---
 
 # Summary: Where I Am Now
+
+## Current (2026-11-13, Fall Week 10)
+
+The spring braking-only question was re-audited in Weeks 1-5 (v3 ranked second-worst of five under one
+protocol) and the research moved on to learned avoidance: SAC now chooses brake strength and a steering target
+after a pedestrian hazard starts, while classical control drives laps of a city circuit. After multi-town and
+side-balanced training, three seeds handle 70% of 92 encounters across one trained and two never-seen towns,
+level with a simple full-brake, roomier-side rule (72%). Input ablations show the calculated prediction/passage
+inputs help modestly (raw inputs: 64%), the unreliable LiDAR inputs help more (no LiDAR: 61%), and the hazard
+flag not at all.
+
+Week 10 showed that evaluation is deterministic (identical tactics and outcomes over three repeats), so the
+seed spread is training variance. The policy picks its side by room when one side clearly has more; when room
+is nearly equal, each trained seed has its own habit. Walking speed does not change the side where room
+decides; with equal room, one seed switches sides with walking speed but is least safe when it does. The open research question is what should decide the side, and whether training can teach it,
+when room does not. Near-term: the HW7 circuit video and figures (Nov 16), then the final presentation (~Dec 14);
+a throttle output is under consideration for Week 11.
+
+## Spring 2026 end state (HISTORICAL, August reconstruction)
 
 The project successfully built a structured research platform for controlled pedestrian hazards in CARLA. It includes custom driving control, route-aligned LiDAR perception, deterministic pedestrian scripting, multiple AEB baselines, safety/comfort metrics, sweep automation, RL integration, trained SAC models, and retained experimental artifacts. That is the main confirmed accomplishment.
 

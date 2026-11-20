@@ -40,7 +40,69 @@ class BrakeCapTests(unittest.TestCase):
         self.assertIsNone(cap_brake(None, 0.75))  # no hazard command: cruise control decides
 
 
+class _Wheel:
+    def __init__(self, steer):
+        self.tire_friction, self.max_steer_angle = 3.5, steer
+
+
+class _Vehicle:
+    """CARLA's physics control hands out a COPY of the wheel list, like carla.VehiclePhysicsControl."""
+
+    def __init__(self):
+        self._wheels, self.applied = [_Wheel(70.0), _Wheel(70.0), _Wheel(0.0), _Wheel(0.0)], None
+
+    def get_physics_control(self):
+        vehicle = self
+
+        class _Phys:
+            @property
+            def wheels(self):
+                return [w for w in vehicle._wheels]
+
+            @wheels.setter
+            def wheels(self, ws):
+                vehicle._wheels = ws
+        return _Phys()
+
+    def apply_physics_control(self, phys):
+        self.applied = phys
+
+
+class CarSettingsTests(unittest.TestCase):
+    def test_default_leaves_the_car_alone(self):
+        from carla_aeb_env import apply_car_settings
+        v = _Vehicle()
+        self.assertIsNone(apply_car_settings(v))
+        self.assertIsNone(v.applied)
+
+    def test_lock_on_steered_wheels_only_and_grip_on_all(self):
+        from carla_aeb_env import apply_car_settings
+        v = _Vehicle()
+        apply_car_settings(v, max_steer_angle_deg=35.0, tire_friction=1.5)
+        self.assertIsNotNone(v.applied)
+        self.assertEqual([w.max_steer_angle for w in v._wheels], [35.0, 35.0, 0.0, 0.0])
+        self.assertEqual([w.tire_friction for w in v._wheels], [1.5] * 4)
+
+
 class PlumbingTests(unittest.TestCase):
+    def test_car_settings_flags(self):
+        from run_circuit import _parse_args as circuit_args, realism_setting
+        from train_steering import _parse_args as train_args
+        a = train_args(["--commit", "per_tick"])
+        self.assertIsNone(a.max_steer_angle)
+        self.assertIsNone(a.tire_friction)
+        a = train_args(["--commit", "per_tick", "--max-steer-angle", "35", "--tire-friction", "1.5"])
+        self.assertEqual((a.max_steer_angle, a.tire_friction), (35.0, 1.5))
+        with self.assertRaises(SystemExit):
+            circuit_args(["--scripted-aim", "wider_side", "--tire-friction", "0"])
+        with tempfile.TemporaryDirectory() as d:
+            model = os.path.join(d, "final_model.zip")
+            with open(os.path.join(d, "manifest.json"), "w") as f:
+                json.dump({"max_steer_angle_deg": 35.0, "tire_friction": 1.5}, f)
+            self.assertEqual(realism_setting(None, model, "max_steer_angle_deg"), 35.0)
+            self.assertEqual(realism_setting(None, model, "tire_friction"), 1.5)
+
+
     def test_run_circuit_follows_manifest_unless_flag_given(self):
         from run_circuit import _parse_args, realism_setting
         with tempfile.TemporaryDirectory() as d:

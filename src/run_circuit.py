@@ -92,6 +92,11 @@ def _parse_args(argv=None):
                    "setting, else none; give it for the rule, or to drive a model on a different car)")
     p.add_argument("--max-brake", type=float,
                    help="realism: brake cap in hazard mode, e.g. 0.75 (default: the model's training setting, else none)")
+    p.add_argument("--max-steer-angle", type=float, metavar="DEG",
+                   help="realistic car: full lock of the front wheels in degrees (default: the model's training "
+                   "setting, else CARLA's ~70)")
+    p.add_argument("--tire-friction", type=float,
+                   help="realistic car: tire grip of every wheel (default: the model's training setting, else CARLA's)")
     p.add_argument("--keep-markers", action="store_true",
                    help="with --record: keep the pedestrian-path and steering-target markers (default: off when recording)")
     args = p.parse_args(argv)
@@ -101,6 +106,9 @@ def _parse_args(argv=None):
         p.error("--steer-rate-limit must be positive")
     if args.max_brake is not None and not 0.0 < args.max_brake <= 1.0:
         p.error("--max-brake must be in (0, 1]")
+    for name in ("max_steer_angle", "tire_friction"):
+        if getattr(args, name) is not None and getattr(args, name) <= 0.0:
+            p.error(f"--{name.replace('_', '-')} must be positive")
     return args
 
 
@@ -195,13 +203,17 @@ def main(argv=None):
         print("[circuit] model trained with raw inputs (current pedestrian position, road-only passage)")
     steer_rate = realism_setting(args.steer_rate_limit, model_path, "steer_rate_limit_per_s")
     max_brake = realism_setting(args.max_brake, model_path, "max_brake")
+    lock = realism_setting(args.max_steer_angle, model_path, "max_steer_angle_deg")
+    friction = realism_setting(args.tire_friction, model_path, "tire_friction")
     debug_draw = not (args.record and not args.keep_markers)
-    if steer_rate is not None or max_brake is not None:
-        print(f"[circuit] realism limits: steer rate {steer_rate} /s, max brake {max_brake}")
+    if any(v is not None for v in (steer_rate, max_brake, lock, friction)):
+        print(f"[circuit] realism limits: steer rate {steer_rate} /s, max brake {max_brake}, "
+              f"full lock {lock} deg, tire friction {friction}")
     env = CarlaAEBEnv(cfg=baseline_scenario_config(args.mph, 1.0), steer_commit=args.steer_commit,
                       lock_delay_s=args.lock_delay_s, merge_back=True, u_bounds=(args.u_min, 1.0),
                       map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port,
-                      raw_inputs=raw, steer_rate_limit_per_s=steer_rate, max_brake=max_brake, debug_draw=debug_draw)
+                      raw_inputs=raw, steer_rate_limit_per_s=steer_rate, max_brake=max_brake, debug_draw=debug_draw,
+                      max_steer_angle_deg=lock, tire_friction=friction)
     route = loop_route(env._world, args.laps)
     env._route_builder = lambda world: route
     plan, route_s, route_yaws, env._route_points_xyz = plan_hazards(route[1], args)
@@ -243,7 +255,7 @@ def main(argv=None):
                    "map": args.map, "route_m": route_len, "lap_m": lap_len, "physics_backend": BACKEND_DEFAULT,
                    "protocol": PROTOCOL.__dict__, "merge_back": True, "lane_changes_smoothed": True, "same_direction_passage": True,
                    "raw_inputs": raw, "steer_rate_limit_per_s": steer_rate, "max_brake": max_brake,
-                   "debug_draw": debug_draw, "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
+                   "max_steer_angle_deg": lock, "tire_friction": friction, "debug_draw": debug_draw, "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
                    "versions": _versions()}, f, indent=2)
     print(f"[circuit] {args.map}: {args.laps} lap(s) of {lap_len:.0f} m, {len(plan)} hazards | policy {os.path.basename(model_path)}")
     print(f"[circuit] evidence: {out_dir}")

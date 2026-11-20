@@ -357,7 +357,8 @@ def main(argv=None):
         from train_steering import trained_setting
         if (trained_setting(model_path, "raw_inputs", False) or trained_setting(model_path, "blank_inputs", [])
                 or trained_setting(model_path, "steer_rate_limit_per_s", None) is not None
-                or trained_setting(model_path, "max_brake", None) is not None):
+                or any(trained_setting(model_path, k, None) is not None
+                       for k in ("max_brake", "max_steer_angle_deg", "tire_friction"))):
             raise SystemExit("this model was trained with raw/blanked inputs or realism limits: "
                              "evaluate it with run_circuit.py")
         model = SAC.load(model_path)

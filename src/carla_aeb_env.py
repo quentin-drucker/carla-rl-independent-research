@@ -159,6 +159,23 @@ JERK_LP_ALPHA         = 0.25
 # Gymnasium environment
 # ===========================================================================
 
+def apply_car_settings(vehicle, *, tire_friction=None, max_steer_angle_deg=None):
+    """Week 11 realistic car: tire grip on every wheel and full lock on the steered wheels (CARLA's Model 3 turns its
+    front wheels ~70 deg, a real car ~35-40). None = CARLA's value. Returns the applied physics control, or None."""
+    if tire_friction is None and max_steer_angle_deg is None:
+        return None
+    phys = vehicle.get_physics_control()
+    wheels = phys.wheels  # a copy: change it, then assign it back
+    for w in wheels:
+        if tire_friction is not None:
+            w.tire_friction = tire_friction
+        if max_steer_angle_deg is not None and w.max_steer_angle > 0.0:
+            w.max_steer_angle = max_steer_angle_deg
+    phys.wheels = wheels
+    vehicle.apply_physics_control(phys)
+    return phys
+
+
 def cap_brake(brake, max_brake):
     """Week 11 realism: the brake the policy/rule/hold commands, capped at max_brake (None = no cap/no command)."""
     return brake if brake is None or max_brake is None else min(brake, max_brake)
@@ -187,7 +204,8 @@ class CarlaAEBEnv(gymnasium.Env):
                  merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
                  same_direction_passage: bool = False, trigger_by_line_distance: bool = False,
                  start_at_cruise_speed: bool = False, port: int = 2000, raw_inputs: bool = False,
-                 steer_rate_limit_per_s: float = None, max_brake: float = None, debug_draw: bool = True):
+                 steer_rate_limit_per_s: float = None, max_brake: float = None, debug_draw: bool = True,
+                 max_steer_angle_deg: float = None, tire_friction: float = None):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -253,6 +271,10 @@ class CarlaAEBEnv(gymnasium.Env):
                  models the car). max_brake caps every brake the policy, the rule or
                  the post-contact hold commands in hazard mode (lane_follow's brake
                  ramp still applies). None (default) = no limit, as before.
+            max_steer_angle_deg / tire_friction: the realistic car (Week 11): full lock
+                 of the steered wheels in degrees and the tire grip of every wheel
+                 (apply_car_settings). tire_friction overrides cfg.road_friction.
+                 None (default) = CARLA's car, as before.
             debug_draw: False = no pedestrian-path / steering-target markers in
                  the world (video recordings). True (default) = as before.
         """
@@ -262,6 +284,7 @@ class CarlaAEBEnv(gymnasium.Env):
         self._same_direction_passage = same_direction_passage
         self._raw_inputs = raw_inputs
         self._steer_rate_limit_per_s, self._max_brake, self._debug_draw = steer_rate_limit_per_s, max_brake, debug_draw
+        self._max_steer_angle_deg, self._tire_friction = max_steer_angle_deg, tire_friction
         self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
         self._start_at_cruise_speed = start_at_cruise_speed  # spawn moving at the cruise speed (short approaches)
         super().__init__()
@@ -888,12 +911,8 @@ class CarlaAEBEnv(gymnasium.Env):
             bp_lib = self._world.get_blueprint_library()
         self._vehicle = spawn_ego_vehicle(self._world, bp_lib=bp_lib, spawn_tf=ego_tf)
 
-        if cfg.road_friction is not None:
-            phys = self._vehicle.get_physics_control()
-            for w in phys.wheels:
-                w.tire_friction = cfg.road_friction
-            phys.wheels = phys.wheels
-            self._vehicle.apply_physics_control(phys)
+        apply_car_settings(self._vehicle, max_steer_angle_deg=self._max_steer_angle_deg,
+                           tire_friction=self._tire_friction if self._tire_friction is not None else cfg.road_friction)
 
         self._lidar, self._lidar_queue = attach_lidar_sensor(self._world, bp_lib, self._vehicle)
         self._collision_sensor, self._collision_flag = self._attach_collision_sensor(bp_lib)

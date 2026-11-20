@@ -107,6 +107,12 @@ def _parse_args(argv=None):
                    "steer_rate_limit_per_s; saved in the manifest, run_circuit.py follows it); default: no limit")
     p.add_argument("--max-brake", type=float,
                    help="realism (Week 11): brake cap in hazard mode, e.g. 0.75 (saved in the manifest); default: none")
+    p.add_argument("--max-steer-angle", type=float, metavar="DEG",
+                   help="realistic car (Week 11): full lock of the front wheels in degrees (CARLA: ~70); saved in "
+                   "the manifest; default: CARLA's")
+    p.add_argument("--tire-friction", type=float,
+                   help="realistic car (Week 11): tire grip of every wheel (CARLA wheel tire_friction); saved in the "
+                   "manifest; default: CARLA's")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     p.add_argument("--relaunch-carla", action="store_true",
@@ -120,6 +126,9 @@ def _parse_args(argv=None):
         p.error("--steer-rate-limit must be positive")
     if args.max_brake is not None and not 0.0 < args.max_brake <= 1.0:
         p.error("--max-brake must be in (0, 1]")
+    for name in ("max_steer_angle", "tire_friction"):
+        if getattr(args, name) is not None and getattr(args, name) <= 0.0:
+            p.error(f"--{name.replace('_', '-')} must be positive")
     if not (args.commit or args.resume):
         p.error("give --commit for a new run, or --resume")
     if args.relaunch_carla and args.port != 2000:
@@ -407,6 +416,7 @@ def main(argv=None):
             "merge_back": args.merge_back, "circuit_map": args.circuit_map, "left_lane_share": args.left_lane_share,
             "blank_inputs": args.blank_inputs, "raw_inputs": args.raw_inputs,
             "steer_rate_limit_per_s": args.steer_rate_limit, "max_brake": args.max_brake,
+            "max_steer_angle_deg": args.max_steer_angle, "tire_friction": args.tire_friction,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -443,7 +453,9 @@ def main(argv=None):
                           merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]),
                           raw_inputs=manifest.get("raw_inputs", False), port=args.port,
                           steer_rate_limit_per_s=manifest.get("steer_rate_limit_per_s"),
-                          max_brake=manifest.get("max_brake"), **circuit)
+                          max_brake=manifest.get("max_brake"),
+                          max_steer_angle_deg=manifest.get("max_steer_angle_deg"),
+                          tire_friction=manifest.get("tire_friction"), **circuit)
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),

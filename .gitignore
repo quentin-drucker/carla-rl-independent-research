@@ -71,3 +71,6 @@ Thumbs.db
 
 # City-circuit runs (run_circuit.py): per-hazard traces, regenerable.
 artifacts/runs/circuit/
+
+# Recorded demo videos (run_circuit.py --record): large binaries, rebuildable from the deterministic runs.
+artifacts/videos/

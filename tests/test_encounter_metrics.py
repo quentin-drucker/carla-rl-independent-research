@@ -291,5 +291,24 @@ class ContactCauseTests(unittest.TestCase):
         self.assertEqual((m.contact_cause, m.outcome_v4, m.ego_safe_success), (None, m.outcome, m.safe_success))
 
 
+class TireStressTests(unittest.TestCase):
+    def test_braking_integrates_combined_accel_above_normal_speed_only(self):
+        # 15 m/s, 8 m/s^2 brake from onset: |a| = 8 while v >= 5 m/s (1.25 s), then excluded (low-speed transient).
+        m = compute_encounter_metrics(_trace(N_FULL, speed_fn=_brake_speed, ped=None),
+                                      onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertAlmostEqual(m.tire_stress_peak_mps2, 8.0, places=6)
+        self.assertAlmostEqual(m.tire_stress_integral_mps, 8.0 * 1.25, delta=8.0 * 2 * DT)
+
+    def test_cruise_has_no_stress_and_lateral_counts(self):
+        m = compute_encounter_metrics(_trace(N_FULL, speed_fn=lambda t: 10.0, ped=None),
+                                      onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertAlmostEqual(m.tire_stress_peak_mps2, 0.0)
+        ticks = _trace(N_FULL, speed_fn=lambda t: 10.0, ped=None)
+        for t in ticks:
+            t.yaw_rate_dps = 18.0  # 10 m/s x 0.314 rad/s = 3.14 m/s^2 sideways
+        m = compute_encounter_metrics(ticks, onset_time_s=ONSET_S, protocol=PROTOCOL)
+        self.assertAlmostEqual(m.tire_stress_peak_mps2, 10.0 * 0.1 * 3.141592653589793, places=4)
+
+
 if __name__ == "__main__":
     unittest.main()

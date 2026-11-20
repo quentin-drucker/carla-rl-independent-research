@@ -156,6 +156,12 @@ class EncounterMetrics:
     peak_decel_normal_speed_mps2: Optional[float] = None
     max_abs_jerk_normal_speed_mps3: Optional[float] = None
     max_abs_lateral_accel_mps2: Optional[float] = None
+    # Tire-stress PROXY (Week 11, Izmirli: tire wear), not physical wear and never in the reward: the combined
+    # horizontal acceleration sqrt(a_long^2 + a_lat^2) (a_lat = speed x yaw rate) over the window, integrated
+    # (m/s) and its peak (m/s^2). Normal-speed ticks only, like peak decel and jerk: below that CARLA's
+    # low-speed brake transient reads ~27 m/s^2 for the last 0.2 s of every stop.
+    tire_stress_integral_mps: Optional[float] = None
+    tire_stress_peak_mps2: Optional[float] = None
 
     # Steering commitment (advisor's reading (c): measure, don't constrain).
     # Counted on the REQUESTED lateral target after onset, not the steering
@@ -304,7 +310,7 @@ def compute_encounter_metrics(
     lateral_values = []
     requested_values = []
     requested_moving = []
-    decels, jerks, lat_accels = [], [], []
+    decels, jerks, lat_accels, combined = [], [], [], []
     prev_accel_normal = None
     violation_ticks = 0 if footprint_drivable is not None else None
 
@@ -362,6 +368,8 @@ def compute_encounter_metrics(
         if r.yaw_rate_dps is not None:
             lat_accels.append(abs(r.speed_mps * math.radians(r.yaw_rate_dps)))
         if r.speed_mps >= protocol.normal_speed_threshold_mps and r.accel_mps2 is not None:
+            if r.yaw_rate_dps is not None:
+                combined.append(math.hypot(r.accel_mps2, r.speed_mps * math.radians(r.yaw_rate_dps)))
             decels.append(r.accel_mps2)
             if prev_accel_normal is not None:
                 jerks.append(abs(r.accel_mps2 - prev_accel_normal[1]) / max(eps, r.sim_time_s - prev_accel_normal[0]))
@@ -385,6 +393,9 @@ def compute_encounter_metrics(
         m.peak_decel_normal_speed_mps2 = min(decels)
     m.max_abs_jerk_normal_speed_mps3 = max(jerks) if jerks else None
     m.max_abs_lateral_accel_mps2 = max(lat_accels) if lat_accels else None
+    if combined:
+        m.tire_stress_integral_mps = sum(combined) * dt_guess
+        m.tire_stress_peak_mps2 = max(combined)
 
     if m.contact_ticks > 0:
         m.outcome = OUTCOME_CONTACT

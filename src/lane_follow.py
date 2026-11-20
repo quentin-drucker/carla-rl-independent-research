@@ -64,6 +64,18 @@ ACTIVE_PATH_COMMIT_TICKS_REQ = 5
 # -------------------------------------------------
 # Helpers for lane-following control step (called from main loop)
 # -------------------------------------------------
+def limit_steer_rate(steer_cmd, speed_state, fixed_dt):
+    """Week 11 realism (opt-in): the applied steer may change by at most speed_state["steer_rate_limit_per_s"]
+    per second (a slow steering rack; Izmirli, Nov 17). Missing/None = no limit (unchanged behavior).
+    Remembers the applied steer in speed_state["steer_prev"]; the first tick of an episode is not limited."""
+    rate = speed_state.get("steer_rate_limit_per_s")
+    prev = speed_state.get("steer_prev")
+    if rate is not None and prev is not None:
+        steer_cmd = clamp(steer_cmd, prev - rate * fixed_dt, prev + rate * fixed_dt)
+    speed_state["steer_prev"] = steer_cmd
+    return steer_cmd
+
+
 def _find_closest_route_index(route_points_world, loc, near_index=None):
     """
     Return the index of the route point closest to the current vehicle location
@@ -242,16 +254,18 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     cte_m = loc.distance(wp.transform.location)
 
     DEBUG_POINT_Z_OFFSET = 0.5
+    draw = speed_state.get("debug_draw", True)  # False: no markers (clean video recordings)
     # Pink dot = target waypoint the car is steering toward.
     # life_time slightly > FIXED_DT so it is refreshed each tick and disappears
     # immediately when the episode ends (no persistent trail).
-    world.debug.draw_point(
-        target_loc + carla.Location(z=DEBUG_POINT_Z_OFFSET),
-        size=0.15,
-        color=carla.Color(255,0,255), # pink
-        life_time=FIXED_DT * 1.05
-    )
-    if route_points_world and abs(requested_lateral_offset_m) > 1e-9:
+    if draw:
+        world.debug.draw_point(
+            target_loc + carla.Location(z=DEBUG_POINT_Z_OFFSET),
+            size=0.15,
+            color=carla.Color(255,0,255), # pink
+            life_time=FIXED_DT * 1.05
+        )
+    if draw and route_points_world and abs(requested_lateral_offset_m) > 1e-9:
         world.debug.draw_point(
             route_center_target_loc + carla.Location(z=DEBUG_POINT_Z_OFFSET),
             size=0.10,
@@ -276,6 +290,7 @@ def lane_follow_step(world, vehicle, lookahead_m, steer_gain,
     # Bigger error => bigger steering magnitude.
     # steer_gain is just "how aggressive the steering corrections should be".
     steer_cmd = clamp(steer_gain * heading_error, -1.0, 1.0)  # CARLA steer must be within range: [-1, 1]
+    steer_cmd = limit_steer_rate(steer_cmd, speed_state, fixed_dt)
     # steer_cmd is [-1, +1], so map it to [-MAX_CONE_YAW_DEG, +MAX_CONE_YAW_DEG]
     cone_yaw_deg = steer_cmd * speed_state.get("max_cone_yaw_deg", 25.0) 
 

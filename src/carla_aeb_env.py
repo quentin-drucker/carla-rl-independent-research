@@ -159,6 +159,11 @@ JERK_LP_ALPHA         = 0.25
 # Gymnasium environment
 # ===========================================================================
 
+def cap_brake(brake, max_brake):
+    """Week 11 realism: the brake the policy/rule/hold commands, capped at max_brake (None = no cap/no command)."""
+    return brake if brake is None or max_brake is None else min(brake, max_brake)
+
+
 class CarlaAEBEnv(gymnasium.Env):
     """
     Gymnasium-compatible environment for training an RL braking controller
@@ -181,7 +186,8 @@ class CarlaAEBEnv(gymnasium.Env):
                  steering_reward: SteeringRewardConfig = None, road_right_limit_m: float = None,
                  merge_back: bool = False, map_name: str = TARGET_MAP, route_builder=None,
                  same_direction_passage: bool = False, trigger_by_line_distance: bool = False,
-                 start_at_cruise_speed: bool = False, port: int = 2000, raw_inputs: bool = False):
+                 start_at_cruise_speed: bool = False, port: int = 2000, raw_inputs: bool = False,
+                 steer_rate_limit_per_s: float = None, max_brake: float = None, debug_draw: bool = True):
         """
         Args:
             cfg: ScenarioConfig instance. Defaults to ScenarioConfig() if None.
@@ -241,12 +247,21 @@ class CarlaAEBEnv(gymnasium.Env):
                  predicted one, and the passage is the road alone (no
                  pedestrian zone cut out), for the observation and for the
                  u -> lateral target mapping. False (default) = as before.
+            steer_rate_limit_per_s / max_brake: Week 11 realism limits (Izmirli, Nov 17).
+                 steer_rate_limit_per_s caps how fast the APPLIED steer command
+                 changes (per second, in CARLA steer units; all driving, since it
+                 models the car). max_brake caps every brake the policy, the rule or
+                 the post-contact hold commands in hazard mode (lane_follow's brake
+                 ramp still applies). None (default) = no limit, as before.
+            debug_draw: False = no pedestrian-path / steering-target markers in
+                 the world (video recordings). True (default) = as before.
         """
         self._map_name, self._route_builder = map_name, route_builder
         self._route_points_xyz = None  # circuit: [(x, y, z)] per route waypoint to steer along (smoothed lane changes)
         self._port = port  # a second CARLA server (-carla-rpc-port) runs a second job in parallel
         self._same_direction_passage = same_direction_passage
         self._raw_inputs = raw_inputs
+        self._steer_rate_limit_per_s, self._max_brake, self._debug_draw = steer_rate_limit_per_s, max_brake, debug_draw
         self._trigger_by_line_distance = trigger_by_line_distance and steer_commit is not None
         self._start_at_cruise_speed = start_at_cruise_speed  # spawn moving at the cruise speed (short approaches)
         super().__init__()
@@ -426,7 +441,8 @@ class CarlaAEBEnv(gymnasium.Env):
         if (not self._triggered) and reached and (sim_time_s >= cfg.trigger_delay_s):
             self._triggered      = True
             self._trigger_time_s = sim_time_s
-            trigger_scripted_crossing(self._world, self._crossing_state, debug_life_s=WALKER_DEBUG_LIFE_S)
+            trigger_scripted_crossing(self._world, self._crossing_state, debug_life_s=WALKER_DEBUG_LIFE_S,
+                                      draw=self._debug_draw)
 
         if self._triggered and not self._crossing_motion_started:
             if self._trigger_time_s is not None and (sim_time_s - self._trigger_time_s) >= cfg.walker_post_trigger_delay_s:
@@ -440,7 +456,7 @@ class CarlaAEBEnv(gymnasium.Env):
         # Refresh debug markers each tick so they expire the moment this episode
         # ends. life_time=WALKER_DEBUG_LIFE_S (0.05s) means they vanish within
         # ~2 ticks if not refreshed — no stale markers from previous episodes.
-        if self._triggered and self._crossing_state is not None:
+        if self._debug_draw and self._triggered and self._crossing_state is not None:
             _s = self._crossing_state["start_loc"]
             _e = self._crossing_state["end_loc"]
             self._world.debug.draw_point(
@@ -497,6 +513,8 @@ class CarlaAEBEnv(gymnasium.Env):
             steer_kwargs = dict(lateral_offset_m=target_m, scripted_hazard_active=self._hazard_on)
             if not self._hazard_on:
                 brake_override = None  # before onset / after merge-back starts the policy has no effect
+
+        brake_override = cap_brake(brake_override, self._max_brake)  # realism cap, the post-contact hold too
 
         # --- Controller step with RL brake override ------------------------
         telemetry = lane_follow_step(
@@ -919,6 +937,8 @@ class CarlaAEBEnv(gymnasium.Env):
             "noodle_half_width_m": NOODLE_HALF_WIDTH_M,
             "noodle_max_dist_m": NOODLE_MAX_DIST_M,
             "noodle_x_min_m": NOODLE_X_MIN_M,
+            "steer_rate_limit_per_s": self._steer_rate_limit_per_s,  # None = no limit
+            "debug_draw": self._debug_draw,
         }
 
         # Reset all per-tick state

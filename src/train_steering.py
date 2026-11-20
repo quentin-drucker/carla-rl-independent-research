@@ -102,6 +102,11 @@ def _parse_args(argv=None):
                    help="input-reduction retrain: the pedestrian's current position instead of the predicted one, "
                    "and road edges without the pedestrian's zone (CarlaAEBEnv raw_inputs; run_circuit.py follows "
                    "the manifest)")
+    p.add_argument("--steer-rate-limit", type=float, metavar="PER_S",
+                   help="realism (Week 11): max change of the applied steer per second (CarlaAEBEnv "
+                   "steer_rate_limit_per_s; saved in the manifest, run_circuit.py follows it); default: no limit")
+    p.add_argument("--max-brake", type=float,
+                   help="realism (Week 11): brake cap in hazard mode, e.g. 0.75 (saved in the manifest); default: none")
     p.add_argument("--resume", metavar="RUN_DIR", help="continue a run from its latest checkpoint")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     p.add_argument("--relaunch-carla", action="store_true",
@@ -111,6 +116,10 @@ def _parse_args(argv=None):
         blank_indices(args.blank_inputs)
     except ValueError as exc:
         p.error(str(exc))
+    if args.steer_rate_limit is not None and args.steer_rate_limit <= 0.0:
+        p.error("--steer-rate-limit must be positive")
+    if args.max_brake is not None and not 0.0 < args.max_brake <= 1.0:
+        p.error("--max-brake must be in (0, 1]")
     if not (args.commit or args.resume):
         p.error("give --commit for a new run, or --resume")
     if args.relaunch_carla and args.port != 2000:
@@ -397,6 +406,7 @@ def main(argv=None):
             "lock_delay_s": args.lock_delay_s, "road_right_limit_m": args.road_right_limit_m,
             "merge_back": args.merge_back, "circuit_map": args.circuit_map, "left_lane_share": args.left_lane_share,
             "blank_inputs": args.blank_inputs, "raw_inputs": args.raw_inputs,
+            "steer_rate_limit_per_s": args.steer_rate_limit, "max_brake": args.max_brake,
             "hand_over_lead_s": HAND_OVER_LEAD_S, "sac": SAC_KWARGS,
             "reward": dataclasses.asdict(SteeringRewardConfig()),
             "python": sys.version,
@@ -431,7 +441,9 @@ def main(argv=None):
         env = CarlaAEBEnv(steer_commit=commit, lock_delay_s=manifest.get("lock_delay_s", 0.0),
                           road_right_limit_m=manifest.get("road_right_limit_m"),
                           merge_back=manifest.get("merge_back", False), u_bounds=tuple(manifest["u_bounds"]),
-                          raw_inputs=manifest.get("raw_inputs", False), port=args.port, **circuit)
+                          raw_inputs=manifest.get("raw_inputs", False), port=args.port,
+                          steer_rate_limit_per_s=manifest.get("steer_rate_limit_per_s"),
+                          max_brake=manifest.get("max_brake"), **circuit)
         scenario = dict(walkers=manifest.get("walkers", ["stationary"]),
                         ttc_range=manifest.get("ttc_range_s", TTC_RANGE_S),
                         walker_speed_mps=manifest.get("walker_speed_mps"),

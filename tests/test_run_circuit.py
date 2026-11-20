@@ -10,7 +10,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from eval_policy_encounters import _FixedAction  # noqa: E402
-from run_circuit import POLICY_TICK_COLUMNS, critic_values, next_spawnable_hazard  # noqa: E402
+from run_circuit import (POLICY_TICK_COLUMNS, _video_label, camera_position, critic_values,  # noqa: E402
+                         next_spawnable_hazard)
 
 
 class _Env:
@@ -111,6 +112,34 @@ class BrakeFirstTests(unittest.TestCase):
         self.assertEqual(bf.predict(obs)[0].tolist(), [1.0, 0.0])
         bf.armed = False  # encounter over
         self.assertEqual(bf.predict(obs)[0].tolist()[1], -1.0)
+
+
+class VideoLabelTests(unittest.TestCase):
+    PLAN = [(100.0, SimpleNamespace(walker_cross="far_edge", walker_side="left")),
+            (500.0, SimpleNamespace(walker_cross="stationary", walker_side="left"))]
+
+    def test_says_who_drives(self):
+        cruise = _video_label({"triggered": False}, [0.0, 0.0], 0, self.PLAN)
+        self.assertTrue(cruise.startswith("Classical driving"))
+        sac = _video_label({"triggered": True, "merge_back_state": "avoiding"}, [0.74, -0.29], 1, self.PLAN)
+        self.assertIn("Hazard 2: Pedestrian standing", sac)
+        self.assertIn("SAC in control | brake 74% | steer left (-0.29)", sac)
+        capped = _video_label({"triggered": True, "merge_back_state": "avoiding"}, [0.92, 0.88], 1, self.PLAN, 0.75)
+        self.assertIn("brake 75%", capped)
+        walking = _video_label({"triggered": True, "merge_back_state": "avoiding"}, [0.1, 0.05], 0, self.PLAN)
+        self.assertIn("walking from the left", walking)
+        self.assertIn("steer straight", walking)
+        back = _video_label({"triggered": True, "merge_back_state": "returning"}, [0.0, 0.9], 0, self.PLAN)
+        self.assertIn("classical return to lane", back)
+        self.assertNotIn("SAC", back)
+
+
+class CameraPositionTests(unittest.TestCase):
+    def test_behind_and_beside_follow_the_heading(self):
+        np.testing.assert_allclose(camera_position(10, 20, 1, 0.0, -6.5, 0.0, 2.4), (3.5, 20, 3.4))
+        np.testing.assert_allclose(camera_position(10, 20, 1, 90.0, -6.5, 0.0, 2.4), (10, 13.5, 3.4), atol=1e-9)
+        # facing +y, the car's right (+y in the car frame) is world -x
+        np.testing.assert_allclose(camera_position(0, 0, 0, 90.0, 0.0, 2.0, 0.0), (-2.0, 0.0, 0.0), atol=1e-9)
 
 
 if __name__ == "__main__":

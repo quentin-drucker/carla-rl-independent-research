@@ -140,6 +140,7 @@ def _parse_args(argv=None):
                    help="env signal for reward/termination; scoring never depends on it")
     p.add_argument("--no-drivability", action="store_true", help="skip per-tick footprint drivability")
     p.add_argument("--watch", action="store_true", help="follow the ego with the spectator camera")
+    p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
     args = p.parse_args(argv)
     if sum(map(bool, (args.model, args.fixed_u, args.scripted_aim))) != 1:
         p.error("give exactly one of --model, --fixed-u and --scripted-aim")
@@ -354,14 +355,17 @@ def main(argv=None):
         from stable_baselines3 import SAC
         model_path = resolve_model_path(args.model, search_dir=SRC_DIR)
         from train_steering import trained_setting
-        if trained_setting(model_path, "raw_inputs", False) or trained_setting(model_path, "blank_inputs", []):
-            raise SystemExit("this model was trained with raw or blanked inputs: evaluate it with run_circuit.py")
+        if (trained_setting(model_path, "raw_inputs", False) or trained_setting(model_path, "blank_inputs", [])
+                or trained_setting(model_path, "steer_rate_limit_per_s", None) is not None
+                or trained_setting(model_path, "max_brake", None) is not None):
+            raise SystemExit("this model was trained with raw/blanked inputs or realism limits: "
+                             "evaluate it with run_circuit.py")
         model = SAC.load(model_path)
         episodes = [(cfg, None, model) for cfg in configs]
     env = CarlaAEBEnv(cfg=configs[0], collision_signal=args.collision_signal, steer_commit=args.steer_commit,
                       lock_delay_s=args.lock_delay_s, road_right_limit_m=args.road_right_limit_m,
                       u_bounds=(args.u_min, 1.0),
-                      merge_back=args.merge_back)
+                      merge_back=args.merge_back, port=args.port)
     try:
         if model is not None and model.observation_space.shape != env.observation_space.shape:
             raise SystemExit(f"model observation shape {model.observation_space.shape} != env "

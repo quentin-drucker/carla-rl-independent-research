@@ -54,7 +54,8 @@ STUCK_RECOVER_S = 10.0  # stopped this long outside an encounter: put the car ba
 HAZARD_COLUMNS = ["hazard", "lap", "route_m", "walker", "ttc_s", "onset_time_s", "speed_at_onset_mps", "outcome",
                   "outcome_v4", "contact_cause", "ego_safe_success", "safe_success", "contact_speed_mps",
                   "min_clearance_m", "max_abs_route_lateral_m", "drivable_violation_ticks", "merge_back_state",
-                  "drive_on_count", "encounter_s", "end_lateral_m", "end_speed_mps"]
+                  "drive_on_count", "encounter_s", "end_lateral_m", "end_speed_mps",
+                  "tire_stress_integral_mps", "tire_stress_peak_mps2"]
 POLICY_TICK_COLUMNS = (["tick", "sim_time_s", "triggered"] + [s["name"] for s in STATE_SPEC] + list(STEERING_STATE_NAMES)
                        + ["action_brake", "action_u", "critic_q1", "critic_q2"])
 
@@ -79,10 +80,37 @@ def _parse_args(argv=None):
     p.add_argument("--brake-first", action="store_true",
                    help="full brake, no swerve, while braking alone stops in time; the controller otherwise")
     p.add_argument("--port", type=int, default=2000, help="CARLA RPC port (a second server runs a second job)")
+    p.add_argument("--record", metavar="MP4", help="save a video with a who-is-driving label "
+                                                   "(needs: pip install imageio-ffmpeg); works off-screen")
+    p.add_argument("--record-view", choices=("auto", "chase", "top", "side"), default="auto",
+                   help="camera for --record; auto = chase while cruising, easing to a drone view during each hazard")
+    p.add_argument("--record-full", action="store_true",
+                   help="--record the whole drive (default: highlights = the opening cruise, then each hazard "
+                        "from ~6 s before it until 1.5 s after the encounter ends)")
+    p.add_argument("--steer-rate-limit", type=float, metavar="PER_S",
+                   help="realism: max change of the applied steer per second (default: the model's training "
+                   "setting, else none; give it for the rule, or to drive a model on a different car)")
+    p.add_argument("--max-brake", type=float,
+                   help="realism: brake cap in hazard mode, e.g. 0.75 (default: the model's training setting, else none)")
+    p.add_argument("--keep-markers", action="store_true",
+                   help="with --record: keep the pedestrian-path and steering-target markers (default: off when recording)")
     args = p.parse_args(argv)
     if sum(x is not None for x in (args.model, args.fixed_u, args.scripted_aim)) != 1:
         p.error("give exactly one of --model, --fixed-u and --scripted-aim")
+    if args.steer_rate_limit is not None and args.steer_rate_limit <= 0.0:
+        p.error("--steer-rate-limit must be positive")
+    if args.max_brake is not None and not 0.0 < args.max_brake <= 1.0:
+        p.error("--max-brake must be in (0, 1]")
     return args
+
+
+def realism_setting(explicit, model_path, key):
+    """A realism limit for this run: the explicit flag if given (the rule, or a model on a different car), else the
+    model's training setting (the env must match the model, as for raw_inputs), else None (no limit)."""
+    from train_steering import trained_setting
+    if explicit is not None:
+        return explicit
+    return trained_setting(model_path, key, None) if model_path else None
 
 
 def loop_route(world, laps):
@@ -165,10 +193,15 @@ def main(argv=None):
     raw = bool(model_path) and trained_setting(model_path, "raw_inputs", False)  # the env must match the model's
     if raw:
         print("[circuit] model trained with raw inputs (current pedestrian position, road-only passage)")
+    steer_rate = realism_setting(args.steer_rate_limit, model_path, "steer_rate_limit_per_s")
+    max_brake = realism_setting(args.max_brake, model_path, "max_brake")
+    debug_draw = not (args.record and not args.keep_markers)
+    if steer_rate is not None or max_brake is not None:
+        print(f"[circuit] realism limits: steer rate {steer_rate} /s, max brake {max_brake}")
     env = CarlaAEBEnv(cfg=baseline_scenario_config(args.mph, 1.0), steer_commit=args.steer_commit,
                       lock_delay_s=args.lock_delay_s, merge_back=True, u_bounds=(args.u_min, 1.0),
                       map_name=args.map, same_direction_passage=True, trigger_by_line_distance=True, port=args.port,
-                      raw_inputs=raw)
+                      raw_inputs=raw, steer_rate_limit_per_s=steer_rate, max_brake=max_brake, debug_draw=debug_draw)
     route = loop_route(env._world, args.laps)
     env._route_builder = lambda world: route
     plan, route_s, route_yaws, env._route_points_xyz = plan_hazards(route[1], args)
@@ -209,7 +242,8 @@ def main(argv=None):
                    "model_path": model_path, "model_sha256": file_sha256(model_path) if args.model else None,
                    "map": args.map, "route_m": route_len, "lap_m": lap_len, "physics_backend": BACKEND_DEFAULT,
                    "protocol": PROTOCOL.__dict__, "merge_back": True, "lane_changes_smoothed": True, "same_direction_passage": True,
-                   "raw_inputs": raw, "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
+                   "raw_inputs": raw, "steer_rate_limit_per_s": steer_rate, "max_brake": max_brake,
+                   "debug_draw": debug_draw, "hazards": [{"route_m": pos, "config": cfg.to_dict()} for pos, cfg in plan],
                    "versions": _versions()}, f, indent=2)
     print(f"[circuit] {args.map}: {args.laps} lap(s) of {lap_len:.0f} m, {len(plan)} hazards | policy {os.path.basename(model_path)}")
     print(f"[circuit] evidence: {out_dir}")
@@ -217,13 +251,17 @@ def main(argv=None):
     env.cfg = plan[0][1]
     rows, hz, recorder, drivable, onset_marked = [], 0, TrajectoryRecorder(dt_s=FIXED_DT), [], False
     policy_rows, skipped = [], []
-    spec = None
+    spec = video = None
     try:
         obs, _ = env.reset()
         carla_map = env._world.get_map()
         if args.watch:
             from spectator import SpectatorController
             spec = SpectatorController(env._world, env._vehicle, debug_draw=False)
+        if args.record:
+            video = _VideoRecorder(env._world, env._vehicle, args.record, fps=1.0 / (FIXED_DT * _VideoRecorder.EVERY),
+                                   dt=FIXED_DT, view="chase" if args.record_view == "auto" else args.record_view)
+            tail_until = int(INTRO_S / FIXED_DT)  # highlights: the opening cruise, then each hazard
         max_ticks = int((1.6 * route_len / (args.mph * 0.44704) + 25.0 * len(plan) + 60.0) / FIXED_DT)
         stopped_ticks, end_reason, route_i, recoveries = 0, "max_ticks", 0, []
         route_xy = [(wp.transform.location.x, wp.transform.location.y) for wp in route[1]]
@@ -245,6 +283,13 @@ def main(argv=None):
                                 *np.asarray(action).tolist(), *q])
             if spec is not None:
                 spec.tick(fixed_dt=FIXED_DT)
+            if video is not None:
+                if info["triggered"]:
+                    tail_until = info["tick"] + int(TAIL_S / FIXED_DT)
+                lead = hz < len(plan) and plan[hz][0] - route_s[route_i] < LEAD_S * args.mph * 0.44704
+                view = args.record_view if args.record_view != "auto" else ("top" if info["triggered"] else "chase")
+                video.frame(info["tick"], _video_label(info, action, hz, plan, max_brake), view,
+                            write=args.record_full or lead or info["tick"] <= tail_until)
             marker = "onset" if info["triggered"] and not onset_marked else None
             onset_marked = onset_marked or info["triggered"]
             rec = recorder.record(tick_index=info["tick"], sim_time_s=info["sim_time_s"],
@@ -286,6 +331,8 @@ def main(argv=None):
     finally:
         if spec is not None:
             spec.close()
+        if video is not None:
+            video.close()
         env.close()
     with open(os.path.join(out_dir, "stuck_recoveries.json"), "x") as f:
         json.dump(recoveries, f, indent=2)
@@ -296,6 +343,116 @@ def main(argv=None):
     print(f"[circuit] stuck recoveries (car put back on its route): {len(recoveries)}")
     print(f"[circuit] evidence: {out_dir}")
     return 0 if end_reason == "all hazards done" else 1
+
+
+INTRO_S, LEAD_S, TAIL_S = 5.0, 6.0, 1.5  # --record highlights (s)
+
+
+def _video_label(info, action, hz, plan, max_brake=None):
+    """One line saying who drives: classical code, or SAC (with its brake and steering aim) during an avoidance."""
+    if not info["triggered"] or hz >= len(plan):
+        return "Classical driving: route following + cruise"
+    cfg = plan[hz][1]
+    who = ("Pedestrian standing in the road" if cfg.walker_cross == "stationary"
+           else f"Pedestrian walking from the {cfg.walker_side}")
+    if info.get("merge_back_state") != "avoiding":
+        return f"Hazard {hz + 1}: {who} | avoided - classical return to lane"
+    brake, u = float(np.asarray(action).ravel()[0]), float(np.asarray(action).ravel()[1])
+    brake = brake if max_brake is None else min(brake, max_brake)  # what the car gets (realism cap), not the request
+    aim = "straight" if abs(u) < 0.2 else ("left" if u < 0 else "right")
+    return f"Hazard {hz + 1}: {who} | SAC in control | brake {brake:.0%} | steer {aim} ({u:+.2f})"
+
+
+class _VideoRecorder:
+    """--record: one free camera that follows the ego and eases between poses (no hard cuts); every EVERY-th tick of
+    a highlight goes to an MP4 with a label bar on top. The camera only renders (sync mode, one image per tick).
+    Poses (car frame: x forward, y right, z up; pitch; yaw relative to the car): chase = low and nearly level, so
+    the road ahead is visible; top = a "drone" view from behind and above (pedestrian and both sides of the road
+    in frame); side = from the car's left. The pose blends with time constant BLEND_S and the camera's heading
+    follows the car's with YAW_S, so view changes and turns are smooth. The drone pose is skipped (chase instead)
+    while a ray from the car's roof to its spot hits anything, e.g. under an overpass.
+    Recording sets clear midday weather: the scenario's sunset preset is too dark to see.
+    On-screen debug markers are the env's own: red->green line = the pedestrian's scripted path, pink dot = the
+    point the car steers toward, cyan dot = lane center while the car is offset from it."""
+    W, H, EVERY = 1280, 720, 2
+    POSES = {"chase": (-6.5, 0.0, 2.4, -6.0, 0.0), "top": (-10.0, 0.0, 8.5, -28.0, 0.0),
+             "side": (1.0, -9.0, 2.2, -6.0, 90.0)}  # x, y, z (m), pitch, relative yaw (deg)
+    BLEND_S, YAW_S = 0.8, 0.3
+
+    def __init__(self, world, vehicle, path, fps, dt, view="chase"):
+        import queue
+
+        import carla
+        import imageio_ffmpeg
+        from PIL import ImageFont
+        self._carla, self._world, self._vehicle, self._Empty = carla, world, vehicle, queue.Empty
+        bp = world.get_blueprint_library().find("sensor.camera.rgb")
+        for k, v in (("image_size_x", self.W), ("image_size_y", self.H), ("fov", 90)):
+            bp.set_attribute(k, str(v))
+        world.set_weather(carla.WeatherParameters.ClearNoon)
+        self._pose, self._yaw = list(self.POSES[view]), vehicle.get_transform().rotation.yaw
+        self._a_pose, self._a_yaw = 1.0 - math.exp(-dt / self.BLEND_S), 1.0 - math.exp(-dt / self.YAW_S)
+        self._cam = world.spawn_actor(bp, self._transform())
+        self._q = queue.Queue()
+        self._cam.listen(self._q.put)
+        try:
+            self._font = ImageFont.truetype("arial.ttf", 26)
+        except OSError:
+            self._font = ImageFont.load_default()
+        self._writer = imageio_ffmpeg.write_frames(path, (self.W, self.H), fps=fps, quality=None, macro_block_size=8,
+                                                   output_params=["-crf", "23", "-preset", "veryfast"])
+        self._writer.send(None)
+
+    def _transform(self):
+        loc = self._vehicle.get_transform().location
+        x, y, z, pitch, yaw_rel = self._pose
+        px, py, pz = camera_position(loc.x, loc.y, loc.z, self._yaw, x, y, z)
+        c = self._carla
+        return c.Transform(c.Location(x=px, y=py, z=pz), c.Rotation(pitch=pitch, yaw=self._yaw + yaw_rel))
+
+    def _blocked(self, pose):
+        """True if anything (an overpass, a building) lies between the car's roof and this pose's camera spot."""
+        loc = self._vehicle.get_transform().location
+        px, py, pz = camera_position(loc.x, loc.y, loc.z, self._yaw, *pose[:3])
+        c = self._carla
+        return bool(self._world.cast_ray(c.Location(x=loc.x, y=loc.y, z=loc.z + 2.0), c.Location(x=px, y=py, z=pz)))
+
+    def frame(self, tick, label, view, write):
+        """Write this tick's image if `write`, then move the camera for the next tick toward `view`."""
+        from PIL import Image, ImageDraw
+        img = None
+        try:  # this tick's image (sync mode); drain anything older
+            img = self._q.get(timeout=2.0)
+            while True:
+                img = self._q.get_nowait()
+        except self._Empty:
+            pass
+        if img is not None and write and tick % self.EVERY == 0:
+            rgb = np.frombuffer(img.raw_data, dtype=np.uint8).reshape(self.H, self.W, 4)[:, :, 2::-1]
+            pic = Image.fromarray(np.ascontiguousarray(rgb))
+            draw = ImageDraw.Draw(pic)
+            draw.rectangle((0, 0, self.W, 46), fill=(0, 0, 0))
+            draw.text((16, 9), label, fill=(255, 255, 255), font=self._font)
+            self._writer.send(np.asarray(pic))
+        target = self.POSES[view]
+        if view == "top" and self._blocked(target):  # under an overpass the drone would be inside it: stay low
+            target = self.POSES["chase"]
+        self._pose = [p + self._a_pose * (t - p) for p, t in zip(self._pose, target)]
+        turn = (self._vehicle.get_transform().rotation.yaw - self._yaw + 180.0) % 360.0 - 180.0
+        self._yaw += self._a_yaw * turn
+        self._cam.set_transform(self._transform())
+
+    def close(self):
+        self._cam.stop()
+        self._cam.destroy()
+        self._writer.close()
+
+
+def camera_position(vx, vy, vz, yaw_deg, x, y, z):
+    """World position of a point at (x forward, y right, z up) in a car frame at (vx, vy, vz) with heading yaw_deg
+    (CARLA: yaw turns +x toward +y)."""
+    c, s = math.cos(math.radians(yaw_deg)), math.sin(math.radians(yaw_deg))
+    return vx + x * c - y * s, vy + x * s + y * c, vz + z
 
 
 def _finish(out_dir, index, plan_item, recorder, drivable, info, env, lap_len):

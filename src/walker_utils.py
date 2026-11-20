@@ -123,7 +123,7 @@ def init_scripted_crossing_state(*, start_loc: carla.Location, end_loc: carla.Lo
     }
 
 
-def trigger_scripted_crossing(world, crossing_state, *, debug_life_s: float = 12.0):
+def trigger_scripted_crossing(world, crossing_state, *, debug_life_s: float = 12.0, draw: bool = True):
     """
     Mark the crossing as active and draw debug markers.
     """
@@ -135,6 +135,8 @@ def trigger_scripted_crossing(world, crossing_state, *, debug_life_s: float = 12
 
     start_loc = crossing_state["start_loc"]
     end_loc = crossing_state["end_loc"]
+    if not draw:  # no path markers (clean video recordings)
+        return
 
     world.debug.draw_point(
         start_loc + carla.Location(z=0.7),

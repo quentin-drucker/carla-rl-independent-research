@@ -1,0 +1,70 @@
+controller,seed,town,safe,encounters
+Rule,-,Town05,32,32
+Rule,-,Town02,14,36
+Rule,-,Town10HD,20,24
+First multi-town models,1,Town05,26,32
+First multi-town models,1,Town02,14,36
+First multi-town models,1,Town10HD,8,24
+First multi-town models,2,Town05,30,32
+First multi-town models,2,Town02,6,36
+First multi-town models,2,Town10HD,3,24
+First multi-town models,3,Town05,29,32
+First multi-town models,3,Town02,14,36
+First multi-town models,3,Town10HD,18,24
++ map-gap fix (control),1,Town05,31,32
++ map-gap fix (control),1,Town02,9,36
++ map-gap fix (control),1,Town10HD,14,24
++ map-gap fix (control),2,Town05,31,32
++ map-gap fix (control),2,Town02,12,36
++ map-gap fix (control),2,Town10HD,21,24
++ map-gap fix (control),3,Town05,27,32
++ map-gap fix (control),3,Town02,8,36
++ map-gap fix (control),3,Town10HD,5,24
++ left-lane training (side-balanced),1,Town05,32,32
++ left-lane training (side-balanced),1,Town02,14,36
++ left-lane training (side-balanced),1,Town10HD,21,24
++ left-lane training (side-balanced),2,Town05,25,32
++ left-lane training (side-balanced),2,Town02,14,36
++ left-lane training (side-balanced),2,Town10HD,20,24
++ left-lane training (side-balanced),3,Town05,32,32
++ left-lane training (side-balanced),3,Town02,16,36
++ left-lane training (side-balanced),3,Town10HD,18,24
+Side-balanced + brake-first,1,Town05,32,32
+Side-balanced + brake-first,1,Town02,14,36
+Side-balanced + brake-first,1,Town10HD,21,24
+Side-balanced + brake-first,2,Town05,26,32
+Side-balanced + brake-first,2,Town02,17,36
+Side-balanced + brake-first,2,Town10HD,22,24
+Side-balanced + brake-first,3,Town05,32,32
+Side-balanced + brake-first,3,Town02,16,36
+Side-balanced + brake-first,3,Town10HD,18,24
+"Side-balanced, no LiDAR / hazard flag",1,Town05,19,32
+"Side-balanced, no LiDAR / hazard flag",1,Town02,14,36
+"Side-balanced, no LiDAR / hazard flag",1,Town10HD,20,24
+"Side-balanced, no LiDAR / hazard flag",2,Town05,28,32
+"Side-balanced, no LiDAR / hazard flag",2,Town02,16,36
+"Side-balanced, no LiDAR / hazard flag",2,Town10HD,17,24
+"Side-balanced, no LiDAR / hazard flag",3,Town05,29,32
+"Side-balanced, no LiDAR / hazard flag",3,Town02,12,36
+"Side-balanced, no LiDAR / hazard flag",3,Town10HD,14,24
+"Side-balanced, raw inputs",1,Town05,23,32
+"Side-balanced, raw inputs",1,Town02,16,36
+"Side-balanced, raw inputs",1,Town10HD,14,24
+"Side-balanced, raw inputs",2,Town05,28,32
+"Side-balanced, raw inputs",2,Town02,12,36
+"Side-balanced, raw inputs",2,Town10HD,20,24
+"Side-balanced, raw inputs",3,Town05,31,32
+"Side-balanced, raw inputs",3,Town02,13,36
+"Side-balanced, raw inputs",3,Town10HD,20,24
+Side-balanced + realism limits,1,Town05,27,32
+Side-balanced + realism limits,1,Town02,7,36
+Side-balanced + realism limits,1,Town10HD,4,24
+Side-balanced + realism limits,2,Town05,28,32
+Side-balanced + realism limits,2,Town02,8,36
+Side-balanced + realism limits,2,Town10HD,8,24
+Side-balanced + realism limits,3,Town05,32,32
+Side-balanced + realism limits,3,Town02,7,36
+Side-balanced + realism limits,3,Town10HD,17,24
+Rule + realism limits,,Town05,32,32
+Rule + realism limits,,Town02,10,36
+Rule + realism limits,,Town10HD,21,24

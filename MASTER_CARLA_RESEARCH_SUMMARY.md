@@ -3068,8 +3068,13 @@ realistic car with the brake cap lowered from 0.75 to 0.6 (straight stop from 15
 - On worn brakes the models only edge the rule (45.3 vs 43); on the realistic car the margin was 7. Peak combined
   acceleration on safe encounters stays ~1.0-1.1 g. Stuck recoveries 16-19 per 15 runs per controller (~1.2 per run,
   like the realistic car), between encounters; one rule run (Town05 p3) stopped after 7 of 8 hazards.
+- **No comfort trade-off either:** median tire-stress peak on safe encounters 1.08 g (good) vs 1.06 g (worn) for
+  the models, 1.13 vs 1.12 for the rule; tire-stress integral 29.5 vs 29.6; median minimum clearance on safe
+  encounters 1.09 m vs 1.00 m. The expected "worn car looks more comfortable but is less safe" does not appear with
+  brakes alone; worn tires would be needed, and CARLA's driving stack cannot drive those (above).
 - Clip: `artifacts/videos/w11_s1_town05_p1_good_vs_worn.mp4` (old s1, Town05 plan 1, left good car 8/8 safe, right
-  worn brakes 6/8 safe, 0 contacts each). Figure: `artifacts/figures/fig_three_cars.png`.
+  worn brakes 6/8 safe, 0 contacts each). That one plan shows a gap the 15-plan totals do not; caption it as one
+  example. Figure: `artifacts/figures/fig_three_cars.png`.
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 

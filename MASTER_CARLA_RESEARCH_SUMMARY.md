@@ -81,7 +81,7 @@ Do not read an archived numerical value as automatically comparable across contr
 | **How is it evaluated?** | 15 seeded circuit routes, 92 encounters: Town05 (trained on), Town02 and Town10HD (never seen). Scored with encounter protocol v4 (`ego_safe_success`). Baseline: a simple rule (full brake, full swerve to the roomier side). |
 | **Main results** | Rule 66/92 (72%); side-balanced models 64.0 (70%; seeds 67/59/66); with brake-first 66 (72%); raw inputs 59.0 (64%); no LiDAR 56.3 (61%). **The learned policy ties the rule; it does not beat it.** The calculated inputs help modestly, LiDAR helps more, the hazard flag not at all. |
 | **Week 10 results** | Evaluation is deterministic: 3 repeat runs give the same tactic and outcome on all 92 encounters. Room decides the side when one side has >= 1 m more room; on near-equal room each trained seed has its own habit (the 3 seeds agree on only 36/92 encounters). The tactic label is the first reaction: "brake first" often swerves later; safe stay-in-lane encounters are only 6-8/92 per model (corrected 2026-11-19). Walking speed (0.8-2.4 m/s) does not change the side where room decides it; with equal room, one seed switches from passing ahead of a slow walker to passing behind a fast one (Izmirli's example) but is least safe there. See Week 10. |
-| **Week 11 results** | With Prof. Izmirli's realism limits (steering at most 2.0 per second, brake capped at 75%), the rule drops only from 66 to 63 of 92, but the retrained models drop from 64.0 to 46.0 (seeds 38/44/56): they hold in the trained town and lose in the never-seen towns. CARLA's car reaches ~2-2.5 g in avoidance (tire-stress proxy). The old models driven with the limits keep 62.3 (no retrain), so the drop came from retraining. On a realistic car (35 deg lock, ~1 g grip, 4.0/s, brake 0.75) the rule falls to 36 of 91, mostly off-road overshoots and contacts. See Week 11. |
+| **Week 11 results** | With Prof. Izmirli's realism limits (steering at most 2.0 per second, brake capped at 75%), the rule drops only from 66 to 63 of 92, but the retrained models drop from 64.0 to 46.0 (seeds 38/44/56): they hold in the trained town and lose in the never-seen towns. CARLA's car reaches ~2-2.5 g in avoidance (tire-stress proxy). The old models driven with the limits keep 62.3 (no retrain), so the drop came from retraining. On a realistic car (35 deg lock, ~1 g grip, 4.0/s, brake 0.75) the rule falls to 36 of 91, mostly off-road overshoots and contacts. Final model = the old side-balanced models: 43.3 of 92 on the realistic car (retrained on it: 38.3; rule 36). See Week 11. |
 | **Main limitations** | Oracle onset; 3 seeds; parity with the rule; Town02's narrow-road ceiling (16/36 encounters failed by every controller); walkers trained at one speed; Town03 route following broken. |
 | **What is next?** | HW7 visual (circuit video + figures) on Nov 16; final presentation ~Dec 14. Under consideration: a throttle output (Prof. Izmirli, Nov 10), what should decide the side when room is equal, perception-based onset. |
 | **Files to open first** | `worklog/feature/city-circuit.md` (running log), `src/run_circuit.py` + `src/circuit.py` (circuit evaluation), `src/train_steering.py` (training), `src/carla_aeb_env.py` + `src/rl_steering.py` (environment and observation), `src/make_figures.py`, `src/analyze_strategy.py`, `src/analyze_speed_sweep.py` (figures and analyses), `worklog/weekly-reports/` (plans, reports). |
@@ -3018,6 +3018,28 @@ wheels, the same wheel speed as 2.0/s on the 70 deg lock), brake cap 0.75.**
 - Town05 plan 3 (rule, realistic car) stopped after 7 of 8 hazards (car stuck 60 s), hence /31 and /91.
 - Clip: `artifacts/videos/w9_sidebal_s3_town02_p0_pure_brake.mp4` (old side-balanced s3, CARLA car, no markers;
   encounter 5, onset ~222 s of simulated time, is safe with 0.001 m sideways movement = pure braking).
+
+**Final model on the realistic car (2026-11-20, `_scratch/w11_final.sh`).** The old side-balanced models on the
+realistic car (no retraining) vs 3 seeds retrained on it (side-balanced settings, hazard flag dropped with
+`--blank-inputs hazard_active`; seed 2 resumed from its 130k checkpoint after a computer restart).
+
+| safe, realistic car | Town05 /32 | Town02 /36 | Town10HD /24 | 3 towns /92 | mean | contacts | off-road |
+|---|---|---|---|---|---|---|---|
+| old side-balanced s1 / s2 / s3 (no retrain) | 25 / 12 / 23 | 9 / 13 / 12 | 13 / 14 / 9 | 47 / 39 / 44 | **43.3 (47%)** | 42-45 | 3-8 |
+| retrained on the realistic car s1 / s2 / s3 | 22 / 24 / 14 | 8 / 10 / 8 | 10 / 17 / 2 | 40 / 51 / 24 | 38.3 (42%) | 40-63 | 1-5 |
+| rule | 26/31 | 6 | 4 | 36/91 | 36 (40%) | 38 | 17 |
+
+- **The realistic car costs the learned models about a third of their safe encounters (64.0 -> 43.3 for the old
+  models), but they still beat the rule (36).** Safe-encounter peak combined acceleration ~1.0-1.1 g for every group.
+- **Retraining on the realistic car did not help on average** (38.3 vs 43.3), with a very wide seed spread: seed 2
+  is the best single model (51) and seed 3 the worst (24, even 14/32 in Town05, a training town). End-of-training
+  rewards do not separate the seeds. With 3 seeds, "retraining does not help" is the safe reading, not "it hurts".
+- **Final model = the old side-balanced models (3 seeds), driven on the realistic car.** Same as the Week 9 models,
+  so the presentation story is one model under three cars: CARLA's car 64.0, realistic 43.3, worn (below).
+- Worn car (for Izmirli's car setups): tire friction 0.8 (swerve peak 0.71 g vs 1.02) + brake cap 0.6. On the
+  realistic car braking is brake-limited, not grip-limited: straight stop from 15 m/s 35.1 m (friction 1.2, brake
+  0.75), 35.6 m (0.8, 0.75), 43.4 m (0.8, 0.6); CARLA's car at full brake 23.7 m. Caveat: the 0.75 cap gives only
+  ~0.33 g of straight-line braking in CARLA's Model 3 (v^2 / 2d), well below a real car's; reported as-is.
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 

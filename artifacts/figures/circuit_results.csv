@@ -68,3 +68,51 @@ Side-balanced + realism limits,3,Town10HD,17,24
 Rule + realism limits,,Town05,32,32
 Rule + realism limits,,Town02,10,36
 Rule + realism limits,,Town10HD,21,24
+"Side-balanced, realism limits, no retrain",1,Town05,32,32
+"Side-balanced, realism limits, no retrain",1,Town02,12,36
+"Side-balanced, realism limits, no retrain",1,Town10HD,19,24
+"Side-balanced, realism limits, no retrain",2,Town05,25,32
+"Side-balanced, realism limits, no retrain",2,Town02,15,36
+"Side-balanced, realism limits, no retrain",2,Town10HD,20,24
+"Side-balanced, realism limits, no retrain",3,Town05,31,32
+"Side-balanced, realism limits, no retrain",3,Town02,14,36
+"Side-balanced, realism limits, no retrain",3,Town10HD,19,24
+"Side-balanced, realistic car",1,Town05,25,32
+"Side-balanced, realistic car",1,Town02,9,36
+"Side-balanced, realistic car",1,Town10HD,13,24
+"Side-balanced, realistic car",2,Town05,12,32
+"Side-balanced, realistic car",2,Town02,13,36
+"Side-balanced, realistic car",2,Town10HD,14,24
+"Side-balanced, realistic car",3,Town05,23,32
+"Side-balanced, realistic car",3,Town02,12,36
+"Side-balanced, realistic car",3,Town10HD,9,24
+Retrained on the realistic car,1,Town05,22,32
+Retrained on the realistic car,1,Town02,8,36
+Retrained on the realistic car,1,Town10HD,10,24
+Retrained on the realistic car,2,Town05,24,32
+Retrained on the realistic car,2,Town02,10,36
+Retrained on the realistic car,2,Town10HD,17,24
+Retrained on the realistic car,3,Town05,14,32
+Retrained on the realistic car,3,Town02,8,36
+Retrained on the realistic car,3,Town10HD,2,24
+Retrained on the realistic car,4,Town05,19,31
+Retrained on the realistic car,4,Town02,8,36
+Retrained on the realistic car,4,Town10HD,2,24
+Retrained on the realistic car,5,Town05,21,32
+Retrained on the realistic car,5,Town02,5,36
+Retrained on the realistic car,5,Town10HD,17,24
+"Rule, realistic car",,Town05,26,31
+"Rule, realistic car",,Town02,6,36
+"Rule, realistic car",,Town10HD,4,24
+"Side-balanced, worn car",1,Town05,22,32
+"Side-balanced, worn car",1,Town02,9,36
+"Side-balanced, worn car",1,Town10HD,13,24
+"Side-balanced, worn car",2,Town05,13,32
+"Side-balanced, worn car",2,Town02,15,36
+"Side-balanced, worn car",2,Town10HD,15,24
+"Side-balanced, worn car",3,Town05,23,32
+"Side-balanced, worn car",3,Town02,13,36
+"Side-balanced, worn car",3,Town10HD,13,24
+"Rule, worn car",,Town05,27,31
+"Rule, worn car",,Town02,8,36
+"Rule, worn car",,Town10HD,8,24

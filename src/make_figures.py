@@ -53,7 +53,7 @@ CONTROLLERS = [
 CARS = [
     ("CARLA's car", "+ left-lane training (side-balanced)", None),
     ("Realistic car\n(35° lock, ~1 g grip, 75% brake)", "Side-balanced, realistic car", "Rule, realistic car"),
-    ("Worn car\n(~0.7 g grip, 60% brake)", "Side-balanced, worn car", "Rule, worn car"),
+    ("Worn car\n(worn brakes: 60% cap, ~1 g grip)", "Side-balanced, worn car", "Rule, worn car"),
 ]
 
 # fig_hw7_inputs.png: (CONTROLLERS label, presentation label), top to bottom after the rule.

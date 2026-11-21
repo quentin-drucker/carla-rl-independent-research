@@ -40,6 +40,20 @@ CONTROLLERS = [
     ("Side-balanced, raw inputs", "w10_raw", "raw_s{s}", [1, 2, 3]),
     ("Side-balanced + realism limits", "w11_realism", "real_s{s}", [1, 2, 3]),  # steer 2.0/s, brake <= 0.75
     ("Rule + realism limits", "w11_realism", "rule_real", [None]),
+    ("Side-balanced, realism limits, no retrain", "w11_realcar", "sb_lim_s{s}", [1, 2, 3]),
+    # Realistic car: lock 35 deg, tire friction 1.2 (~1 g), 4.0/s, brake <= 0.75. Worn: friction 0.8, brake <= 0.6.
+    ("Side-balanced, realistic car", "w11_final", "sb_car_s{s}", [1, 2, 3]),
+    ("Retrained on the realistic car", "w11_final", "final_s{s}", [1, 2, 3, 4, 5]),
+    ("Rule, realistic car", "w11_realcar", "rule_car", [None]),
+    ("Side-balanced, worn car", "w11_worn", "sb_worn_s{s}", [1, 2, 3]),
+    ("Rule, worn car", "w11_worn", "rule_worn", [None]),
+]
+
+# fig_three_cars.png: the final model (side-balanced) and the rule on each car: (car, SAC label, rule label).
+CARS = [
+    ("CARLA's car", "+ left-lane training (side-balanced)", None),
+    ("Realistic car\n(35° lock, ~1 g grip, 75% brake)", "Side-balanced, realistic car", "Rule, realistic car"),
+    ("Worn car\n(~0.7 g grip, 60% brake)", "Side-balanced, worn car", "Rule, worn car"),
 ]
 
 # fig_hw7_inputs.png: (CONTROLLERS label, presentation label), top to bottom after the rule.
@@ -98,15 +112,18 @@ def _style(ax):
 
 
 def dot_rows(ax, rows, rule_pct, *, labels=True, show_mean_text=True):
-    """One row per controller: a dot per seed, a bar for the seed mean, the rule as a dashed line."""
-    for i, (_, pcts) in enumerate(rows):
+    """One row per controller: a dot per seed, a bar for the seed mean, the rule as a dashed line (rule_pct None:
+    no line). A row may carry a third element, its dot color."""
+    for i, (_, pcts, *color) in enumerate(rows):
         y = len(rows) - 1 - i
-        ax.scatter(pcts, [y] * len(pcts), s=46, color=SEED, edgecolor="white", linewidth=1.2, zorder=3)
+        ax.scatter(pcts, [y] * len(pcts), s=46, color=color[0] if color else SEED, edgecolor="white", linewidth=1.2,
+                   zorder=3)
         m = float(np.mean(pcts))
         ax.plot([m, m], [y - 0.28, y + 0.28], color=MEAN, lw=2.2, zorder=4, solid_capstyle="round")
         if show_mean_text:
             ax.text(102, y, f"{m:.0f}%", va="center", fontsize=9, color=INK)
-    ax.axvline(rule_pct, color=RULE_C, lw=1.6, ls=(0, (4, 3)), zorder=2)
+    if rule_pct is not None:
+        ax.axvline(rule_pct, color=RULE_C, lw=1.6, ls=(0, (4, 3)), zorder=2)
     ax.set_ylim(-0.7, len(rows) - 0.3)
     ax.set_xlim(0, 100)
     if labels:  # shared y-axis: set the labels on one panel only, or the others wipe them
@@ -186,8 +203,26 @@ def main():
     fig.tight_layout(rect=(0, 0, 0.97, 0.93))
     fig.savefig(FIG_DIR / "fig_hw7_inputs.png", dpi=200)
     plt.close(fig)
+    # Presentation (Week 11-12): one learned model and the rule on three cars; blue = SAC seeds, orange = rule.
+    cars = []
+    for car, sac, rule_label in CARS:
+        if sac in by_label:
+            cars.append((f"{car}\nSAC (3 seeds)", [pct(t, PLANS) for t in by_label[sac].values()]))
+        rule_got = rule if rule_label is None else by_label.get(rule_label, {}).get(None)
+        if rule_got:
+            cars.append(("same car, rule", [pct(rule_got, PLANS)], RULE_C))
+    fig, ax = plt.subplots(figsize=(9, 0.75 * len(cars) + 1.6))
+    dot_rows(ax, cars, None)
+    ax.set_xlabel(f"pedestrian encounters handled safely (% of {total}, 3 towns, 2 never seen in training)",
+                  fontsize=9, color=MUTED)
+    ax.tick_params(axis="y", labelsize=10, colors=INK)
+    fig.suptitle("Same learned model, three cars  (blue = training seeds, bar = mean, orange = simple rule)",
+                 x=0.01, ha="left", fontsize=12, color=INK)
+    fig.tight_layout(rect=(0, 0, 0.97, 0.93))
+    fig.savefig(FIG_DIR / "fig_three_cars.png", dpi=200)
+    plt.close(fig)
     print(f"[figures] wrote {FIG_DIR}: circuit_results.csv, fig_safe_overall.png, fig_safe_by_town.png, "
-          "fig_hw7_inputs.png")
+          "fig_hw7_inputs.png, fig_three_cars.png")
 
 
 if __name__ == "__main__":

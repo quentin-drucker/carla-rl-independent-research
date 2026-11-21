@@ -3040,6 +3040,13 @@ realistic car (no retraining) vs 3 seeds retrained on it (side-balanced settings
   realistic car braking is brake-limited, not grip-limited: straight stop from 15 m/s 35.1 m (friction 1.2, brake
   0.75), 35.6 m (0.8, 0.75), 43.4 m (0.8, 0.6); CARLA's car at full brake 23.7 m. Caveat: the 0.75 cap gives only
   ~0.33 g of straight-line braking in CARLA's Model 3 (v^2 / 2d), well below a real car's; reported as-is.
+- **Worn car v1 (friction 0.8 + brake 0.6) is not drivable by the classical driving stack** (2026-11-21): out of
+  turns the cruise controller goes to full throttle, the rear slides, and the lane follower's steering swings grow
+  until the car spins (body slip past 90 deg); 33 of 45 model runs ended stuck, ~45 of 92 encounters reached.
+  Not a valid result (`w11_worn_f08_invalid/`). The realistic car shows the same effect mildly: ~1 stuck recovery
+  per run (CARLA's car: ~0.1), always between encounters, so its encounter scores stand. CARLA's car has no
+  traction control, and the lane follower was tuned on its 2.3 g grip. Worn v2 tests friction 1.0 first and falls
+  back to worn brakes only (friction 1.2 + brake 0.6).
 
 ## 1. “SAC had a high-speed full-stop advantage” — not established
 
